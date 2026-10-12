@@ -43,9 +43,15 @@
             <canvas id="debug-canvas"></canvas>
             <div class="view-tools">
               <label class="check" id="markers-toggle" hidden><input id="show-markers" type="checkbox" checked /> 识别结果</label>
+              <label class="check" id="rect-toggle" hidden><input id="show-rect" type="checkbox" checked /> 正射图</label>
               <label class="check" id="truth-toggle" hidden><input id="show-truth" type="checkbox" checked /> 叠加真值</label>
               <span class="hint">滚轮缩放 · 拖动平移 · 双击复位</span>
             </div>
+            <!-- 正射图小窗：点击放大 / 缩小 -->
+            <figure id="rect-inset" class="inset" hidden>
+              <canvas id="rect-canvas"></canvas>
+              <figcaption>正射图 <span class="muted">· 虚线为设计的码位置 · 点击放大</span></figcaption>
+            </figure>
           </section>
           <section id="view-three" class="view" role="tabpanel">
             <div id="three-container" class="three-container"></div>

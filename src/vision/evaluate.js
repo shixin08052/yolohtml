@@ -27,3 +27,34 @@ export function markerCornerErrors(found, truth) {
     missing,
   };
 }
+
+/**
+ * 单应性与真值的误差：在底板上每隔 step mm 取一个点（Z = 0），
+ * 分别用 H 和真值位姿 K·(R·P + t) 投影，比较像素距离
+ * @param {number[][]} H
+ * @param {import('../state.js').GroundTruth} truth
+ * @param {{boardW:number, boardH:number, step?:number}} board
+ * @returns {{mean:number, max:number}}
+ */
+export function homographyTruthError(H, truth, { boardW, boardH, step = 10 }) {
+  const { fx, fy, cx, cy } = truth.intrinsics;
+  const { R, t } = truth;
+  let sum = 0;
+  let max = 0;
+  let n = 0;
+  for (let X = 0; X <= boardW + 1e-9; X += step) {
+    for (let Y = 0; Y <= boardH + 1e-9; Y += step) {
+      const xc = R[0][0] * X + R[0][1] * Y + t[0];
+      const yc = R[1][0] * X + R[1][1] * Y + t[1];
+      const zc = R[2][0] * X + R[2][1] * Y + t[2];
+      const u = (fx * xc) / zc + cx;
+      const v = (fy * yc) / zc + cy;
+      const w = H[2][0] * X + H[2][1] * Y + H[2][2];
+      const e = Math.hypot((H[0][0] * X + H[0][1] * Y + H[0][2]) / w - u, (H[1][0] * X + H[1][1] * Y + H[1][2]) / w - v);
+      sum += e;
+      max = Math.max(max, e);
+      n++;
+    }
+  }
+  return { mean: sum / n, max };
+}
