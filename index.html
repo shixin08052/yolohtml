@@ -61,10 +61,15 @@
             </figure>
           </section>
           <section id="view-three" class="view" role="tabpanel">
-            <div id="three-container" class="three-container"></div>
+            <div id="three-container" class="three-container">
+              <!-- 转场 / 对比时盖在画布上的照片 -->
+              <canvas id="photo-overlay" class="photo-overlay" hidden></canvas>
+            </div>
             <div class="view-tools">
               <label class="check"><input id="show-axes" type="checkbox" /> 坐标轴</label>
               <button type="button" class="icon-btn text" id="three-reset">默认视角</button>
+              <button type="button" class="icon-btn text" id="btn-transition" disabled>转场</button>
+              <button type="button" class="icon-btn text" id="btn-compare" aria-pressed="false" disabled>对比</button>
               <span class="hint hint-mouse">左键旋转 · 右键平移 · 滚轮缩放</span>
               <span class="hint hint-touch">单指旋转 · 双指缩放 / 平移</span>
             </div>

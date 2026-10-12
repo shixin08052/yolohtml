@@ -69,3 +69,40 @@ describe('lookAtPose', () => {
     expect(pb[0]).toBeCloseTo(2016, 6);
   });
 });
+
+describe('视线与照片视野', async () => {
+  const { pixelRay, rayHitPlaneZ, photoFootprint } = await import('../src/math/pinhole.js');
+
+  it('像素视线打到底板上的点，再投影回来就是这个像素', () => {
+    const { R, t } = lookAtPose({ target, distance: 300, pitchDeg: 55, yawDeg: 10 });
+    for (const uv of [[100, 200], [2016, 1512], [3900, 2900]]) {
+      const { origin, dir } = pixelRay(K, R, t, uv);
+      const P = rayHitPlaneZ(origin, dir, 0);
+      expect(P[2]).toBeCloseTo(0, 9);
+      const [u, v] = project(K, R, t, P);
+      expect(u).toBeCloseTo(uv[0], 6);
+      expect(v).toBeCloseTo(uv[1], 6);
+    }
+  });
+
+  it('正上方拍：四角都落在底板平面上，构成以目标点为中心的矩形', () => {
+    const { R, t } = lookAtPose({ target, distance: 300, pitchDeg: 90 });
+    const f = photoFootprint(K, R, t, 4032, 3024);
+    expect(f.every((c) => c.hit)).toBe(true);
+    const half = [300 * 2016 / 3028, 300 * 1512 / 3028];
+    expect(f[0].point[0]).toBeCloseTo(target[0] - half[0], 6); // 左上 → X 小、Y 大
+    expect(f[0].point[1]).toBeCloseTo(target[1] + half[1], 6);
+    expect(f[2].point[0]).toBeCloseTo(target[0] + half[0], 6);
+    expect(f[2].point[1]).toBeCloseTo(target[1] - half[1], 6);
+  });
+
+  it('很斜地拍（俯角 20°）：上面两个角的视线打不到底板平面，给出 600 mm 长的端点', () => {
+    const { R, t, position } = lookAtPose({ target, distance: 300, pitchDeg: 20 });
+    const f = photoFootprint(K, R, t, 4032, 3024);
+    expect(f[0].hit).toBe(false);
+    expect(f[1].hit).toBe(false);
+    expect(f[2].hit && f[3].hit).toBe(true);
+    const len = Math.hypot(...f[0].point.map((x, i) => x - position[i]));
+    expect(len).toBeCloseTo(600, 6);
+  });
+});

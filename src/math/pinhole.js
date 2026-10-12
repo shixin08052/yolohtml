@@ -65,3 +65,39 @@ export function cameraCenter(R, t) {
 export function pitchDegFromR(R) {
   return rad2deg(Math.asin(-R[2][2]));
 }
+
+/**
+ * 像素 (u, v) 对应的视线：从光心 C 出发，方向 d = Rᵀ·K⁻¹·(u, v, 1)（底板坐标，已归一化）
+ * @returns {{origin:number[], dir:number[]}}
+ */
+export function pixelRay(K, R, t, [u, v]) {
+  const x = (u - K[0][2]) / K[0][0];
+  const y = (v - K[1][2]) / K[1][1];
+  const Rt = transpose3(R);
+  const d = normalize3(mulVec3(Rt, [x, y, 1]));
+  return { origin: cameraCenter(R, t), dir: d };
+}
+
+/**
+ * 视线与水平面 Z = z0 的交点；视线不朝下（打不到该平面）时返回 null
+ * @returns {number[]|null}
+ */
+export function rayHitPlaneZ(origin, dir, z0 = 0) {
+  if (!(dir[2] < -1e-9)) return null;
+  const s = (z0 - origin[2]) / dir[2];
+  if (s <= 0) return null;
+  return add3(origin, scale3(dir, s));
+}
+
+/**
+ * 照片四角（左上、右上、右下、左下）的视线落到底板平面上的位置。
+ * 打不到底板平面的角，给出沿视线方向 fallbackLen 长的端点，并标记 hit = false。
+ * @returns {{hit:boolean, point:number[]}[]}
+ */
+export function photoFootprint(K, R, t, W, H, fallbackLen = 600) {
+  return [[0, 0], [W, 0], [W, H], [0, H]].map((uv) => {
+    const { origin, dir } = pixelRay(K, R, t, uv);
+    const p = rayHitPlaneZ(origin, dir, 0);
+    return p ? { hit: true, point: p } : { hit: false, point: add3(origin, scale3(dir, fallbackLen)) };
+  });
+}

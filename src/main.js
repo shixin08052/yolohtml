@@ -7,6 +7,8 @@ import { createDebugView } from './ui/debugView.js';
 import { drawTruth } from './ui/truthOverlay.js';
 import { createWorld } from './scene/world.js';
 import { createBoard } from './scene/board.js';
+import { createPhone, panoramaAzimuth } from './scene/phone.js';
+import { createTransition } from './scene/transition.js';
 import { buildBoardSVG, renderBoardToCanvas } from './ui/boardSheet.js';
 import { loadSampleIndex, loadSample } from './vision/samples.js';
 import { loadImageFile, ImageFormatError } from './vision/image.js';
@@ -49,6 +51,59 @@ renderBoardToCanvas(buildBoardSVG(), 4)
 $('#show-axes').addEventListener('change', (e) => world.setAxesVisible(e.target.checked));
 $('#three-reset').addEventListener('click', () => world.setDefaultView());
 
+/* ------------------------------------------------------------------ */
+/* 3D 场景：虚拟手机与"照片 → 3D"转场                                     */
+/* ------------------------------------------------------------------ */
+
+const phone = createPhone();
+world.scene.add(phone.group);
+let transitionPending = false; // 有新位姿、还没在 3D 视图里播过转场
+
+const transition = createTransition({
+  world,
+  view: $('#view-three'),
+  container: $('#three-container'),
+  overlay: $('#photo-overlay'),
+  phone,
+  onModeChange: (mode) => {
+    $('#btn-compare').setAttribute('aria-pressed', String(mode === 'compare'));
+    $('#btn-transition').disabled = mode === 'playing' || !store.state.pose;
+    $('#three-reset').disabled = mode !== 'idle';
+  },
+});
+
+const poseInputs = () => {
+  const { image, pose, intrinsics } = store.state;
+  return { bitmap: image.bitmap, pose, intrinsics };
+};
+
+function playTransition() {
+  if (!store.state.pose) return;
+  transitionPending = false;
+  transition.play(poseInputs());
+}
+
+$('#btn-transition').addEventListener('click', playTransition);
+$('#btn-compare').addEventListener('click', () => {
+  if (!store.state.pose) return;
+  transition.compare(transition.mode !== 'compare', poseInputs());
+});
+
+store.on('stage:posed', (st) => {
+  phone.setPose({ pose: st.pose, intrinsics: st.intrinsics, orientation: st.image.exif.orientation });
+  // 全景视角要把手机（光心周围 ±80 mm）也装进画面
+  const [X, Y, Z] = st.pose.position;
+  const m = 80;
+  world.setFocusPoints([[X - m, Y - m, Z - m], [X + m, Y + m, Z + m]], panoramaAzimuth(st.pose.position, [BOARD.width / 2, BOARD.height / 2]));
+  phone.setOpacity(1);
+  world.requestRender();
+  $('#btn-transition').disabled = false;
+  $('#btn-compare').disabled = false;
+  transitionPending = true;
+  // 正在看 3D 视图时直接播放；否则等切换到 3D 视图时播放
+  if ($('#view-three').classList.contains('active')) playTransition();
+});
+
 /** 3D 底板贴图的分辨率（px/mm），比调试小窗的正射图更清晰 */
 const BOARD_TEX_PX_PER_MM = 4;
 
@@ -90,8 +145,13 @@ function updateBoard3D() {
 }
 
 const tabs = createTabs($('.main'), (view) => {
-  if (view === 'three') world.resize();
-  else debugView.resize();
+  if (view === 'three') {
+    world.resize();
+    if (transitionPending) playTransition();
+  } else {
+    transition.cancel();
+    debugView.resize();
+  }
 });
 
 const showStatus = () => panel.setRows('status', '状态', [['流程', STAGE_LABELS[store.state.stage]]]);
@@ -164,6 +224,12 @@ store.on('stage:imageLoaded', (st) => {
   updateTruthOverlay();
   debugView.setOverlay('pose', null);
   $('#pose-toggle').hidden = true;
+  transition.cancel();
+  phone.clear();
+  world.setFocusPoints(null);
+  transitionPending = false;
+  $('#btn-transition').disabled = true;
+  $('#btn-compare').disabled = true;
   panel.remove('pose');
   if (markerResult?.bitmap !== image.bitmap) {
     debugView.setOverlay('markers', null);
@@ -484,4 +550,4 @@ sampleSelect.addEventListener('change', async (e) => {
 panel.message('页面已就绪。', 'ok');
 
 // 调试用：在控制台访问
-window.__twin = { store, panel, debugView, world, get calib() { return calib; } };
+window.__twin = { store, panel, debugView, world, phone, transition, get calib() { return calib; } };
