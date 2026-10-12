@@ -47,6 +47,58 @@ export const EDGE_NAMES = {
 };
 
 /**
+ * 稳健拟合"外移量随位置变化"的直线 off(t) = a + b·t（剔除残差大的点后重拟合）
+ * @param {number[][]} pts [t, off]
+ * @returns {{a:number, b:number, n:number}}
+ */
+function fitOffsetLine(pts) {
+  const fit = (ps) => {
+    const n = ps.length;
+    const mt = ps.reduce((s, p) => s + p[0], 0) / n;
+    const mo = ps.reduce((s, p) => s + p[1], 0) / n;
+    let stt = 0;
+    let sto = 0;
+    for (const [t, o] of ps) {
+      stt += (t - mt) ** 2;
+      sto += (t - mt) * (o - mo);
+    }
+    const b = stt > 1e-9 ? sto / stt : 0;
+    return { a: mo - b * mt, b };
+  };
+  let ps = pts;
+  let L = fit(ps);
+  for (let it = 0; it < 2; it++) {
+    const res = ps.map(([t, o]) => Math.abs(o - (L.a + L.b * t)));
+    const med = [...res].sort((x, y) => x - y)[Math.floor(res.length / 2)];
+    const keep = ps.filter((_, i) => res[i] <= Math.max(0.5, 3 * med));
+    if (keep.length < 3 || keep.length === ps.length) break;
+    ps = keep;
+    L = fit(ps);
+  }
+  return { ...L, n: ps.length };
+}
+
+/**
+ * 由 4 条纸边直线求纸张四角（底板坐标），顺序：左下、右下、右上、左上（与底板四角对应）。
+ * 纸边直线：下 Y = −off(X)，上 Y = H + off(X)，左 X = −off(Y)，右 X = W + off(Y)。
+ * 任一条边缺失时返回 null。
+ */
+function paperCorners(lines, W, H) {
+  const { left, right, bottom, top } = lines;
+  if (!left || !right || !bottom || !top) return null;
+  // 竖边 X = p + q·Y 与横边 Y = r + s·X 的交点
+  const meet = (p, q, r, sl) => {
+    const Y = (r + sl * p) / (1 - sl * q);
+    return [p + q * Y, Y];
+  };
+  const L = [-left.a, -left.b];
+  const R = [W + right.a, right.b];
+  const B = [-bottom.a, -bottom.b];
+  const T = [H + top.a, top.b];
+  return [meet(...L, ...B), meet(...R, ...B), meet(...R, ...T), meet(...L, ...T)];
+}
+
+/**
  * 测量纸边。对每条边在若干位置沿法线方向采样亮度剖面（底板坐标，步长 0.25 mm，
  * 纸内 8 mm 到纸外最多 15 mm；超出照片的部分截掉，纸外至少要有 3 mm 桌面），
  * 取"纸内亮、纸外暗"跳变最大处为纸边，再取中位数。
@@ -56,8 +108,12 @@ export const EDGE_NAMES = {
  * @param {number[][]} H 底板 mm → 该图像像素
  * @returns {{edges: {left:number|null, right:number|null, bottom:number|null, top:number|null},
  *            reasons: {[edge:string]: 'outside'|'contrast'|null},
+ *            lines: {[edge:string]: {a:number, b:number, n:number}|null},
+ *            corners: number[][]|null,
  *            widthMm:number|null, heightMm:number|null, scaleX:number|null, scaleY:number|null}}
- *   edges.x 为纸边相对设计位置向外的偏移（mm）；reasons.x 为测不出的原因：
+ *   edges.x 为纸边相对设计位置向外的偏移（mm，各采样点的中位数）；lines.x 为外移量沿边的直线拟合
+ *   （可反映纸张相对打印内容的轻微歪斜）；corners 为实测纸张四角的底板坐标（左下、右下、右上、左上）；
+ *   reasons.x 为测不出的原因：
  *   'outside' 纸边太靠近照片边缘（或在照片外），'contrast' 纸与桌面对比不够
  */
 export function measurePaper(img, H) {
@@ -81,8 +137,9 @@ export function measurePaper(img, H) {
 
   const edges = {};
   const reasons = {};
+  const lines = {};
   for (const [name, d] of Object.entries(defs)) {
-    const offsets = [];
+    const pts = []; // [t, 外移量]
     let clipped = 0;
     for (const t of d.ts) {
       const base = d.at(t);
@@ -102,7 +159,7 @@ export function measurePaper(img, H) {
         continue;
       }
       // 找"内侧均值 − 外侧均值"最大的位置
-      let best = -Infinity;
+      const contrast = new Array(prof.length).fill(-Infinity);
       let bestK = -1;
       for (let k = win; k < prof.length - win; k++) {
         let a = 0;
@@ -111,21 +168,29 @@ export function measurePaper(img, H) {
           a += prof[k - j];
           b += prof[k + j];
         }
-        const c = (a - b) / win;
-        if (c > best) {
-          best = c;
-          bestK = k;
-        }
+        contrast[k] = (a - b) / win;
+        if (bestK < 0 || contrast[k] > contrast[bestK]) bestK = k;
       }
-      if (best >= minContrast) offsets.push(-inside + bestK * step);
+      if (bestK < 0 || contrast[bestK] < minContrast) continue;
+      // 抛物线插值到亚采样精度
+      let frac = 0;
+      const c0 = contrast[bestK - 1];
+      const c1 = contrast[bestK];
+      const c2 = contrast[bestK + 1];
+      if (Number.isFinite(c0) && Number.isFinite(c2) && c0 - 2 * c1 + c2 < 0) {
+        frac = Math.max(-0.5, Math.min(0.5, (0.5 * (c0 - c2)) / (c0 - 2 * c1 + c2)));
+      }
+      pts.push([t, -inside + (bestK + frac) * step]);
     }
-    if (offsets.length >= 3) {
-      offsets.sort((a, b) => a - b);
-      edges[name] = offsets[Math.floor(offsets.length / 2)];
+    if (pts.length >= 3) {
+      const offs = pts.map((p) => p[1]).sort((a, b) => a - b);
+      edges[name] = offs[Math.floor(offs.length / 2)];
       reasons[name] = null;
+      lines[name] = fitOffsetLine(pts);
     } else {
       edges[name] = null;
       reasons[name] = clipped * 2 >= d.ts.length ? 'outside' : 'contrast';
+      lines[name] = null;
     }
   }
 
@@ -134,6 +199,8 @@ export function measurePaper(img, H) {
   return {
     edges,
     reasons,
+    lines,
+    corners: paperCorners(lines, W, Hh),
     widthMm,
     heightMm,
     // 打印比例 = 设计纸宽 / 测得纸宽（内容缩小时，纸在底板坐标系里显得更大）

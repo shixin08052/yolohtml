@@ -21,12 +21,19 @@ function photo(ids, transform = (p) => p) {
  * 合成照片：深色桌面上一张白纸。
  * 纸张在"设计底板坐标"里的范围为 [x0, x1] × [y0, y1]（100% 打印时为 0..297 × 0..210）
  */
-function rasterPaper([x0, x1, y0, y1], W = 1300, Hpx = 1000, Hc = Hcam) {
+function rasterPaper([x0, x1, y0, y1], W = 1300, Hpx = 1000, Hc = Hcam, rotDeg = 0) {
   const Hinv = invert3(Hc);
+  // 纸张绕自身中心旋转 rotDeg（模拟进纸歪斜）：判断时把点反向旋转
+  const pcx = (x0 + x1) / 2;
+  const pcy = (y0 + y1) / 2;
+  const ca = Math.cos((-rotDeg * Math.PI) / 180);
+  const sa = Math.sin((-rotDeg * Math.PI) / 180);
   const data = new Uint8ClampedArray(W * Hpx * 4);
   for (let v = 0; v < Hpx; v++) {
     for (let u = 0; u < W; u++) {
-      const [X, Y] = applyH(Hinv, [u + 0.5, v + 0.5]);
+      const [X0, Y0] = applyH(Hinv, [u + 0.5, v + 0.5]);
+      const X = pcx + ca * (X0 - pcx) - sa * (Y0 - pcy);
+      const Y = pcy + sa * (X0 - pcx) + ca * (Y0 - pcy);
       const inPaper = X >= x0 && X <= x1 && Y >= y0 && Y <= y1;
       const g = inPaper ? 235 : 70;
       const p = (v * W + u) * 4;
@@ -183,5 +190,35 @@ describe('打印检查：照片旋转与纸靠近照片边缘', () => {
     expect(r.level).toBe('warn');
     expect(r.messages.join('')).toContain('操作者一侧');
     expect(r.messages.join('')).toContain('离照片边缘太近');
+  });
+});
+
+describe('打印检查：实测纸张轮廓', () => {
+  it('打印内容在纸上偏移 (+0.5, −1.7) mm：纸张四角测得准（< 0.3 mm）', () => {
+    const rect = [-0.5, 296.5, 1.7, 211.7]; // 纸张在底板坐标系里的实际范围
+    const m = measurePaper(rasterPaper(rect), Hcam);
+    const expect4 = [[rect[0], rect[2]], [rect[1], rect[2]], [rect[1], rect[3]], [rect[0], rect[3]]];
+    m.corners.forEach((c, i) => expect(Math.hypot(c[0] - expect4[i][0], c[1] - expect4[i][1])).toBeLessThan(0.3));
+    expect(m.scaleX).toBeCloseTo(1, 3);
+  });
+
+  it('纸张相对打印内容歪斜 0.4°：四角仍测得准，直线斜率反映歪斜', () => {
+    const rect = [0, 297, 0, 210];
+    const rot = 0.4;
+    const m = measurePaper(rasterPaper(rect, 1300, 1000, Hcam, rot), Hcam);
+    const a = (rot * Math.PI) / 180;
+    const rotP = ([x, y]) => [148.5 + Math.cos(a) * (x - 148.5) - Math.sin(a) * (y - 105), 105 + Math.sin(a) * (x - 148.5) + Math.cos(a) * (y - 105)];
+    const expect4 = [[0, 0], [297, 0], [297, 210], [0, 210]].map(rotP);
+    m.corners.forEach((c, i) => expect(Math.hypot(c[0] - expect4[i][0], c[1] - expect4[i][1])).toBeLessThan(0.4));
+    // 下边外移量随 X 增大而减小（逆时针转后右端上翘）
+    expect(m.lines.bottom.b).toBeCloseTo(-Math.tan(a), 3);
+  });
+
+  it('有一条边测不出时没有四角', () => {
+    const c = { W: 750, Hpx: 1000, rollDeg: 90, distance: 330, pitchDeg: 90 };
+    let H = photoH(c);
+    const [u0] = applyH(H, [148.5, 0]);
+    H = mul3([[1, 0, c.W - u0 + 5], [0, 1, 0], [0, 0, 1]], H);
+    expect(measurePaper(rasterPaper(paperForScale(1), c.W, c.Hpx, H), H).corners).toBeNull();
   });
 });

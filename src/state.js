@@ -46,6 +46,20 @@
  * @property {number[][]} Hinv
  * @property {number} reprojErrPx
  * @property {HTMLCanvasElement} rectified   正射图
+ * @property {PaperOutline|null} [paper]     实测纸张轮廓（测不出纸边时为 null）
+ */
+
+/**
+ * 实测纸张轮廓（底板坐标，mm）。打印机会把内容整体印偏几毫米，所以纸张的实际位置
+ * 与设计位置（0..W × 0..H）可能有偏差；纸张大小用来判断打印比例。
+ * @typedef {Object} PaperOutline
+ * @property {number[][]|null} corners  四角：左下、右下、右上、左上；任一条边测不出时为 null
+ * @property {{left:number|null, right:number|null, bottom:number|null, top:number|null}} edges 纸边相对设计位置的外移
+ * @property {{[edge:string]: 'outside'|'contrast'|null}} reasons 测不出的原因
+ * @property {number|null} widthMm
+ * @property {number|null} heightMm
+ * @property {number|null} scaleX    打印比例（长边）
+ * @property {number|null} scaleY    打印比例（短边）
  */
 
 /**

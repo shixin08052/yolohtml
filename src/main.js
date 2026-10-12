@@ -16,8 +16,9 @@ import { poseFromHomography } from './vision/pose.js';
 import { intrinsicsMatrix } from './math/pinhole.js';
 import { drawPose } from './ui/poseOverlay.js';
 import { boardHomography, rectify } from './vision/homography.js';
+import { measurePaper, EDGE_NAMES, CHECK_LIMITS } from './vision/boardCheck.js';
 import { markerCornersWorld, markerRectOnPage } from './vision/boardLayout.js';
-import { BOARD } from './config.js';
+import { BOARD, MARKERS } from './config.js';
 import { drawMarkers } from './ui/markerOverlay.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -182,7 +183,37 @@ function renderCalibSection() {
       rows.push(['单应性 vs 真值', `<span class="${e.max < 3 ? 'ok' : 'bad'}">平均 ${fmt(e.mean, 2)} · 最大 ${fmt(e.max, 2)} px</span>`]);
     }
   }
+  const paper = markerResult.calib?.paper;
+  const paperNotes = [];
+  if (paper) {
+    const pct = (x) => (x == null ? '—' : `${(x * 100).toFixed(1)}%`);
+    if (paper.widthMm != null || paper.heightMm != null) {
+      rows.push(['纸张实测', `${fmt(paper.widthMm, 1)} × ${fmt(paper.heightMm, 1)} mm`]);
+      const dev = Math.max(...[paper.scaleX, paper.scaleY].filter((x) => x != null).map((x) => Math.abs(x - 1)));
+      rows.push(['打印比例', `<span class="${dev > CHECK_LIMITS.warnScale ? 'bad' : dev > CHECK_LIMITS.okScale ? '' : 'ok'}">${pct(paper.scaleX)} × ${pct(paper.scaleY)}</span>`]);
+      if (dev > CHECK_LIMITS.warnScale) {
+        const sc = [paper.scaleX, paper.scaleY].filter((x) => x != null);
+        const avg = sc.reduce((a, b) => a + b, 0) / sc.length;
+        paperNotes.push(`打印比例约 ${(avg * 100).toFixed(1)}%：码的实际边长约 ${(MARKERS.size * avg).toFixed(1)} mm，而系统按 ${MARKERS.size} mm 计算，手机高度和零件位置会偏差约 ${Math.abs(100 - avg * 100).toFixed(0)}%。请按 100% 实际尺寸重新打印。`);
+      }
+    }
+    if (paper.corners) {
+      // 打印偏移 = 纸张中心相对设计中心的偏移（与打印比例无关）
+      const { left, right, bottom, top } = paper.edges;
+      const dx = (right - left) / 2;
+      const dy = (top - bottom) / 2;
+      const sgn = (v) => `${v >= 0 ? '+' : ''}${fmt(v, 1)}`;
+      rows.push(['纸张相对码的偏移', `X ${sgn(dx)} · Y ${sgn(dy)} mm`]);
+      if (Math.max(Math.abs(dx), Math.abs(dy)) > 1) {
+        paperNotes.push(`打印内容在纸上偏了约 ${fmt(Math.hypot(dx, dy), 1)} mm（打印机进纸偏差，常见）。坐标以码为准，底板外框按实测纸边显示。`);
+      }
+    } else {
+      const bad = Object.keys(paper.edges).filter((k) => paper.edges[k] == null);
+      paperNotes.push(`没测出纸边（${bad.map((k) => `${EDGE_NAMES[k]}${paper.reasons[k] === 'outside' ? '离照片边缘太近' : '与背景对比不够'}`).join('；')}），底板外框按设计尺寸显示。`);
+    }
+  }
   let html = '<dl class="kv">' + rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('') + '</dl>';
+  for (const n of paperNotes) html += `<p class="note ${/重新打印/.test(n) ? 'warn' : 'info'}">${n}</p>`;
   if (missing.length) {
     html += `<p class="note warn">缺少 ID：${missing.join('、')}。请确认整张标定板都在画面里、码没有被遮挡或反光。</p>`;
   }
@@ -203,14 +234,20 @@ async function runCalibration({ force = false } = {}) {
     showRectified(null);
     await nextFrame();
     const t0 = performance.now();
-    const { markers } = detectMarkersInImage(image.bitmap, 1600);
+    const det = detectMarkersInImage(image.bitmap, 1600);
+    const { markers } = det;
     const ms = performance.now() - t0;
     let hom = null;
     let calib = null;
     if (markers.length) {
       hom = boardHomography(markers, markerCornersWorld);
       const rectified = rectify(image.bitmap, hom.H, RECT_PX_PER_MM, { boardW: BOARD.width, boardH: BOARD.height });
-      calib = { markers, H: hom.H, Hinv: hom.Hinv, reprojErrPx: hom.reprojErrPx, rectified };
+      // 在缩小图上测纸边：H 换到缩小图像素
+      const k = det.scale;
+      const Hs = [hom.H[0].map((x) => x * k), hom.H[1].map((x) => x * k), hom.H[2]];
+      const m = measurePaper(det.imageData, Hs);
+      const paper = { corners: m.corners, edges: m.edges, reasons: m.reasons, widthMm: m.widthMm, heightMm: m.heightMm, scaleX: m.scaleX, scaleY: m.scaleY };
+      calib = { markers, H: hom.H, Hinv: hom.Hinv, reprojErrPx: hom.reprojErrPx, rectified, paper };
     }
     markerResult = { bitmap: image.bitmap, markers, ms, hom, calib };
   }
@@ -241,7 +278,8 @@ function updatePoseOverlay() {
   const { pose, intrinsics } = store.state;
   const on = pose && $('#show-pose').checked;
   const K = pose ? intrinsicsMatrix(intrinsics) : null;
-  debugView.setOverlay('pose', on ? (ctx, s, dpr) => drawPose(ctx, K, pose, s, dpr) : null);
+  const paper = store.state.calib?.paper?.corners ?? null;
+  debugView.setOverlay('pose', on ? (ctx, s, dpr) => drawPose(ctx, K, pose, s, dpr, paper) : null);
 }
 $('#show-pose').addEventListener('change', updatePoseOverlay);
 

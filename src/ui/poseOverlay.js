@@ -1,5 +1,5 @@
 // 位姿叠加：用 K[R | t] 把底板外框、4 个码的方框和底板坐标轴（X 红、Y 绿、Z 蓝，长 100 mm）
-// 投影画在原图上。和识别结果（蓝框）不同，这里的线完全由位姿算出，能直观看出位姿是否正确。
+// 投影画在原图上。底板外框优先用实测纸张轮廓（实线），测不出时用设计尺寸（虚线）。和识别结果（蓝框）不同，这里的线完全由位姿算出，能直观看出位姿是否正确。
 import { BOARD, MARKERS } from '../config.js';
 import { project } from '../math/pinhole.js';
 import { markerCornersWorld } from '../vision/boardLayout.js';
@@ -10,8 +10,9 @@ import { markerCornersWorld } from '../vision/boardLayout.js';
  * @param {import('../state.js').CameraPose} pose
  * @param {number} scale 当前缩放比
  * @param {number} dpr
+ * @param {number[][]|null} [paperCorners] 实测纸张四角（底板坐标）
  */
-export function drawPose(ctx, K, pose, scale, dpr = 1) {
+export function drawPose(ctx, K, pose, scale, dpr = 1, paperCorners = null) {
   const P = (X, Y, Z = 0) => project(K, pose.R, pose.t, [X, Y, Z]);
   const lw = (2 * dpr) / scale;
   ctx.lineJoin = 'round';
@@ -28,8 +29,9 @@ export function drawPose(ctx, K, pose, scale, dpr = 1) {
     ctx.setLineDash([]);
   };
 
-  // 底板外框
-  poly([P(0, 0), P(BOARD.width, 0), P(BOARD.width, BOARD.height), P(0, BOARD.height)], '#f2b134', lw * 1.2, [6, 4]);
+  // 底板外框：实测纸张轮廓（实线），否则按设计尺寸（虚线）
+  if (paperCorners) poly(paperCorners.map(([X, Y]) => P(X, Y)), '#f2b134', lw * 1.2);
+  else poly([P(0, 0), P(BOARD.width, 0), P(BOARD.width, BOARD.height), P(0, BOARD.height)], '#f2b134', lw * 1.2, [6, 4]);
   // 码的方框
   for (const k of Object.keys(MARKERS.centers)) {
     poly(markerCornersWorld(Number(k)).map(([X, Y]) => P(X, Y)), '#f2b134', lw);

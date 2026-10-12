@@ -166,13 +166,9 @@ function drawPhotoPreview(bitmap, det, r) {
     ctx.restore();
   };
 
-  if (r.paper && r.H) {
-    const { left, right, bottom, top } = r.paper.edges;
-    if ([left, right, bottom, top].every((e) => e != null)) {
-      const rect = [[-left, -bottom], [BOARD.width + right, -bottom], [BOARD.width + right, BOARD.height + top], [-left, BOARD.height + top]];
-      poly(rect.map((p) => applyH(r.H, p)), '#3d7bd9');
-    }
-  }
+  // 实测纸张轮廓（四条纸边直线的交点，能反映纸张的偏移与歪斜）
+  if (r.paper?.corners && r.H) poly(r.paper.corners.map((p) => applyH(r.H, p)), '#3d7bd9');
+
   // 设计纸边画在实测纸边上面（虚线），打印正确时两者重合
   if (r.boardOutlinePx) poly(r.boardOutlinePx, '#c96442', [lw * 4, lw * 3]);
 
