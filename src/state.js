@@ -13,7 +13,8 @@
  * @property {number} height
  * @property {string} fileName
  * @property {{ focal35: number|null, focalMm: number|null, lensModel: string|null,
- *              make: string|null, model: string|null }} exif
+ *              make: string|null, model: string|null, orientation?: number|null }} exif
+ *   orientation 为 EXIF 原始方向值（1 / 3 / 6 / 8），fromCalib 用它判断竖拍方向
  */
 
 /**

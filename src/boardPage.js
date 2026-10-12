@@ -6,6 +6,7 @@ import { markerCornersOnPage } from './vision/boardLayout.js';
 import { buildBoardSVG, renderBoardToCanvas } from './ui/boardSheet.js';
 import { checkBoardPhoto, EDGE_NAMES } from './vision/boardCheck.js';
 import { applyH } from './vision/homography.js';
+import { loadImageFile, ImageFormatError } from './vision/image.js';
 
 const sheet = buildBoardSVG();
 document.getElementById('sheet-host').appendChild(sheet);
@@ -91,23 +92,6 @@ document.getElementById('btn-check').addEventListener('click', selfCheck);
 /* ------------------------------------------------------------------ */
 /* 照片检查：上传打印后拍的照片，检查码、版面和打印比例                       */
 /* ------------------------------------------------------------------ */
-
-/** 预期内的、直接展示给用户的错误（不打印到控制台） */
-class UserError extends Error {}
-
-const isHeic = (file) => /hei[cf]$/i.test(file.type) || /\.hei[cf]$/i.test(file.name);
-
-/** 读入照片并按 EXIF 方向转正（步骤 4 会把这部分整理进 vision/image.js） */
-async function loadPhoto(file) {
-  if (isHeic(file)) {
-    throw new UserError('不支持 HEIC/HEIF 格式。请在 iPhone 设置 → 相机 → 格式中选择"兼容性最佳"后重新拍摄。');
-  }
-  try {
-    return await createImageBitmap(file, { imageOrientation: 'from-image' });
-  } catch {
-    throw new UserError('无法读取这张图片，请上传 JPEG 或 PNG。');
-  }
-}
 
 const fmt = (x, d = 1) => (x == null ? '—' : x.toFixed(d));
 
@@ -219,7 +203,7 @@ async function photoCheck(file) {
   out.textContent = '识别中…';
   delete out.dataset.level;
   try {
-    const bitmap = await loadPhoto(file);
+    const { bitmap } = await loadImageFile(file);
     const det = detectMarkersInImage(bitmap, 1600);
     // 在缩小图的像素坐标里做检查（纸边也在缩小图上测）
     const r = checkBoardPhoto(det.small, det.imageData);
@@ -232,7 +216,7 @@ async function photoCheck(file) {
     out.innerHTML = `<span class="bad">${e.message ?? e}</span>`;
     out.dataset.level = 'error';
     panel.hidden = true;
-    if (!(e instanceof UserError)) console.error(e);
+    if (!(e instanceof ImageFormatError)) console.error(e);
   }
 }
 

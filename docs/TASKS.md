@@ -298,6 +298,8 @@ export const DETECT = { imgsz: 1024, scoreThreshold: 0.4, iouThreshold: 0.5 };
     - 分辨率不同时，fx、fy、cx、cy 都乘以 s = 实际宽 ÷ 参考宽
     - 竖拍（顺时针转 90°）时，fx' = fy，fy' = fx，cx' = 参考高 − cy，cy' = cx
 - 镜头检查：`focal35 ≠ 26` 时，信息面板显示黄色警告"可能切换了镜头（当前等效焦距 xx mm）"。
+- （实现补充）`fromCalib` 增加可选第 4 个参数 rotation（照片相对传感器顺时针旋转的角度，由 EXIF Orientation 得到：6 → 90°、3 → 180°、8 → 270°），省略时按宽高判断，竖图视为顺时针 90°；`ImageInput.exif` 增加 `orientation`。标定文件格式：`{ fx, fy, cx, cy, width, height, dist, rms }`，未标定时 `public/intrinsics.json` 为只含说明的占位文件。
+- （实现补充）照片没有 EXIF（例如微信转发未选"原图"）时按默认 26 mm 估算并提示。默认来源：合成图用真值；有标定文件且是主摄、宽高比一致时用标定文件；否则用 EXIF。
 - 信息面板显示：文件名、分辨率、等效焦距、镜头型号、fx、内参来源。界面上可以切换 EXIF / 标定文件（没有 `intrinsics.json` 时禁用该选项）。
 
 **单元测试：** (26 mm, 4032 × 3024) → fx 在 3028 ± 1；竖拍换算；分辨率缩放。

@@ -1,0 +1,3 @@
+{
+  "说明": "尚未标定。步骤 13 的 tools/calibrate_camera.py 会用棋盘格标定结果覆盖本文件，格式为 { fx, fy, cx, cy, width, height, dist, rms }，其中 width / height 为参考分辨率（4032 × 3024，横向）。本文件没有 fx 等字段时，网页把\"标定文件\"选项视为不可用。"
+}

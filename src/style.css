@@ -2,6 +2,7 @@
 @import './controls.css';
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { margin: 0; height: 100%; }
 body { background: var(--bg); overflow: hidden; -webkit-font-smoothing: antialiased; }
 
@@ -182,6 +183,17 @@ body { background: var(--bg); overflow: hidden; -webkit-font-smoothing: antialia
 .kv dt { color: var(--text-2); }
 .kv dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; word-break: break-all; }
 .muted { color: var(--text-2); }
+.note { margin: 8px 0 0; padding: 6px 8px; border-radius: 6px; line-height: 1.5; font-size: 13px; }
+.note.warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); }
+.note.info { color: var(--text-2); background: var(--hover); }
+.seg { display: inline-flex; gap: 2px; padding: 3px; margin-bottom: 8px; border-radius: 8px; background: var(--tab-track); }
+.seg button {
+  padding: 3px 12px; border: none; border-radius: 6px; background: transparent;
+  color: var(--text-2); font: inherit; font-size: 13px; cursor: pointer;
+}
+.seg button:hover:not(:disabled) { color: var(--text); }
+.seg button.on { background: var(--tab-on); color: var(--text); box-shadow: 0 1px 3px rgba(31, 30, 29, 0.10); }
+.seg button:disabled { opacity: 0.45; cursor: not-allowed; }
 .msg { margin: 4px 0; line-height: 1.55; }
 .msg.info { color: var(--text-2); }
 .msg.ok { color: var(--ok); }
