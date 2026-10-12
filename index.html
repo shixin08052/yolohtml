@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>视觉分拣数字孪生</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <!-- 顶部：标题、步骤条、操作 -->
+      <header class="topbar">
+        <div class="brand">视觉分拣数字孪生</div>
+        <ol id="stepper" class="stepper" aria-label="流程步骤"></ol>
+        <div class="actions">
+          <label class="btn btn-primary" for="file-input">上传照片</label>
+          <input id="file-input" type="file" accept="image/*,.heic,.heif" hidden />
+          <select id="sample-select" class="select" aria-label="加载示例">
+            <option value="" selected>加载示例…</option>
+          </select>
+        </div>
+      </header>
+
+      <!-- 中间主区域：两个视图标签页 -->
+      <main class="main">
+        <div class="tabs" role="tablist">
+          <button class="tab active" role="tab" data-view="debug" aria-selected="true">调试视图</button>
+          <button class="tab" role="tab" data-view="three" aria-selected="false">3D 视图</button>
+        </div>
+        <div class="views">
+          <section id="view-debug" class="view active" role="tabpanel">
+            <canvas id="debug-canvas"></canvas>
+          </section>
+          <section id="view-three" class="view" role="tabpanel">
+            <div id="three-container" class="three-container"></div>
+          </section>
+        </div>
+      </main>
+
+      <!-- 右侧：信息面板 -->
+      <aside id="info-panel" class="info-panel" aria-label="信息面板"></aside>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
