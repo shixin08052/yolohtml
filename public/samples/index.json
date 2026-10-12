@@ -1,0 +1,8 @@
+{
+  "说明": "示例列表。合成图由 synth.html 生成，带真值 JSON（GroundTruth）",
+  "samples": [
+    { "key": "synth_90", "label": "合成图 · 俯角 90°", "image": "synth_90.png", "truth": "synth_90.truth.json" },
+    { "key": "synth_65", "label": "合成图 · 俯角 65°", "image": "synth_65.png", "truth": "synth_65.truth.json" },
+    { "key": "synth_45", "label": "合成图 · 俯角 45°", "image": "synth_45.png", "truth": "synth_45.truth.json" }
+  ]
+}

@@ -17,7 +17,7 @@ function jsArucoCommonJS() {
   };
 }
 
-// 多页面：index（主页面）、board（标定板）；synth.html 在步骤 3 加入
+// 多页面：index（主页面）、board（标定板）、synth（合成测试图）
 export default defineConfig({
   // 相对路径，便于部署到 GitHub Pages 的子路径（/yolohtml/）
   base: './',
@@ -33,6 +33,7 @@ export default defineConfig({
       input: {
         main: resolve(import.meta.dirname, 'index.html'),
         board: resolve(import.meta.dirname, 'board.html'),
+        synth: resolve(import.meta.dirname, 'synth.html'),
       },
     },
   },

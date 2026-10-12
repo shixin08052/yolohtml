@@ -266,7 +266,10 @@ export const DETECT = { imgsz: 1024, scoreThreshold: 0.4, iouThreshold: 0.5 };
   - 底板，表面贴步骤 2 的标定板图案
   - 按一份布局 JSON 摆放的 8–10 个零件（每类用简单几何体，颜色取 `CLASSES.color`，高度取 `heightMm`）
 - 虚拟相机使用 iPhone 13 Pro 的内参（fx = fy ≈ 3028，主点在图像中心），按设定的位姿放置。
-- 预设 3 个视角：俯角 90°（正上方）、65°、45°，相机离底板中心约 300 mm。
+- 预设 3 个视角：俯角 90°（正上方）、65°、45°，相机离底板中心约 300 mm。斜拍的两张另加少量偏航（65°：6°；45°：−8°，并滚转 2°），避免只测完全对称的情况。
+- 像素坐标约定：像素 (i, j) 覆盖 [i, i+1) × [j, j+1)，中心在 (i+0.5, j+0.5)，主点在图像中心时 cx = W/2、cy = H/2（与 Three.js 渲染一致）。
+- 零件模型写在 `scene/parts.js`（`PART_SIZE` 包围盒尺寸 + `createPartMesh`），步骤 10 复用；布局在 `src/synth/layout.json`。合成图里的桌面比视野大（1600 × 1200 mm），只作背景。
+- synth.html 提供"渲染自检"：在渲染图上识别码，与真值角点比较，用来确认渲染端的坐标转换（`coords.js` 的 `cameraQuaternionFromR`）与针孔公式一致。
 - 输出两个文件，存进 `public/samples/`：
   - PNG 图片
   - `GroundTruth` JSON：内参、R、t、手机位置、俯角、每个码 4 个角点的像素坐标、每个零件的 (x, y)，以及零件 3D 包围盒投影到图像上得到的 box

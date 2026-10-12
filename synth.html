@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>合成测试图</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/src/synth.css" />
+  </head>
+  <body>
+    <header class="toolbar">
+      <div class="title">合成测试图</div>
+      <div class="spacer"></div>
+      <a class="btn btn-ghost" href="./index.html">返回主页面</a>
+    </header>
+
+    <main class="layout">
+      <section class="card preview-card">
+        <div class="preview-head">
+          <div id="preset-tabs" class="tabs" role="tablist"></div>
+          <label class="check"><input id="show-truth" type="checkbox" checked /> 叠加真值</label>
+        </div>
+        <div class="preview-wrap">
+          <canvas id="preview" class="preview"></canvas>
+          <div id="busy" class="busy" hidden>渲染中…</div>
+        </div>
+        <p class="legend muted">
+          <span class="sw sw-green"></span>真值码角点（<span class="sw-dot"></span>为码自身左上角）
+          <span class="sw sw-orange"></span>真值零件框（3D 包围盒投影）
+        </p>
+      </section>
+
+      <aside class="side">
+        <section class="card">
+          <h3>说明</h3>
+          <p class="muted">用 Three.js 离屏渲染 4032 × 3024 的"照片"：桌面、贴标定板图案的 A4 底板、10 个零件。虚拟相机使用 iPhone 13 Pro 主摄内参（fx = fy ≈ 3028，主点在中心）。</p>
+          <p class="muted">真值全部用针孔公式 K·(R·P + t) 计算，不从 Three.js 读取。生成的文件放在 <code>public/samples/</code>，并在 <code>index.json</code> 中登记。</p>
+        </section>
+
+        <section class="card">
+          <h3>下载</h3>
+          <div class="btns">
+            <button id="dl-png" class="btn">下载 PNG</button>
+            <button id="dl-json" class="btn">下载真值 JSON</button>
+          </div>
+        </section>
+
+        <section class="card">
+          <h3>渲染自检</h3>
+          <p class="muted">在渲染出的图上识别码，与真值角点比较。用来确认渲染端的坐标转换与针孔公式一致。</p>
+          <div id="check" class="kv-box muted">—</div>
+        </section>
+
+        <section class="card">
+          <h3>真值</h3>
+          <div id="truth" class="kv-box muted">—</div>
+        </section>
+      </aside>
+    </main>
+
+    <script type="module" src="/src/synthPage.js"></script>
+  </body>
+</html>
