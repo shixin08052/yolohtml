@@ -1,4 +1,4 @@
-// 把合成图真值画到 2D canvas 上（坐标为原图像素）：码的四边形 + 左上角红点，零件框 + 类别名。
+// 把合成图真值画到 2D canvas 上（坐标为原图像素）：码的四边形 + 左上角红点，零件框（虚线）+ 类别名。
 import { CLASSES } from '../config.js';
 
 /**
@@ -25,18 +25,22 @@ export function drawTruth(ctx, truth, scale, px = 1.5) {
     ctx.fill();
   }
 
-  ctx.font = `600 ${11 * lw}px sans-serif`;
+  const fs = 7.5 * lw; // 与检测框标签的字号一致
+  ctx.font = `600 ${fs}px sans-serif`;
   ctx.textAlign = 'left';
-  ctx.textBaseline = 'bottom';
+  // 真值标签画在框的下方（检测框的标签在上方），两者同时显示时不重叠
+  ctx.textBaseline = 'top';
   for (const p of truth.parts) {
     const [x1, y1, x2, y2] = p.box;
     ctx.strokeStyle = '#c96442';
+    ctx.setLineDash([4 * lw, 3 * lw]);
     ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
-    const name = CLASSES[p.cls]?.name ?? String(p.cls);
+    ctx.setLineDash([]);
+    const name = `真值 · ${CLASSES[p.cls]?.name ?? String(p.cls)}`;
     const tw = ctx.measureText(name).width;
     ctx.fillStyle = 'rgba(201, 100, 66, 0.9)';
-    ctx.fillRect(x1, y1 - 14 * lw, tw + 6 * lw, 14 * lw);
+    ctx.fillRect(x1, y2, tw + 4 * lw, fs + 2 * lw);
     ctx.fillStyle = '#fff';
-    ctx.fillText(name, x1 + 3 * lw, y1 - 2 * lw);
+    ctx.fillText(name, x1 + 2 * lw, y2 + lw);
   }
 }

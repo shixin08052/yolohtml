@@ -46,6 +46,8 @@
               <label class="check" id="rect-toggle" hidden><input id="show-rect" type="checkbox" checked /> 正射图</label>
               <label class="check" id="pose-toggle" hidden><input id="show-pose" type="checkbox" checked /> 位姿叠加</label>
               <label class="check" id="truth-toggle" hidden><input id="show-truth" type="checkbox" checked /> 叠加真值</label>
+              <label class="check" id="dets-toggle" hidden><input id="show-dets" type="checkbox" checked /> 检测框</label>
+              <button type="button" class="icon-btn text" id="btn-boxedit" aria-pressed="false" disabled>框选</button>
               <span class="zoom-btns">
                 <button type="button" class="icon-btn" id="zoom-out" aria-label="缩小">−</button>
                 <button type="button" class="icon-btn" id="zoom-in" aria-label="放大">＋</button>
@@ -53,6 +55,15 @@
               </span>
               <span class="hint hint-mouse">滚轮缩放 · 拖动平移 · 双击复位</span>
               <span class="hint hint-touch">双指缩放 · 单指拖动 · 双击复位</span>
+            </div>
+            <!-- 手动框选工具条 -->
+            <div id="box-tools" class="box-tools" hidden>
+              <select id="box-class" class="select" aria-label="类别"></select>
+              <button type="button" class="icon-btn text" id="box-delete" disabled>删除</button>
+              <button type="button" class="icon-btn text" id="box-clear">清空</button>
+              <button type="button" class="icon-btn text" id="box-done">完成</button>
+              <span class="hint hint-mouse">拖动画框 · 点框选中后可拖动 / 拉角 · Delete 删除 · 右键拖动平移</span>
+              <span class="hint hint-touch">单指画框 · 点框选中后拖动 / 拉角 · 双指缩放</span>
             </div>
             <!-- 正射图小窗：点击放大 / 缩小 -->
             <figure id="rect-inset" class="inset" hidden>
@@ -67,6 +78,7 @@
             </div>
             <div class="view-tools">
               <label class="check"><input id="show-axes" type="checkbox" /> 坐标轴</label>
+              <label class="check"><input id="show-part-labels" type="checkbox" checked /> 零件标签</label>
               <button type="button" class="icon-btn text" id="three-reset">默认视角</button>
               <button type="button" class="icon-btn text" id="btn-transition" disabled>转场</button>
               <button type="button" class="icon-btn text" id="btn-compare" aria-pressed="false" disabled>对比</button>

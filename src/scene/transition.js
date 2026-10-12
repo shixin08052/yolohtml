@@ -90,9 +90,11 @@ export function createTransition({ world, container, overlay, phone, onGrow = ()
     stop();
     setMode('playing');
     world.setControlsActive(false);
-    // 手机第一次出现时才编译着色器会卡一帧，先让它可见编译一遍
+    // 手机、零件第一次出现时才编译着色器、生成阴影会卡一下：先让它们全部可见完整渲染一帧
+    // （同一个任务里照片随即盖上，这一帧不会被看到）
     phone.setOpacity(1);
-    world.precompile();
+    onGrow(1);
+    world.render();
     const aspect = intrinsics.width / intrinsics.height;
     const r0 = fitRect(aspect);
     setRect(r0);

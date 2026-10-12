@@ -83,7 +83,9 @@
  */
 
 /**
- * 模块 4：零件。x, y 为当前选用方法的结果；xPlane, yPlane 为方法 1（不修正）的结果
+ * 模块 4：零件。x, y 为当前选用方法的结果；xPlane, yPlane 为方法 1（不修正）的结果。
+ * 步骤 10 新增（只增不改）：xParallax, yParallax 为方法 2（视差修正）的结果，切换方法时不用重算；
+ * rotDeg 为模型绕 Z 轴的朝向（只能从检测框粗略判断 0° / 90°）；detIndex 为对应 detections 的下标
  * @typedef {Object} Part
  * @property {number} id
  * @property {number} cls
@@ -94,6 +96,10 @@
  * @property {number} heightMm
  * @property {number} xPlane
  * @property {number} yPlane
+ * @property {number} xParallax
+ * @property {number} yParallax
+ * @property {number} rotDeg
+ * @property {number} detIndex
  * @property {boolean} reachable
  */
 

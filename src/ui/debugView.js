@@ -3,6 +3,8 @@
 // - 鼠标：滚轮缩放（以光标为中心）、拖动平移、双击复位
 // - 触屏：双指捏合缩放（以两指中点为中心）、单指拖动平移、双击复位
 // - 也可以调用 zoomBy / reset（界面上的 − ＋ 复位按钮）
+// - 设置了指针工具（setTool，例如手动框选）时：鼠标左键 / 单指交给工具，
+//   鼠标右键或中键拖动平移，双指仍然缩放平移
 import { cssVar, onThemeChange } from './theme.js';
 
 /**
@@ -109,6 +111,20 @@ export function createDebugView(canvas) {
   const pointers = new Map();
   let pan = null; // { x, y, tx, ty }
   let pinch = null; // { dist, mid: [x, y], s, tx, ty }
+  /** 指针工具：{ down(ix, iy) → 是否接管, move(ix, iy), up(ix, iy), cancel() } */
+  let tool = null;
+  let toolPointer = null; // 正在交给工具的指针 ID
+
+  /** 客户端坐标 → 原图像素 */
+  const toImage = (clientX, clientY) => {
+    const [mx, my] = toCanvas(clientX, clientY);
+    return [(mx - view.tx) / view.s, (my - view.ty) / view.s];
+  };
+  function cancelTool() {
+    if (toolPointer == null) return;
+    toolPointer = null;
+    tool?.cancel?.();
+  }
 
   const twoPointers = () => [...pointers.values()].slice(0, 2);
   function startPinch() {
@@ -124,7 +140,20 @@ export function createDebugView(canvas) {
   }
 
   canvas.addEventListener('pointerdown', (e) => {
-    if (!image || (e.pointerType === 'mouse' && e.button !== 0)) return;
+    if (!image) return;
+    const mouse = e.pointerType === 'mouse';
+    // 有工具时右键 / 中键用来平移；没有工具时只认左键
+    if (mouse && e.button !== 0 && !(tool && (e.button === 1 || e.button === 2))) return;
+    if (tool && pointers.size === 0 && (!mouse || e.button === 0)) {
+      const [ix, iy] = toImage(e.clientX, e.clientY);
+      if (tool.down(ix, iy)) {
+        toolPointer = e.pointerId;
+        pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        canvas.setPointerCapture(e.pointerId);
+        return;
+      }
+    }
+    if (toolPointer != null) cancelTool(); // 第二根手指落下：改为缩放
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     canvas.setPointerCapture(e.pointerId);
     if (pointers.size >= 2) startPinch();
@@ -135,6 +164,10 @@ export function createDebugView(canvas) {
   canvas.addEventListener('pointermove', (e) => {
     if (!pointers.has(e.pointerId)) return;
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (toolPointer === e.pointerId) {
+      tool.move(...toImage(e.clientX, e.clientY));
+      return;
+    }
     if (pinch && pointers.size >= 2) {
       const [a, b] = twoPointers();
       const dist = Math.hypot(a.x - b.x, a.y - b.y) || 1;
@@ -157,6 +190,13 @@ export function createDebugView(canvas) {
   let lastTap = null; // { t, x, y }
   const endPointer = (e) => {
     if (!pointers.has(e.pointerId)) return;
+    if (toolPointer === e.pointerId) {
+      pointers.delete(e.pointerId);
+      toolPointer = null;
+      if (e.type === 'pointercancel') tool.cancel?.();
+      else tool.up(...toImage(e.clientX, e.clientY));
+      return;
+    }
     const start = pan && pointers.size === 1 ? pan : null;
     pointers.delete(e.pointerId);
     if (pointers.size >= 2) startPinch();
@@ -164,7 +204,7 @@ export function createDebugView(canvas) {
     else {
       pan = null;
       pinch = null;
-      canvas.style.cursor = '';
+      canvas.style.cursor = tool?.cursor ?? '';
       // 轻点（几乎没移动）才算一次点击
       if (e.pointerType !== 'mouse' && start && Math.hypot(e.clientX - start.x, e.clientY - start.y) < 10) {
         const now = performance.now();
@@ -181,8 +221,12 @@ export function createDebugView(canvas) {
   canvas.addEventListener('pointerup', endPointer);
   canvas.addEventListener('pointercancel', endPointer);
   canvas.addEventListener('dblclick', () => {
+    if (tool) return; // 框选时双击容易误触
     fit();
     draw();
+  });
+  canvas.addEventListener('contextmenu', (e) => {
+    if (tool) e.preventDefault();
   });
 
   new ResizeObserver(resize).observe(canvas);
@@ -215,6 +259,15 @@ export function createDebugView(canvas) {
       zoomAt(canvas.width / 2, canvas.height / 2, view.s * k);
     },
     redraw: draw,
+    /**
+     * 设置指针工具；null 恢复为拖动平移
+     * @param {{down:(ix:number, iy:number)=>boolean, move:(ix:number, iy:number)=>void, up:(ix:number, iy:number)=>void, cancel?:()=>void, cursor?:string}|null} t
+     */
+    setTool(t) {
+      cancelTool();
+      tool = t;
+      canvas.style.cursor = t?.cursor ?? '';
+    },
     resize,
     /** 当前视图变换（测试用） */
     get view() {

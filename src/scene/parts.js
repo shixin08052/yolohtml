@@ -2,7 +2,9 @@
 // 模型的局部坐标：原点在零件中心正下方的板面上；底板 X、Y、Z 分别对应 Three.js 的 x、−z、y。
 // 长条形零件（电阻、螺丝）沿局部 X 方向放置，绕 Z 轴旋转 rotDeg 后摆到板上。
 import * as THREE from 'three';
+import { CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import { CLASSES } from '../config.js';
+import { toThree } from '../math/coords.js';
 
 /**
  * 每类零件的包围盒尺寸（mm）：lx 沿零件长轴，ly 垂直长轴，h 为高度（= CLASSES.heightMm）。
@@ -116,4 +118,157 @@ export function createPartMesh(cls) {
     }
   });
   return g;
+}
+
+const clamp01 = (x) => Math.min(1, Math.max(0, x));
+/** 先冲过头一点再回落，"长出来"更有弹性 */
+const easeOutBack = (t) => {
+  const c1 = 1.4;
+  const c3 = c1 + 1;
+  return 1 + c3 * (t - 1) ** 3 + c1 * (t - 1) ** 2;
+};
+const easeInOutCubic = (t) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
+
+/** 两种方法之间切换的动画时长（ms） */
+export const METHOD_MOVE_MS = 500;
+
+/**
+ * 3D 场景里的零件层：每个零件一个模型 + 头顶 CSS2D 标签（类别、坐标、置信度）。
+ * 位置在方法 1（板面落点）与方法 2（视差修正）之间用 blend ∈ [0, 1] 插值，
+ * 切换时 0.5 秒平滑移动；转场时用 setGrow 让零件从板面"长出来"。
+ * @param {{ requestRender: () => void, onFrame?: () => void }} deps onFrame：位置变化后（更新射线用）
+ */
+export function createPartsLayer({ requestRender, onFrame = () => {} }) {
+  const group = new THREE.Group();
+  group.name = 'parts';
+  /** @type {{ part: import('../state.js').Part, node: THREE.Group, model: THREE.Group, label: CSS2DObject, text: HTMLElement }[]} */
+  let items = [];
+  let blend = 1; // 1 = 视差修正
+  let grow = 1;
+  let labelsOn = true;
+  let anim = 0;
+
+  const posAt = (p, m) => [p.xPlane + (p.xParallax - p.xPlane) * m, p.yPlane + (p.yParallax - p.yPlane) * m];
+  const fmt = (x) => x.toFixed(1);
+
+  /** 标签文字：坐标取目标方法的结果 */
+  function labelText(p, parallax) {
+    const [x, y] = posAt(p, parallax ? 1 : 0);
+    return `<b>${CLASSES[p.cls].name}</b><span>(${fmt(x)}, ${fmt(y)})${p.score < 1 ? ` · ${p.score.toFixed(2)}` : ''}</span>`;
+  }
+
+  function place() {
+    for (const it of items) {
+      const [x, y] = posAt(it.part, blend);
+      it.node.position.copy(toThree(x, y, 0));
+    }
+  }
+
+  function applyGrow() {
+    const n = items.length;
+    // 依次错开 0.4 的进度长出来
+    const lag = n > 1 ? 0.4 / (n - 1) : 0;
+    items.forEach((it, i) => {
+      const k = clamp01((grow - i * lag) / 0.6);
+      const sc = k <= 0 ? 0.0001 : easeOutBack(k);
+      it.model.scale.setScalar(sc);
+      it.model.visible = k > 0;
+      it.label.visible = labelsOn && k >= 1;
+    });
+  }
+
+  function dispose() {
+    for (const it of items) {
+      it.model.traverse((o) => {
+        if (o.isMesh) {
+          o.geometry.dispose();
+          for (const m of [o.material].flat()) m.dispose();
+        }
+      });
+      it.text.remove();
+    }
+    group.clear();
+    items = [];
+  }
+
+  return {
+    group,
+    /**
+     * 换一组零件（模型重建；保留当前的方法与生长进度）
+     * @param {import('../state.js').Part[]} parts
+     * @param {boolean} parallax 当前是否视差修正
+     */
+    setParts(parts, parallax) {
+      cancelAnimationFrame(anim);
+      dispose();
+      blend = parallax ? 1 : 0;
+      for (const part of parts) {
+        const node = new THREE.Group();
+        node.name = `part-${part.id}`;
+        const model = createPartMesh(part.cls);
+        model.rotation.y = (part.rotDeg * Math.PI) / 180;
+        node.add(model);
+        const text = document.createElement('div');
+        text.className = 'part-tag';
+        text.style.setProperty('--c', CLASSES[part.cls].color);
+        text.innerHTML = labelText(part, parallax);
+        const label = new CSS2DObject(text);
+        label.position.set(0, part.heightMm + 4, 0);
+        label.center.set(0.5, 1); // 标签底边对准零件上方
+        node.add(label);
+        group.add(node);
+        items.push({ part, node, model, label, text });
+      }
+      place();
+      applyGrow();
+      onFrame();
+      requestRender();
+    },
+    clear() {
+      cancelAnimationFrame(anim);
+      dispose();
+      onFrame();
+      requestRender();
+    },
+    /** 生长进度 0 → 1（转场第 3 步） */
+    setGrow(t) {
+      grow = clamp01(t);
+      applyGrow();
+      requestRender();
+    },
+    /** 切换方法：0.5 秒平滑移动到另一种方法的位置 */
+    animateMethod(parallax) {
+      cancelAnimationFrame(anim);
+      const from = blend;
+      const to = parallax ? 1 : 0;
+      for (const it of items) it.text.innerHTML = labelText(it.part, parallax);
+      const t0 = performance.now();
+      const step = (now) => {
+        const k = clamp01((now - t0) / METHOD_MOVE_MS);
+        blend = from + (to - from) * easeInOutCubic(k);
+        place();
+        onFrame();
+        requestRender();
+        if (k < 1) anim = requestAnimationFrame(step);
+      };
+      anim = requestAnimationFrame(step);
+    },
+    setLabelsVisible(on) {
+      labelsOn = on;
+      applyGrow();
+      requestRender();
+    },
+    /** 当前射线终点（底板坐标）：两种方法的落点在同一条视线上，按 blend 插值仍在视线上 */
+    rayEnds() {
+      return items
+        .filter((it) => it.model.visible)
+        .map(({ part: p }) => {
+          const [x, y] = posAt(p, blend);
+          return { point: [x, y, (p.heightMm / 2) * blend], color: CLASSES[p.cls].color };
+        });
+    },
+    get count() {
+      return items.length;
+    },
+  };
 }

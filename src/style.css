@@ -191,7 +191,40 @@ body { background: var(--bg); overflow: hidden; -webkit-font-smoothing: antialia
 .three-container canvas { display: block; }
 .three-container canvas { touch-action: none; }
 .label-layer { position: absolute; inset: 0; pointer-events: none; }
-.photo-overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; }
+.photo-overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; will-change: opacity; }
+.box-tools {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(55% - 20px);
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--card) 92%, transparent);
+  border: 1px solid var(--line);
+  box-shadow: 0 4px 16px rgba(31, 30, 29, 0.12);
+  font-size: 12px;
+}
+.box-tools .select { height: 30px; padding: 0 8px; font-size: 13px; }
+.box-tools .hint { color: var(--text-3); }
+.part-tag {
+  padding: 2px 6px 3px;
+  border-radius: 5px;
+  border-left: 3px solid var(--c, var(--accent));
+  background: color-mix(in srgb, var(--card) 90%, transparent);
+  box-shadow: 0 1px 4px rgba(31, 30, 29, 0.18);
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.3;
+  white-space: nowrap;
+  pointer-events: none;
+  margin-bottom: 4px;
+}
+.part-tag b { display: block; font-weight: 600; }
+.part-tag span { color: var(--text-2); font-variant-numeric: tabular-nums; }
 .icon-btn[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
 .icon-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .marker-tag {
@@ -274,5 +307,14 @@ body { background: var(--bg); overflow: hidden; -webkit-font-smoothing: antialia
   .inset.big { width: calc(100% - 16px); }
   .inset.big figcaption { display: block; }
   .view-tools { top: 6px; left: 6px; gap: 6px 10px; padding: 4px 8px; font-size: 12px; }
+  /* 窄屏上零件标签只显示类别，避免挤成一团 */
+  .part-tag { font-size: 10px; padding: 1px 5px 2px; }
+  .part-tag span { display: none; }
+  .box-tools { left: 6px; bottom: 6px; max-width: calc(68% - 12px); padding: 4px 8px; gap: 6px; }
   .info-panel { padding: 0 16px 16px; }
 }
+
+/* 信息面板里的开关行 */
+.toggle-row { display: flex; align-items: center; gap: 6px; margin: 8px 0; font-size: 13px; color: var(--text); cursor: pointer; }
+.toggle-row input { accent-color: var(--accent); }
+.info-panel p.small { margin: 0 0 8px; font-size: 12px; line-height: 1.5; }

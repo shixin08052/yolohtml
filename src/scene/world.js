@@ -305,11 +305,6 @@ export function createWorld(container) {
     labelRenderer.render(scene, camera);
   }
 
-  /** 预编译场景里所有可见物体的着色器，避免物体第一次出现时卡一下 */
-  function precompile() {
-    renderer.compile(scene, camera);
-  }
-
   renderer.setAnimationLoop(() => {
     if (container.clientWidth === 0) return; // 不可见时不渲染
     const moving = controlsActive ? controls.update() : false; // 阻尼仍在衰减时返回 true
@@ -328,7 +323,6 @@ export function createWorld(container) {
     resize,
     render,
     setFrame,
-    precompile,
     requestRender,
     setDefaultView,
     getDefaultView,

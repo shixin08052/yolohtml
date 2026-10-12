@@ -80,3 +80,43 @@ export function poseTruthError(pose, truth) {
     angleErrDeg: (angle * 180) / Math.PI,
   };
 }
+
+/**
+ * 零件位置与真值的误差：每个零件配对同类别里最近的真值零件（按方法 2 的位置，
+ * 贪心、一对一，距离超过 maxDist 不配对），分别统计两种方法的误差
+ * @param {import('../state.js').Part[]} parts
+ * @param {import('../state.js').GroundTruth} truth
+ * @param {number} [maxDist=20]
+ * @returns {{ plane: {mean:number, max:number}|null, parallax: {mean:number, max:number}|null,
+ *             matched: number, unmatchedParts: number, missedTruth: number }}
+ */
+export function partsTruthError(parts, truth, maxDist = 20) {
+  const pairs = [];
+  for (const p of parts) {
+    truth.parts.forEach((t, j) => {
+      if (t.cls !== p.cls) return;
+      pairs.push({ p, j, d: Math.hypot(p.xParallax - t.x, p.yParallax - t.y) });
+    });
+  }
+  pairs.sort((a, b) => a.d - b.d);
+  const usedP = new Set();
+  const usedT = new Set();
+  const plane = [];
+  const parallax = [];
+  for (const { p, j, d } of pairs) {
+    if (d > maxDist || usedP.has(p) || usedT.has(j)) continue;
+    usedP.add(p);
+    usedT.add(j);
+    const t = truth.parts[j];
+    plane.push(Math.hypot(p.xPlane - t.x, p.yPlane - t.y));
+    parallax.push(d);
+  }
+  const stat = (a) => (a.length ? { mean: a.reduce((s, x) => s + x, 0) / a.length, max: Math.max(...a) } : null);
+  return {
+    plane: stat(plane),
+    parallax: stat(parallax),
+    matched: usedP.size,
+    unmatchedParts: parts.length - usedP.size,
+    missedTruth: truth.parts.length - usedT.size,
+  };
+}

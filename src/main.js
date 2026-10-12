@@ -25,6 +25,12 @@ import { measurePaper, EDGE_NAMES, CHECK_LIMITS } from './vision/boardCheck.js';
 import { markerCornersWorld, markerRectOnPage, paperFrame, designFrame, frameMatrix } from './vision/boardLayout.js';
 import { BOARD, MARKERS } from './config.js';
 import { drawMarkers } from './ui/markerOverlay.js';
+import { createBoxEditor } from './ui/boxEditor.js';
+import { createPartsLayer } from './scene/parts.js';
+import { detect, MockMissingError, detectionsFileName, serializeDetections, parseDetections } from './vision/detector.js';
+import { mapDetections, selectMethod } from './vision/mapping.js';
+import { partsTruthError } from './vision/evaluate.js';
+import { CLASSES, WORK_AREA } from './config.js';
 
 const $ = (sel) => document.querySelector(sel);
 const fmt = (x, d = 1) => (x == null || Number.isNaN(x) ? '—' : Number(x).toFixed(d));
@@ -57,6 +63,13 @@ $('#three-reset').addEventListener('click', () => world.setDefaultView());
 
 const phone = createPhone();
 world.scene.add(phone.group);
+// 零件层：位置变化时同步更新手机到零件的射线
+const partsLayer = createPartsLayer({
+  requestRender: world.requestRender,
+  onFrame: () => phone.setRays(partsLayer.rayEnds()),
+});
+world.scene.add(partsLayer.group);
+$('#show-part-labels').addEventListener('change', (e) => partsLayer.setLabelsVisible(e.target.checked));
 let transitionPending = false; // 有新位姿、还没在 3D 视图里播过转场
 
 const transition = createTransition({
@@ -64,6 +77,7 @@ const transition = createTransition({
   container: $('#three-container'),
   overlay: $('#photo-overlay'),
   phone,
+  onGrow: (t) => partsLayer.setGrow(t),
   onModeChange: (mode) => {
     $('#btn-compare').setAttribute('aria-pressed', String(mode === 'compare'));
     $('#btn-transition').disabled = mode === 'playing' || !store.state.pose;
@@ -90,6 +104,7 @@ $('#btn-compare').addEventListener('click', () => {
 
 store.on('stage:posed', (st) => {
   phone.setPose({ pose: st.pose, intrinsics: st.intrinsics, orientation: st.image.exif.orientation });
+  partsLayer.clear();
   // 全景视角要把手机（光心周围 ±80 mm）也装进画面
   const [X, Y, Z] = st.pose.position;
   const m = 80;
@@ -230,6 +245,8 @@ store.on('stage:imageLoaded', (st) => {
   $('#btn-transition').disabled = true;
   $('#btn-compare').disabled = true;
   panel.remove('pose');
+  partsLayer.clear();
+  if (detResult?.bitmap !== image.bitmap) resetDetections();
   if (markerResult?.bitmap !== image.bitmap) {
     debugView.setOverlay('markers', null);
     $('#markers-toggle').hidden = true;
@@ -502,6 +519,222 @@ store.on('stage:posed', () => {
 });
 
 /* ------------------------------------------------------------------ */
+/* 模块 4：零件检测（mock）、手动框选、坐标映射、3D 零件                    */
+/* ------------------------------------------------------------------ */
+
+const DET_SOURCE_LABELS = { truth: '合成图真值框', mock: 'mock 检测文件', manual: '手动框选', file: '载入的检测文件', none: '无' };
+
+/** 当前照片的检测结果（换内参来源时沿用，手动框选的修改也存在这里） */
+let detResult = null; // { bitmap, detections, source, note }
+let parallaxOn = true;
+let boxEditing = false;
+
+const boxEditor = createBoxEditor({
+  getScale: () => debugView.view.s,
+  redraw: () => debugView.redraw(),
+  imageSize: () => store.state.image,
+  onChange: (boxes) => {
+    if (!detResult) return;
+    detResult = { ...detResult, detections: boxes, source: 'manual', note: null };
+    applyDetections();
+  },
+  onSelect: (i) => {
+    $('#box-delete').disabled = i < 0;
+    $('#box-class').value = String(boxEditor.cls);
+  },
+});
+for (const c of CLASSES) $('#box-class').add(new Option(c.name, String(c.id)));
+$('#box-class').addEventListener('change', (e) => boxEditor.setClass(Number(e.target.value)));
+$('#box-delete').addEventListener('click', () => boxEditor.deleteSelected());
+$('#box-clear').addEventListener('click', () => boxEditor.clear());
+$('#box-done').addEventListener('click', () => setBoxEditing(false));
+$('#btn-boxedit').addEventListener('click', () => setBoxEditing(!boxEditing));
+$('#show-dets').addEventListener('change', updateDetOverlay);
+window.addEventListener('keydown', (e) => {
+  if (!boxEditing || /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) return;
+  if (e.key === 'Delete' || e.key === 'Backspace') {
+    e.preventDefault();
+    boxEditor.deleteSelected();
+  } else if (e.key === 'Escape') {
+    boxEditor.setBoxes(boxEditor.getBoxes());
+  }
+});
+
+function updateDetOverlay() {
+  const on = detResult && (boxEditing || $('#show-dets').checked);
+  debugView.setOverlay('dets', on ? (ctx, s, dpr) => boxEditor.draw(ctx, s, dpr) : null);
+}
+
+function setBoxEditing(on) {
+  if (on && !detResult) return;
+  boxEditing = on;
+  $('#btn-boxedit').setAttribute('aria-pressed', String(on));
+  $('#box-tools').hidden = !on;
+  debugView.setTool(on ? boxEditor.tool : null);
+  if (on) {
+    tabs.select('debug');
+    $('#box-class').value = String(boxEditor.cls);
+  } else {
+    boxEditor.setBoxes(boxEditor.getBoxes()); // 取消选中
+  }
+  updateDetOverlay();
+}
+
+/** 换照片：清空检测结果与框选 */
+function resetDetections() {
+  detResult = null;
+  setBoxEditing(false);
+  boxEditor.setBoxes([]);
+  $('#dets-toggle').hidden = true;
+  $('#btn-boxedit').disabled = true;
+  panel.remove('detect');
+  updateDetOverlay();
+}
+
+/** 位姿求出后：检测（同一张照片沿用已有结果），再映射 */
+async function runDetect() {
+  const { image, truth } = store.state;
+  if (detResult?.bitmap !== image.bitmap) {
+    let detections = [];
+    let source = truth ? 'truth' : 'mock';
+    let note = null;
+    try {
+      detections = await detect(image, { mode: 'mock', truth });
+    } catch (err) {
+      if (!(err instanceof MockMissingError)) throw err;
+      source = 'none';
+      note = `没有找到 mock 检测文件 ${detectionsFileName(image.fileName)}。可以点"框选"在照片上手动框出零件，保存后下次用"载入"读回。`;
+    }
+    if (store.state.image?.bitmap !== image.bitmap) return; // 等待期间换了照片
+    detResult = { bitmap: image.bitmap, detections, source, note };
+    boxEditor.setBoxes(detections);
+  }
+  $('#dets-toggle').hidden = false;
+  $('#btn-boxedit').disabled = false;
+  updateDetOverlay();
+  applyDetections();
+}
+
+/** 检测框 → 零件（两种方法都算），写入 state，重建 3D 零件 */
+function applyDetections() {
+  const { pose, calib, intrinsics, image } = store.state;
+  if (!detResult || !pose || image?.bitmap !== detResult.bitmap) {
+    renderDetectSection(null);
+    return;
+  }
+  const K = intrinsicsMatrix(intrinsics);
+  const { parts, dropped } = mapDetections(detResult.detections, { Hinv: calib.Hinv, K, R: pose.R, position: pose.position }, { parallax: parallaxOn });
+  store.advance('detected', { detections: detResult.detections, parts });
+  partsLayer.setParts(parts, parallaxOn);
+  store.advance('sceneBuilt');
+  renderDetectSection({ parts, dropped });
+}
+
+function setParallax(on) {
+  parallaxOn = on;
+  if (store.state.parts) store.state.parts = selectMethod(store.state.parts, on);
+  partsLayer.animateMethod(on);
+  renderDetectSection(lastMapping);
+}
+
+let lastMapping = null;
+
+/** 渲染"检测"分区 */
+function renderDetectSection(mapping) {
+  lastMapping = mapping;
+  if (!detResult) return;
+  const { truth } = store.state;
+  const body = panel.setCustom('detect', '检测与映射');
+  const dets = detResult.detections;
+  let html = '';
+  if (!mapping) {
+    html += `<p class="summary">${dets.length} 个检测框</p><p class="note info">需要先求出位姿，才能把检测框映射到底板坐标。</p>`;
+  } else {
+    const { parts, dropped } = mapping;
+    html += `<p class="summary">检测到 <b>${parts.length}</b> 个零件<span class="muted">（来源：${DET_SOURCE_LABELS[detResult.source]}）</span></p>`;
+    const counts = CLASSES.map((c) => [c.name, parts.filter((p) => p.cls === c.id).length]).filter(([, n]) => n);
+    if (counts.length) html += '<dl class="kv">' + counts.map(([k, n]) => `<dt>${k}</dt><dd>${n}</dd>`).join('') + '</dl>';
+    html += `<label class="check toggle-row"><input type="checkbox" id="parallax-toggle"${parallaxOn ? ' checked' : ''} /> 视差修正</label>`;
+    html += '<p class="muted small">零件有高度，斜拍时检测框中心对应零件半高处；修正后按半高求交，不修正则直接落到板面。</p>';
+    if (truth && parts.length) {
+      const e = partsTruthError(parts, truth);
+      const cell = (st, on) => (st ? `<span class="${st.mean < 3 ? 'ok' : 'bad'}">平均 ${fmt(st.mean, 2)} · 最大 ${fmt(st.max, 2)} mm</span>${on ? ' ◀' : ''}` : '—');
+      html += '<dl class="kv">';
+      html += `<dt>不修正 vs 真值</dt><dd>${cell(e.plane, !parallaxOn)}</dd>`;
+      html += `<dt>视差修正 vs 真值</dt><dd>${cell(e.parallax, parallaxOn)}</dd>`;
+      html += '</dl>';
+      if (e.unmatchedParts || e.missedTruth) {
+        html += `<p class="note info">${e.unmatchedParts} 个零件没有对应的真值，${e.missedTruth} 个真值零件没有被检测到（只统计配对上的）。</p>`;
+      }
+    }
+    if (dropped.length) {
+      html += `<p class="note warn">${dropped.length} 个检测框映射后落在工作区外（板边 ${WORK_AREA.margin} mm 以内或码附近），已丢弃。</p>`;
+    }
+  }
+  if (detResult.note) html += `<p class="note info">${detResult.note}</p>`;
+  html += `<div class="sec-actions">
+    <button type="button" class="btn btn-small" id="btn-det-edit">${boxEditing ? '结束框选' : '框选'}</button>
+    <button type="button" class="btn btn-small" id="btn-det-save"${dets.length ? '' : ' disabled'}>保存检测结果</button>
+    <button type="button" class="btn btn-small" id="btn-det-load">载入检测结果</button>
+    <input type="file" id="det-file" accept=".json,application/json" hidden />
+  </div>`;
+  body.innerHTML = html;
+  body.querySelector('#parallax-toggle')?.addEventListener('change', (e) => setParallax(e.target.checked));
+  body.querySelector('#btn-det-edit').addEventListener('click', () => {
+    setBoxEditing(!boxEditing);
+    renderDetectSection(lastMapping);
+  });
+  body.querySelector('#btn-det-save').addEventListener('click', saveDetections);
+  const fileInput = body.querySelector('#det-file');
+  body.querySelector('#btn-det-load').addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', (e) => {
+    const f = e.target.files?.[0];
+    if (f) loadDetectionsFile(f);
+  });
+}
+
+function saveDetections() {
+  const { image } = store.state;
+  if (!detResult || !image) return;
+  const json = serializeDetections(detResult.detections, image);
+  const blob = new Blob([JSON.stringify(json, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = detectionsFileName(image.fileName);
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  panel.message(`已保存 ${a.download}（${json.detections.length} 个框）`, 'ok');
+}
+
+async function loadDetectionsFile(file) {
+  const { image } = store.state;
+  if (!detResult || !image) return;
+  try {
+    const json = JSON.parse(await file.text());
+    if (json?.image && json.image !== image.fileName) {
+      panel.message(`注意：检测文件记录的照片是 ${json.image}，当前照片是 ${image.fileName}`, 'warn');
+    }
+    const detections = parseDetections(json, image);
+    detResult = { ...detResult, detections, source: 'file', note: null };
+    boxEditor.setBoxes(detections);
+    updateDetOverlay();
+    applyDetections();
+    panel.message(`已载入 ${file.name}：${detections.length} 个框`, 'ok');
+  } catch (err) {
+    panel.message(`载入检测结果失败：${err.message}`, 'error');
+  }
+}
+
+store.on('stage:posed', () => {
+  runDetect().catch((err) => {
+    console.error(err);
+    store.fail('detect', `检测出错：${err.message}`);
+  });
+});
+
+/* ------------------------------------------------------------------ */
 /* 上传与示例                                                           */
 /* ------------------------------------------------------------------ */
 
@@ -549,4 +782,4 @@ sampleSelect.addEventListener('change', async (e) => {
 panel.message('页面已就绪。', 'ok');
 
 // 调试用：在控制台访问
-window.__twin = { store, panel, debugView, world, phone, transition, get calib() { return calib; } };
+window.__twin = { store, panel, debugView, world, phone, transition, partsLayer, boxEditor, get calib() { return calib; } };
