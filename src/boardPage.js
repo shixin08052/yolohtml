@@ -1,5 +1,5 @@
-// 可打印的 A3 标定板（board.html）。
-// 整张板是一个 viewBox = 0 0 420 297 的 SVG，1 单位 = 1 mm；码图案取自 js-aruco2 的
+// 可打印的 A4 标定板（board.html）。
+// 整张板是一个 viewBox = 0 0 297 210 的 SVG，1 单位 = 1 mm；码图案取自 js-aruco2 的
 // generateSVG，保证打印的码与识别端使用同一个字典。
 import { BOARD, MARKERS } from './config.js';
 import { markerSVG, svgScale, detectMarkers, VALID_IDS, ARUCO_DICT } from './vision/aruco.js';
@@ -41,7 +41,7 @@ function buildSheet() {
   });
   svg.appendChild(el('rect', { x: 0, y: 0, width: W, height: H, fill: '#fff' }));
 
-  // 4 个码：js-aruco2 生成的 SVG 外圈带 1 格白边，按比例放大，使码本体正好 50 mm
+  // 4 个码：js-aruco2 生成的 SVG 外圈带 1 格白边，按比例放大，使码本体正好为 MARKERS.size
   const k = svgScale();
   for (const id of VALID_IDS) {
     const { x, y, size } = markerRectOnPage(id);
@@ -63,29 +63,39 @@ function buildSheet() {
     svg.appendChild(label(lx, y + size / 2, `ID ${id}`, { size: 4, anchor: onLeftHalf ? 'start' : 'end' }));
   }
 
+  // 码与板边之间的空白条（页面坐标）：上下各 margin 宽；
+  // 文字只放在两侧码（含白边）之间，避免压到码周围的白边
+  const margin = markerRectOnPage(3).y;
+  const quiet = (MARKERS.size * (k - 1)) / 2;
+  const left = markerRectOnPage(3).x + MARKERS.size + quiet + 3;
+  const right = markerRectOnPage(2).x - quiet - 3;
+  const topMid = margin / 2;
+  const botMid = H - margin / 2;
+
   // 顶部：说明与方向
-  svg.appendChild(label(W / 2, 7, `视觉分拣标定板 · A3 · ArUco 4×4（${ARUCO_DICT}，与 OpenCV DICT_4X4_50 相同）· ID 0–3 · 码边长 ${MARKERS.size} mm`, { size: 3, anchor: 'middle' }));
-  svg.appendChild(label(W / 2, 11.5, '↑ 远离操作者（+Y）', { size: 3, anchor: 'middle' }));
+  svg.appendChild(label(W / 2, topMid - 2, `视觉分拣标定板 · A4 · ArUco 4×4（${ARUCO_DICT} = OpenCV DICT_4X4_50）· ID 0–3 · 码边长 ${MARKERS.size} mm`, { size: 2.4, anchor: 'middle' }));
+  svg.appendChild(label(W / 2, topMid + 1.6, '↑ 远离操作者（+Y）', { size: 2.4, anchor: 'middle' }));
 
-  // 底部：操作者一侧
-  svg.appendChild(label(W / 2, 286, '操作者一侧 ↓', { size: 3.5, anchor: 'middle', weight: 600 }));
-  svg.appendChild(label(W / 2, 290.5, '底板原点在左下角，X 向右，Y 向上', { size: 2.6, anchor: 'middle' }));
+  // 底部中间：操作者一侧
+  svg.appendChild(label(W / 2, botMid - 2, '操作者一侧 ↓', { size: 3, anchor: 'middle', weight: 600 }));
+  svg.appendChild(label(W / 2, botMid + 1.6, '原点在左下角，X 向右，Y 向上', { size: 2.2, anchor: 'middle' }));
 
-  // 底部左侧：100 mm 比例尺
-  const sx = 85;
-  const sy = 289;
+  // 底部左侧：50 mm 比例尺
+  const barLen = 50;
+  const sx = left;
+  const sy = botMid - 0.5;
   const scale = el('g', { stroke: '#555', 'stroke-width': 0.25, fill: 'none' });
-  scale.appendChild(el('line', { x1: sx, y1: sy, x2: sx + 100, y2: sy }));
-  for (let i = 0; i <= 10; i++) {
-    const h = i % 5 === 0 ? 2.5 : 1.3;
+  scale.appendChild(el('line', { x1: sx, y1: sy, x2: sx + barLen, y2: sy }));
+  for (let i = 0; i <= barLen / 10; i++) {
+    const h = i % 5 === 0 ? 2.2 : 1.2;
     scale.appendChild(el('line', { x1: sx + i * 10, y1: sy, x2: sx + i * 10, y2: sy - h }));
   }
   svg.appendChild(scale);
-  svg.appendChild(label(sx + 50, sy + 2.6, '比例尺 100 mm', { size: 2.6, anchor: 'middle' }));
+  svg.appendChild(label(sx + barLen / 2, sy + 2.2, `比例尺 ${barLen} mm`, { size: 2.2, anchor: 'middle' }));
 
-  // 角落：打印提示
-  svg.appendChild(label(340, 286, '打印时选择 100% 实际尺寸，', { size: 2.8, anchor: 'end' }));
-  svg.appendChild(label(340, 290, '打印后用尺子量码边长是否为 50 mm', { size: 2.8, anchor: 'end' }));
+  // 底部右侧角落：打印提示
+  svg.appendChild(label(right, botMid - 2, '打印时选择 100% 实际尺寸，', { size: 2.4, anchor: 'end' }));
+  svg.appendChild(label(right, botMid + 1.6, `打印后用尺子量码边长是否为 ${MARKERS.size} mm`, { size: 2.4, anchor: 'end' }));
 
   return svg;
 }

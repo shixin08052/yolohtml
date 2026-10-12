@@ -1,16 +1,17 @@
 // 全部可调参数。长度单位 mm，角度在代码内部用弧度。
 
-export const BOARD = { width: 420, height: 297, thickness: 3 };
+// 底板：A4 横向
+export const BOARD = { width: 297, height: 210, thickness: 3 };
 
-// ArUco：4×4 字典，ID 0–3，边长 50 mm，码外边距板边 15 mm
+// ArUco：4×4 字典，ID 0–3，边长 40 mm，码外边距板边 12 mm
 // 码"上方"统一朝 +Y（远离操作者）
 export const MARKERS = {
-  size: 50,
-  centers: { 0: [40, 40], 1: [380, 40], 2: [380, 257], 3: [40, 257] },
+  size: 40,
+  centers: { 0: [32, 32], 1: [265, 32], 2: [265, 178], 3: [32, 178] },
 };
 
-// 零件允许出现的区域：底板内缩 15 mm，再挖掉 4 个码（各外扩 5 mm）
-export const WORK_AREA = { margin: 15, markerPadding: 5 };
+// 零件允许出现的区域：底板内缩 12 mm，再挖掉 4 个码（各外扩 5 mm）
+export const WORK_AREA = { margin: 12, markerPadding: 5 };
 
 // 默认相机：iPhone 13 Pro 主摄
 export const CAMERA = { expectedFocal35: 26, refWidth: 4032, refHeight: 3024 };
@@ -27,22 +28,22 @@ export const CLASSES = [
 
 // 机械臂：底座旋转 + 大臂 + 小臂 + 腕部俯仰，夹爪始终竖直向下
 export const ARM = {
-  base: [210, -80, 0],   // 底板前边中点外侧
-  L0: 90,                // 底座高
-  L1: 240,               // 大臂
-  L2: 220,               // 小臂
-  L3: 80,                // 腕关节到指尖
+  base: [148.5, -80, 0], // 底板前边中点外侧
+  L0: 80,                // 底座高
+  L1: 200,               // 大臂
+  L2: 180,               // 小臂
+  L3: 70,                // 腕关节到指尖
   approach: 60,          // 抓取 / 放置前在目标正上方的悬停高度
 };
 
-// 料盒：每类一个，左右各 3 个
+// 料盒：每类一个，左右各 3 个（size 为 X 宽、Y 长、高，mm）
 export const BINS = [
-  { id: 0, cls: 0, center: [-70, 60],  size: [70, 80, 40] },
-  { id: 1, cls: 1, center: [-70, 150], size: [70, 80, 40] },
-  { id: 2, cls: 2, center: [-70, 240], size: [70, 80, 40] },
-  { id: 3, cls: 3, center: [490, 60],  size: [70, 80, 40] },
-  { id: 4, cls: 4, center: [490, 150], size: [70, 80, 40] },
-  { id: 5, cls: 5, center: [490, 240], size: [70, 80, 40] },
+  { id: 0, cls: 0, center: [-40, 35],  size: [60, 66, 35] },
+  { id: 1, cls: 1, center: [-40, 105], size: [60, 66, 35] },
+  { id: 2, cls: 2, center: [-40, 175], size: [60, 66, 35] },
+  { id: 3, cls: 3, center: [337, 35],  size: [60, 66, 35] },
+  { id: 4, cls: 4, center: [337, 105], size: [60, 66, 35] },
+  { id: 5, cls: 5, center: [337, 175], size: [60, 66, 35] },
 ];
 
 export const DETECT = { imgsz: 1024, scoreThreshold: 0.4, iouThreshold: 0.5 };

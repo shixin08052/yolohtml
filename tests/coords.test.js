@@ -2,13 +2,13 @@ import { describe, it, expect } from 'vitest';
 import { toThree, fromThree } from '../src/math/coords.js';
 
 describe('coords', () => {
-  it('底板点 (420, 297, 10) → Three.js (420, 10, −297)', () => {
-    const v = toThree(420, 297, 10);
-    expect([v.x, v.y, v.z]).toEqual([420, 10, -297]);
+  it('底板点 (297, 210, 10) → Three.js (297, 10, −210)', () => {
+    const v = toThree(297, 210, 10);
+    expect([v.x, v.y, v.z]).toEqual([297, 10, -210]);
   });
 
   it('转回底板坐标保持一致', () => {
-    expect(fromThree(toThree(420, 297, 10))).toEqual([420, 297, 10]);
+    expect(fromThree(toThree(297, 210, 10))).toEqual([297, 210, 10]);
   });
 
   it('Z 缺省为 0，随机点往返一致', () => {

@@ -1,8 +1,8 @@
 @import './theme.css';
 @import './controls.css';
 
-/* A3 横向，无边距 */
-@page { size: 420mm 297mm; margin: 0; }
+/* A4 横向，无边距 */
+@page { size: 297mm 210mm; margin: 0; }
 
 * { box-sizing: border-box; }
 html, body { margin: 0; }
@@ -81,16 +81,16 @@ body {
 /* 打印：只保留标定板，按实际尺寸输出 */
 @media print {
   html, body {
-    width: 420mm;
-    height: 297mm;
+    width: 297mm;
+    height: 210mm;
     overflow: hidden;
     background: #fff;
   }
   .toolbar, .side { display: none !important; }
   .layout { display: block; padding: 0; }
   .sheet-host svg.sheet {
-    width: 420mm;
-    height: 297mm;
+    width: 297mm;
+    height: 210mm;
     border-radius: 0;
     box-shadow: none;
   }
