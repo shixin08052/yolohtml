@@ -1,5 +1,6 @@
 // 3D 世界（步骤 1：只有一个空画布；步骤 8 补充灯光、控制器等）。
 import * as THREE from 'three';
+import { cssVar, onThemeChange } from '../ui/theme.js';
 
 /**
  * @param {HTMLElement} container
@@ -7,7 +8,9 @@ import * as THREE from 'three';
 export function createWorld(container) {
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(window.devicePixelRatio || 1);
-  renderer.setClearColor(0x1b1f26);
+  const applyTheme = () => renderer.setClearColor(new THREE.Color(cssVar('--canvas-bg')));
+  applyTheme();
+  onThemeChange(applyTheme);
   container.appendChild(renderer.domElement);
 
   const scene = new THREE.Scene();

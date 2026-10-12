@@ -1,5 +1,6 @@
 // 调试视图：2D canvas，显示原图并在上面画叠加层。
 // 叠加层以"原图像素坐标"绘制，视图负责等比缩放居中。
+import { cssVar, onThemeChange } from './theme.js';
 
 /**
  * @param {HTMLCanvasElement} canvas
@@ -26,12 +27,12 @@ export function createDebugView(canvas) {
     const W = canvas.width;
     const H = canvas.height;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.fillStyle = '#181c22';
+    ctx.fillStyle = cssVar('--canvas-bg');
     ctx.fillRect(0, 0, W, H);
 
     if (!image) {
       const dpr = window.devicePixelRatio || 1;
-      ctx.fillStyle = '#6b7480';
+      ctx.fillStyle = cssVar('--canvas-hint');
       ctx.font = `${14 * dpr}px sans-serif`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
@@ -55,6 +56,7 @@ export function createDebugView(canvas) {
   }
 
   new ResizeObserver(resize).observe(canvas);
+  onThemeChange(draw);
 
   return {
     /** 设置底图 */
