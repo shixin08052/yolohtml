@@ -10,6 +10,9 @@ import { loadSampleIndex, loadSample } from './vision/samples.js';
 import { loadImageFile, ImageFormatError } from './vision/image.js';
 import { computeIntrinsics, defaultSource } from './vision/intrinsics.js';
 import { renderImagePanel } from './ui/imagePanel.js';
+import { detectMarkersInImage, VALID_IDS } from './vision/aruco.js';
+import { markerCornerErrors } from './vision/evaluate.js';
+import { drawMarkers } from './ui/markerOverlay.js';
 
 const $ = (sel) => document.querySelector(sel);
 const fmt = (x, d = 1) => (x == null || Number.isNaN(x) ? '—' : Number(x).toFixed(d));
@@ -69,6 +72,10 @@ store.on('stage:imageLoaded', (st) => {
   debugView.setImage(image.bitmap);
   $('#truth-toggle').hidden = !truth;
   updateTruthOverlay();
+  if (markerResult?.bitmap !== image.bitmap) {
+    debugView.setOverlay('markers', null);
+    $('#markers-toggle').hidden = true;
+  }
   tabs.select('debug');
 
   renderImagePanel(panel, {
@@ -91,7 +98,75 @@ store.on('stage:imageLoaded', (st) => {
   } else {
     panel.remove('truth');
   }
+  runMarkers().catch((err) => {
+    console.error(err);
+    store.fail('calib', `码识别出错：${err.message}`);
+  });
 });
+
+/* ------------------------------------------------------------------ */
+/* 模块 2 上半部分：识别 ArUco 码                                         */
+/* ------------------------------------------------------------------ */
+
+/** 当前照片的识别结果（步骤 6 求出单应性后一起写入 state.calib） */
+let markerResult = null; // { bitmap, markers, ms }
+
+function updateMarkerOverlay() {
+  const on = markerResult && $('#show-markers').checked;
+  const markers = markerResult?.markers ?? [];
+  debugView.setOverlay('markers', on ? (ctx, s, dpr) => drawMarkers(ctx, markers, s, dpr) : null);
+}
+$('#show-markers').addEventListener('change', updateMarkerOverlay);
+
+const nextFrame = () => new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
+
+/** 识别当前照片中的码；同一张照片只识别一次，force 时重跑 */
+async function runMarkers({ force = false } = {}) {
+  const { image, truth } = store.state;
+  if (!image) return;
+  if (force || markerResult?.bitmap !== image.bitmap) {
+    const body = panel.setCustom('markers', '标定 · 码识别');
+    body.innerHTML = '<p class="muted">识别中…</p>';
+    await nextFrame();
+    const t0 = performance.now();
+    const { markers } = detectMarkersInImage(image.bitmap, 1600);
+    markerResult = { bitmap: image.bitmap, markers, ms: performance.now() - t0 };
+  }
+  const { markers, ms } = markerResult;
+  $('#markers-toggle').hidden = false;
+  updateMarkerOverlay();
+
+  const found = markers.map((m) => m.id);
+  const missing = VALID_IDS.filter((id) => !found.includes(id));
+  const rows = [
+    ['识别到', found.length ? `ID ${found.join('、')}` : '无'],
+    ['耗时', `${ms.toFixed(0)} ms`],
+  ];
+  let html = '';
+  if (truth) {
+    const err = markerCornerErrors(markers, truth.markers);
+    if (err.mean != null) {
+      const ok = err.mean < 3;
+      rows.push(['与真值的误差', `<span class="${ok ? 'ok' : 'bad'}">平均 ${fmt(err.mean, 2)} px · 最大 ${fmt(err.max, 2)} px</span>`]);
+    }
+  }
+  html += '<dl class="kv">' + rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('') + '</dl>';
+  if (missing.length) {
+    html += `<p class="note warn">缺少 ID：${missing.join('、')}。${found.length ? '少于 4 个码时单应性精度会下降。' : ''}请确认整张标定板都在画面里、码没有被遮挡或反光。</p>`;
+  }
+  html += '<div class="sec-actions"><button type="button" class="btn btn-small" id="btn-redetect">重新识别</button></div>';
+  const body = panel.setCustom('markers', '标定 · 码识别');
+  body.innerHTML = html;
+  body.querySelector('#btn-redetect').addEventListener('click', () => runMarkers({ force: true }));
+
+  if (!found.length) {
+    store.fail('calib', '没有识别到任何码。请确认整张标定板都在画面里、光线均匀、对焦清晰。');
+  } else if (missing.length) {
+    panel.message(`码识别：缺少 ID ${missing.join('、')}`, 'warn');
+  } else {
+    panel.message(`码识别：4 个码全部识别到（${ms.toFixed(0)} ms）`, 'ok');
+  }
+}
 
 /* ------------------------------------------------------------------ */
 /* 上传与示例                                                           */

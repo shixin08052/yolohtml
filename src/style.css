@@ -186,6 +186,10 @@ body { background: var(--bg); overflow: hidden; -webkit-font-smoothing: antialia
 .note { margin: 8px 0 0; padding: 6px 8px; border-radius: 6px; line-height: 1.5; font-size: 13px; }
 .note.warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); }
 .note.info { color: var(--text-2); background: var(--hover); }
+.sec-actions { margin-top: 10px; display: flex; gap: 8px; }
+.btn-small { height: 28px; padding: 0 10px; font-size: 13px; border-radius: 6px; }
+.kv dd .ok { color: var(--ok); }
+.kv dd .bad { color: var(--err); }
 .seg { display: inline-flex; gap: 2px; padding: 3px; margin-bottom: 8px; border-radius: 8px; background: var(--tab-track); }
 .seg button {
   padding: 3px 12px; border: none; border-radius: 6px; background: transparent;
