@@ -35,3 +35,21 @@ export function markerCornersOnPage(id) {
   const { x, y, size } = markerRectOnPage(id);
   return [[x, y], [x + size, y], [x + size, y + size], [x, y + size]];
 }
+
+/**
+ * 码本体 4 个角的底板坐标（mm），顺序为码自身左上、右上、右下、左下。
+ * 码"上方"朝 +Y，所以左上 = (cx − s/2, cy + s/2)。
+ * @param {number} id
+ * @returns {[number, number][]}
+ */
+export function markerCornersWorld(id) {
+  const c = MARKERS.centers[id];
+  if (!c) throw new Error(`配置中没有 ID ${id} 的码`);
+  const h = MARKERS.size / 2;
+  return [
+    [c[0] - h, c[1] + h],
+    [c[0] + h, c[1] + h],
+    [c[0] + h, c[1] - h],
+    [c[0] - h, c[1] - h],
+  ];
+}

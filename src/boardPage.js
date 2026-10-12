@@ -2,8 +2,10 @@
 // 整张板是一个 viewBox = 0 0 297 210 的 SVG，1 单位 = 1 mm；码图案取自 js-aruco2 的
 // generateSVG，保证打印的码与识别端使用同一个字典。
 import { BOARD, MARKERS } from './config.js';
-import { markerSVG, svgScale, detectMarkers, VALID_IDS, ARUCO_DICT } from './vision/aruco.js';
+import { markerSVG, svgScale, detectMarkers, detectMarkersInImage, VALID_IDS, ARUCO_DICT } from './vision/aruco.js';
 import { markerRectOnPage, markerCornersOnPage } from './vision/boardLayout.js';
+import { checkBoardPhoto } from './vision/boardCheck.js';
+import { applyH } from './vision/homography.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const TEXT_COLOR = '#8a877f';
@@ -16,8 +18,9 @@ function el(name, attrs = {}, text) {
   return e;
 }
 
-function label(x, y, text, { size = 3, anchor = 'start', color = TEXT_COLOR, weight = 400 } = {}) {
+function label(x, y, text, { size = 3, anchor = 'start', color = TEXT_COLOR, weight = 400, cls } = {}) {
   return el('text', {
+    ...(cls ? { class: cls } : {}),
     x, y,
     'font-size': size,
     'font-family': FONT,
@@ -56,11 +59,11 @@ function buildSheet() {
     m.dataset.markerId = id;
     svg.appendChild(m);
 
-    // ID 标注：放在码靠近板中心的一侧、白边之外
+    // ID 标注：只在屏幕上显示（.screen-only 打印时隐藏），放在码靠近板中心的一侧、白边之外
     const gap = (total - size) / 2 + 2;
     const onLeftHalf = x < W / 2;
     const lx = onLeftHalf ? x + size + gap : x - gap;
-    svg.appendChild(label(lx, y + size / 2, `ID ${id}`, { size: 4, anchor: onLeftHalf ? 'start' : 'end' }));
+    svg.appendChild(label(lx, y + size / 2, `ID ${id}`, { size: 5, anchor: onLeftHalf ? 'start' : 'end', color: '#c96442', weight: 600, cls: 'screen-only' }));
   }
 
   // 码与板边之间的空白条（页面坐标）：上下各 margin 宽；
@@ -113,6 +116,8 @@ const PX_PER_MM = 4;
 
 async function renderSheetToCanvas(pxPerMm) {
   const clone = sheet.cloneNode(true);
+  // 只渲染会打印出来的内容
+  for (const e of clone.querySelectorAll('.screen-only')) e.remove();
   clone.setAttribute('width', BOARD.width * pxPerMm);
   clone.setAttribute('height', BOARD.height * pxPerMm);
   const blob = new Blob([new XMLSerializer().serializeToString(clone)], { type: 'image/svg+xml' });
@@ -203,3 +208,151 @@ async function selfCheck() {
 }
 
 document.getElementById('btn-check').addEventListener('click', selfCheck);
+
+/* ------------------------------------------------------------------ */
+/* 照片检查：上传打印后拍的照片，检查码、版面和打印比例                       */
+/* ------------------------------------------------------------------ */
+
+/** 预期内的、直接展示给用户的错误（不打印到控制台） */
+class UserError extends Error {}
+
+const isHeic = (file) => /hei[cf]$/i.test(file.type) || /\.hei[cf]$/i.test(file.name);
+
+/** 读入照片并按 EXIF 方向转正（步骤 4 会把这部分整理进 vision/image.js） */
+async function loadPhoto(file) {
+  if (isHeic(file)) {
+    throw new UserError('不支持 HEIC/HEIF 格式。请在 iPhone 设置 → 相机 → 格式中选择"兼容性最佳"后重新拍摄。');
+  }
+  try {
+    return await createImageBitmap(file, { imageOrientation: 'from-image' });
+  } catch {
+    throw new UserError('无法读取这张图片，请上传 JPEG 或 PNG。');
+  }
+}
+
+const fmt = (x, d = 1) => (x == null ? '—' : x.toFixed(d));
+
+function renderPhotoResult(out, file, bitmap, det, r) {
+  const icon = { ok: '✓', warn: '!', bad: '✗' }[r.level];
+  const cls = { ok: 'ok', warn: 'warn', bad: 'bad' }[r.level];
+  const title = { ok: '打印正确', warn: '基本可用，有提醒', bad: '打印有问题' }[r.level];
+  const s = det.scale;
+
+  let html = `<div class="verdict ${cls}">${icon} ${title}</div><ul>`;
+  html += r.messages.map((m) => `<li>${m}</li>`).join('');
+  html += '</ul>';
+
+  html += '<h4>照片</h4><table>';
+  html += `<tr><td>文件</td><td>${file.name}</td></tr>`;
+  html += `<tr><td>尺寸</td><td>${bitmap.width} × ${bitmap.height}</td></tr>`;
+  html += `<tr><td>识别到</td><td>${r.found.length ? 'ID ' + r.found.join('、') : '无'}</td></tr>`;
+  if (r.reprojErrPx != null && r.found.length >= 2) {
+    html += `<tr><td>重投影误差</td><td>${fmt(r.reprojErrPx / s, 2)} px</td></tr>`;
+  }
+  html += '</table>';
+
+  if (r.perMarker.length) {
+    html += '<h4>每个码（设计边长 ' + MARKERS.size + ' mm）</h4><table>';
+    for (const p of r.perMarker) {
+      html += `<tr><td>ID ${p.id}</td><td>位置偏差 ${fmt(p.maxMm, 2)} mm · 边长 ${fmt(p.sideMm, 2)} mm</td></tr>`;
+    }
+    html += '</table>';
+  }
+
+  if (r.paper) {
+    const { edges, widthMm, heightMm, scaleX, scaleY } = r.paper;
+    html += '<h4>纸张（设计 ' + BOARD.width + ' × ' + BOARD.height + ' mm）</h4><table>';
+    html += `<tr><td>实测宽 × 高</td><td>${fmt(widthMm)} × ${fmt(heightMm)} mm</td></tr>`;
+    html += `<tr><td>打印比例</td><td>${scaleX ? fmt(scaleX * 100) + '%' : '—'} × ${scaleY ? fmt(scaleY * 100) + '%' : '—'}</td></tr>`;
+    html += `<tr><td>纸边外移 左/右/下/上</td><td>${[edges.left, edges.right, edges.bottom, edges.top].map((e) => fmt(e)).join(' / ')} mm</td></tr>`;
+    html += '</table>';
+  }
+  out.innerHTML = html;
+  out.classList.remove('muted');
+  out.dataset.level = r.level;
+}
+
+/** 在大预览图上画出识别结果、设计纸边、实测纸边。坐标均为缩小图像素。 */
+function drawPhotoPreview(bitmap, det, r) {
+  const canvas = document.getElementById('photo-canvas');
+  const maxW = 1400;
+  const k = Math.min(1, maxW / bitmap.width);
+  canvas.width = Math.round(bitmap.width * k);
+  canvas.height = Math.round(bitmap.height * k);
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  const f = k / det.scale; // 缩小图像素 → 预览像素
+  const P = ([u, v]) => [u * f, v * f];
+  const lw = Math.max(2, canvas.width / 500);
+
+  const poly = (pts, color, dash = []) => {
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = lw;
+    ctx.setLineDash(dash);
+    ctx.beginPath();
+    pts.map(P).forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+    ctx.closePath();
+    ctx.stroke();
+    ctx.restore();
+  };
+
+  if (r.paper && r.H) {
+    const { left, right, bottom, top } = r.paper.edges;
+    if ([left, right, bottom, top].every((e) => e != null)) {
+      const rect = [[-left, -bottom], [BOARD.width + right, -bottom], [BOARD.width + right, BOARD.height + top], [-left, BOARD.height + top]];
+      poly(rect.map((p) => applyH(r.H, p)), '#3d7bd9');
+    }
+  }
+  // 设计纸边画在实测纸边上面（虚线），打印正确时两者重合
+  if (r.boardOutlinePx) poly(r.boardOutlinePx, '#c96442', [lw * 4, lw * 3]);
+
+  ctx.font = `600 ${Math.round(lw * 9)}px sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  for (const m of det.small) {
+    poly(m.corners, '#3b9e5a');
+    const [x0, y0] = P(m.corners[0]);
+    ctx.fillStyle = '#e03c31';
+    ctx.beginPath();
+    ctx.arc(x0, y0, lw * 3, 0, Math.PI * 2);
+    ctx.fill();
+    const c = m.corners.map(P);
+    const cx = c.reduce((a, p) => a + p[0], 0) / 4;
+    const cy = c.reduce((a, p) => a + p[1], 0) / 4;
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.fillRect(cx - lw * 14, cy - lw * 7, lw * 28, lw * 14);
+    ctx.fillStyle = '#c96442';
+    ctx.fillText(`ID${m.id}`, cx, cy);
+  }
+}
+
+async function photoCheck(file) {
+  const out = document.getElementById('photo-result');
+  const panel = document.getElementById('photo-panel');
+  out.classList.add('muted');
+  out.textContent = '识别中…';
+  delete out.dataset.level;
+  try {
+    const bitmap = await loadPhoto(file);
+    const det = detectMarkersInImage(bitmap, 1600);
+    // 在缩小图的像素坐标里做检查（纸边也在缩小图上测）
+    const r = checkBoardPhoto(det.small, det.imageData);
+    renderPhotoResult(out, file, bitmap, det, r);
+    drawPhotoPreview(bitmap, det, r);
+    panel.hidden = false;
+    panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } catch (e) {
+    out.classList.remove('muted');
+    out.innerHTML = `<span class="bad">${e.message ?? e}</span>`;
+    out.dataset.level = 'error';
+    panel.hidden = true;
+    if (!(e instanceof UserError)) console.error(e);
+  }
+}
+
+document.getElementById('photo-input').addEventListener('change', (e) => {
+  const file = e.target.files?.[0];
+  if (file) photoCheck(file);
+  e.target.value = '';
+});

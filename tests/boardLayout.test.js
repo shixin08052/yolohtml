@@ -18,3 +18,17 @@ describe('标定板版面', () => {
     expect(markerCornersOnPage(3)).toEqual([[12, 12], [52, 12], [52, 52], [12, 52]]);
   });
 });
+
+describe('码角点的底板坐标', async () => {
+  const { markerCornersWorld } = await import('../src/vision/boardLayout.js');
+  it('左上 (cx − s/2, cy + s/2) 起顺时针', () => {
+    expect(markerCornersWorld(0)).toEqual([[12, 52], [52, 52], [52, 12], [12, 12]]);
+  });
+  it('与页面坐标一致（页面 y = 210 − Y）', () => {
+    for (let id = 0; id < 4; id++) {
+      const w = markerCornersWorld(id);
+      const pg = markerCornersOnPage(id);
+      w.forEach(([X, Y], i) => expect([X, 210 - Y]).toEqual(pg[i]));
+    }
+  });
+});

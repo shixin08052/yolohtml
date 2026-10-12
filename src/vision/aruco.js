@@ -92,3 +92,33 @@ export function detectMarkers(image) {
     .sort((a, b) => a.id - b.id)
     .map(({ id, corners }) => ({ id, corners }));
 }
+
+/**
+ * 在一张照片（ImageBitmap / canvas / img）上识别码：先缩小到长边 maxSide 再识别，
+ * 角点按比例换回原图像素。需要浏览器环境（使用 canvas）。
+ * @param {CanvasImageSource & {width:number, height:number}} source
+ * @param {number} [maxSide=1600]
+ * @returns {{ markers: import('../state.js').Marker[],   // 原图像素
+ *             small: import('../state.js').Marker[],     // 缩小图像素
+ *             imageData: ImageData,                       // 缩小图
+ *             scale: number }}                            // 缩小图 / 原图
+ */
+export function detectMarkersInImage(source, maxSide = 1600) {
+  const w = source.width;
+  const h = source.height;
+  const scale = Math.min(1, maxSide / Math.max(w, h));
+  const cw = Math.round(w * scale);
+  const ch = Math.round(h * scale);
+  const canvas =
+    typeof OffscreenCanvas !== 'undefined'
+      ? new OffscreenCanvas(cw, ch)
+      : Object.assign(document.createElement('canvas'), { width: cw, height: ch });
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(source, 0, 0, cw, ch);
+  const imageData = ctx.getImageData(0, 0, cw, ch);
+  const small = detectMarkers(imageData);
+  const sx = w / cw;
+  const sy = h / ch;
+  const markers = small.map((m) => ({ id: m.id, corners: m.corners.map(([u, v]) => [u * sx, v * sy]) }));
+  return { markers, small, imageData, scale: cw / w };
+}

@@ -21,6 +21,18 @@
       <div class="sheet-wrap">
         <!-- 标定板本体：由 src/boardPage.js 生成的 SVG，按 mm 定位 -->
         <div id="sheet-host" class="sheet-host"></div>
+        <p class="legend muted"><span class="swatch-id">ID 0</span> 橙色标注只在屏幕上显示，打印时不会出现。</p>
+
+        <!-- 照片检查结果（上传照片后显示） -->
+        <section id="photo-panel" class="card photo-panel" hidden>
+          <h3>照片检查</h3>
+          <canvas id="photo-canvas" class="photo-canvas"></canvas>
+          <p class="legend muted">
+            <span class="sw sw-green"></span>识别到的码（<span class="sw-dot"></span>为码自身左上角）
+            <span class="sw sw-orange"></span>按设计应有的纸边
+            <span class="sw sw-blue"></span>实测纸边
+          </p>
+        </section>
       </div>
 
       <aside class="side">
@@ -40,6 +52,19 @@
           <p class="muted">把页面上的标定板渲染成图片，用识别模块读码，确认 4 个 ID 都能读出。</p>
           <div id="check-result" class="check-result muted">尚未运行。</div>
           <canvas id="check-preview" class="check-preview" hidden></canvas>
+        </section>
+
+        <section class="card">
+          <h3>照片检查</h3>
+          <p class="muted">打印后拍一张照片上传，检查码是否完整、版面是否正确、打印比例是否为 100%。</p>
+          <ul class="tips muted">
+            <li>把纸放在颜色较深的桌面上，压平。</li>
+            <li>整张纸和四周一圈桌面都要在画面里。</li>
+            <li>尽量从正上方拍，光线均匀、不反光。</li>
+          </ul>
+          <label class="btn btn-primary" for="photo-input">上传照片</label>
+          <input id="photo-input" type="file" accept="image/*,.heic,.heif" hidden />
+          <div id="photo-result" class="check-result muted">尚未上传。</div>
         </section>
       </aside>
     </main>
