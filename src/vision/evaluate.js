@@ -58,3 +58,25 @@ export function homographyTruthError(H, truth, { boardW, boardH, step = 10 }) {
   }
   return { mean: sum / n, max };
 }
+
+/**
+ * 位姿与真值的误差
+ * @param {import('../state.js').CameraPose} pose
+ * @param {{R:number[][], position:number[], pitchDeg:number}} truth
+ * @returns {{posErrMm:number, heightErrMm:number, pitchErrDeg:number, angleErrDeg:number}}
+ */
+export function poseTruthError(pose, truth) {
+  const dp = pose.position.map((x, i) => x - truth.position[i]);
+  // 旋转误差：R_est·R_trueᵀ 的旋转角
+  const A = pose.R;
+  const B = truth.R;
+  let tr = 0;
+  for (let i = 0; i < 3; i++) for (let k = 0; k < 3; k++) tr += A[i][k] * B[i][k];
+  const angle = Math.acos(Math.min(1, Math.max(-1, (tr - 1) / 2)));
+  return {
+    posErrMm: Math.hypot(...dp),
+    heightErrMm: dp[2],
+    pitchErrDeg: pose.pitchDeg - truth.pitchDeg,
+    angleErrDeg: (angle * 180) / Math.PI,
+  };
+}

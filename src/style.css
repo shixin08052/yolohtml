@@ -219,6 +219,8 @@ body { background: var(--bg); overflow: hidden; -webkit-font-smoothing: antialia
 .note.warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); }
 .note.info { color: var(--text-2); background: var(--hover); }
 .sec-actions { margin-top: 10px; display: flex; gap: 8px; }
+.summary { margin: 0 0 8px; line-height: 1.6; }
+.summary b { font-weight: 600; font-variant-numeric: tabular-nums; }
 .btn-small { height: 28px; padding: 0 10px; font-size: 13px; border-radius: 6px; }
 .kv dd .ok { color: var(--ok); }
 .kv dd .bad { color: var(--err); }

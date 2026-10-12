@@ -11,7 +11,10 @@ import { loadImageFile, ImageFormatError } from './vision/image.js';
 import { computeIntrinsics, defaultSource } from './vision/intrinsics.js';
 import { renderImagePanel } from './ui/imagePanel.js';
 import { detectMarkersInImage, VALID_IDS } from './vision/aruco.js';
-import { markerCornerErrors, homographyTruthError } from './vision/evaluate.js';
+import { markerCornerErrors, homographyTruthError, poseTruthError } from './vision/evaluate.js';
+import { poseFromHomography } from './vision/pose.js';
+import { intrinsicsMatrix } from './math/pinhole.js';
+import { drawPose } from './ui/poseOverlay.js';
 import { boardHomography, rectify } from './vision/homography.js';
 import { markerCornersWorld, markerRectOnPage } from './vision/boardLayout.js';
 import { BOARD } from './config.js';
@@ -78,6 +81,9 @@ store.on('stage:imageLoaded', (st) => {
   debugView.setImage(image.bitmap);
   $('#truth-toggle').hidden = !truth;
   updateTruthOverlay();
+  debugView.setOverlay('pose', null);
+  $('#pose-toggle').hidden = true;
+  panel.remove('pose');
   if (markerResult?.bitmap !== image.bitmap) {
     debugView.setOverlay('markers', null);
     $('#markers-toggle').hidden = true;
@@ -226,6 +232,64 @@ async function runCalibration({ force = false } = {}) {
 }
 
 store.on('stage:calibrated', (st) => showRectified(st.calib.rectified));
+
+/* ------------------------------------------------------------------ */
+/* 模块 3：手机位姿                                                     */
+/* ------------------------------------------------------------------ */
+
+function updatePoseOverlay() {
+  const { pose, intrinsics } = store.state;
+  const on = pose && $('#show-pose').checked;
+  const K = pose ? intrinsicsMatrix(intrinsics) : null;
+  debugView.setOverlay('pose', on ? (ctx, s, dpr) => drawPose(ctx, K, pose, s, dpr) : null);
+}
+$('#show-pose').addEventListener('change', updatePoseOverlay);
+
+/** 由 H 和 K 反推位姿，写入 state.pose */
+function runPose() {
+  const { calib, intrinsics, truth } = store.state;
+  const world = calib.markers.flatMap((m) => markerCornersWorld(m.id));
+  const image = calib.markers.flatMap((m) => m.corners);
+  const pose = poseFromHomography(intrinsicsMatrix(intrinsics), calib.H, world, image);
+  if (!(pose.heightMm > 0)) {
+    store.fail('pose', '求出的手机位置在桌面以下，位姿无效。请检查内参或重新拍照。');
+    return;
+  }
+  store.advance('posed', { pose });
+
+  const rows = [
+    ['离桌面高度', `${fmt(pose.heightMm / 10, 1)} cm`],
+    ['俯角', `${fmt(pose.pitchDeg, 1)}°`],
+    ['重投影误差', `<span class="${pose.reprojErrPx > 3 ? 'bad' : pose.reprojErrPx > 1.5 ? '' : 'ok'}">${fmt(pose.reprojErrPx, 2)} px</span>`],
+    ['手机位置 (X, Y, Z)', `${pose.position.map((x) => fmt(x, 0)).join(', ')} mm`],
+  ];
+  if (truth) {
+    const e = poseTruthError(pose, truth);
+    const ok = e.posErrMm < 5 && Math.abs(e.pitchErrDeg) < 0.5;
+    rows.push(['位置 vs 真值', `<span class="${ok ? 'ok' : 'bad'}">${fmt(e.posErrMm, 2)} mm（高度 ${e.heightErrMm >= 0 ? '+' : ''}${fmt(e.heightErrMm, 2)}）</span>`]);
+    rows.push(['角度 vs 真值', `<span class="${ok ? 'ok' : 'bad'}">俯角 ${e.pitchErrDeg >= 0 ? '+' : ''}${fmt(e.pitchErrDeg, 3)}° · 姿态 ${fmt(e.angleErrDeg, 3)}°</span>`]);
+  }
+  let html = `<p class="summary">手机离桌面 <b>${fmt(pose.heightMm / 10, 1)} cm</b>，俯角 <b>${fmt(pose.pitchDeg, 1)}°</b>，重投影误差 <b>${fmt(pose.reprojErrPx, 2)}</b> 像素</p>`;
+  html += '<dl class="kv">' + rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('') + '</dl>';
+  if (calib.reprojErrPx < 1.5 && pose.reprojErrPx > 3 * calib.reprojErrPx + 1) {
+    html += '<p class="note warn">位姿的重投影误差明显大于单应性的，内参可能不准（例如等效焦距不对）。可以试试切换内参来源。</p>';
+  }
+  panel.setCustom('pose', '位姿').innerHTML = html;
+  panel.message(`位姿：离桌面 ${fmt(pose.heightMm / 10, 1)} cm，俯角 ${fmt(pose.pitchDeg, 1)}°`, 'ok');
+}
+
+store.on('stage:calibrated', () => {
+  try {
+    runPose();
+  } catch (err) {
+    console.error(err);
+    store.fail('pose', `位姿计算出错：${err.message}`);
+  }
+});
+store.on('stage:posed', () => {
+  $('#pose-toggle').hidden = false;
+  updatePoseOverlay();
+});
 
 /* ------------------------------------------------------------------ */
 /* 上传与示例                                                           */
