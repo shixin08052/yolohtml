@@ -11,8 +11,10 @@ import { solveHomography, applyH, invert3, reprojError } from './homography.js';
 
 /** 判定阈值 */
 export const CHECK_LIMITS = {
-  okMm: 1.0,      // 角点最大偏差（mm）不超过此值：版面正确
-  warnMm: 2.5,    // 超过 okMm、不超过此值：基本正确但偏差偏大
+  // 真实照片里纸张不完全平整，即使打印正确，偏差也常到 1 mm 左右；
+  // 印错 / 位置不对的码偏差通常有好几毫米
+  okMm: 1.5,      // 角点最大偏差（mm）不超过此值：版面正确
+  warnMm: 3.0,    // 超过 okMm、不超过此值：基本正确但偏差偏大
   okScale: 0.01,  // 打印比例与 100% 相差不超过 1%：正确
   warnScale: 0.02, // 1%–2%：提醒；超过 2%：比例不对
 };

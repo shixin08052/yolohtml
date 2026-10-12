@@ -64,3 +64,56 @@ describe('detectMarkers', () => {
     expect(maxCornerErr(found[0], truth[2])).toBeLessThan(2);
   });
 });
+
+describe('角点精修', async () => {
+  const { refineCorners } = await import('../src/vision/aruco.js');
+
+  it('干净的码：任意旋转下角点误差 < 0.3 像素', () => {
+    for (let rot = 0; rot < 4; rot++) {
+      const { image, truth } = rasterMarkers(400, 400, [{ id: 2, x: 100, y: 100, mod: 30, rot }]);
+      const [m] = detectMarkers(image);
+      expect(maxCornerErr(m, truth[0])).toBeLessThan(0.3);
+    }
+  });
+
+  it('初始角点偏了 15 像素，精修后回到真值附近', async () => {
+    const { image, truth } = rasterMarkers(400, 400, [{ id: 1, x: 100, y: 100, mod: 30 }]);
+    const grey = { width: 400, height: 400, data: Uint8Array.from({ length: 400 * 400 }, (_, i) => image.data[i * 4]) };
+    const bad = truth[0].corners.map((c, i) => (i === 2 ? [c[0] + 12, c[1] - 9] : c));
+    const out = refineCorners(grey, refineCorners(grey, bad));
+    expect(maxCornerErr({ corners: out }, truth[0])).toBeLessThan(0.5);
+  });
+});
+
+describe('打印质量差（黑色发灰、白色斑点、轻微模糊）', async () => {
+  const { degradePrint } = await import('./helpers/degrade.js');
+  const items = [
+    { id: 3, x: 60, y: 60, mod: 30 },
+    { id: 2, x: 700, y: 60, mod: 30, rot: 1 },
+    { id: 0, x: 60, y: 420, mod: 30, rot: 3 },
+    { id: 1, x: 700, y: 420, mod: 30, rot: 2 },
+  ];
+  const cases = [
+    { density: 0.02, speck: 2, seed: 1 },
+    { density: 0.02, speck: 2, seed: 2 },
+    { density: 0.04, speck: 2, seed: 3 },
+  ];
+
+  it('只用 js-aruco2 默认阈值窗口时会漏码（说明测试图确实有难度）', () => {
+    for (const c of cases) {
+      const { image } = rasterMarkers(1000, 700, items);
+      degradePrint(image, c);
+      expect(detectMarkers(image, { passes: [{ kernel: 2 }], refine: false }).length).toBeLessThan(4);
+    }
+  });
+
+  it('多轮识别 + 精修：4 个码都识别到，角点误差 < 2 像素', () => {
+    for (const c of cases) {
+      const { image, truth } = rasterMarkers(1000, 700, items);
+      degradePrint(image, c);
+      const found = detectMarkers(image);
+      expect(found.map((m) => m.id)).toEqual([0, 1, 2, 3]);
+      for (const m of found) expect(maxCornerErr(m, truth.find((t) => t.id === m.id))).toBeLessThan(2);
+    }
+  });
+});

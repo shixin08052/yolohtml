@@ -25,6 +25,8 @@ export default defineConfig({
   optimizeDeps: {
     // 开发模式的依赖预打包不走上面的 plugins，需要单独挂一次
     rolldownOptions: { plugins: [jsArucoCommonJS()] },
+    // 提前声明深层引入的文件，避免开发时首次用到才发现、触发整页刷新
+    include: ['js-aruco2', 'js-aruco2/src/cv.js', 'js-aruco2/src/dictionaries/aruco_4x4_1000.js'],
   },
   build: {
     rolldownOptions: {
