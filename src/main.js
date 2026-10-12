@@ -288,7 +288,9 @@ function runPose() {
   const { calib, intrinsics, truth } = store.state;
   const world = calib.markers.flatMap((m) => markerCornersWorld(m.id));
   const image = calib.markers.flatMap((m) => m.corners);
-  const pose = poseFromHomography(intrinsicsMatrix(intrinsics), calib.H, world, image);
+  const K = intrinsicsMatrix(intrinsics);
+  const pose0 = poseFromHomography(K, calib.H, world, image, { refine: false }); // 第 1–7 步的解析解
+  const pose = poseFromHomography(K, calib.H, world, image);
   if (!(pose.heightMm > 0)) {
     store.fail('pose', '求出的手机位置在桌面以下，位姿无效。请检查内参或重新拍照。');
     return;
@@ -298,7 +300,7 @@ function runPose() {
   const rows = [
     ['离桌面高度', `${fmt(pose.heightMm / 10, 1)} cm`],
     ['俯角', `${fmt(pose.pitchDeg, 1)}°`],
-    ['重投影误差', `<span class="${pose.reprojErrPx > 3 ? 'bad' : pose.reprojErrPx > 1.5 ? '' : 'ok'}">${fmt(pose.reprojErrPx, 2)} px</span>`],
+    ['重投影误差', `<span class="${pose.reprojErrPx > 3 ? 'bad' : pose.reprojErrPx > 1.5 ? '' : 'ok'}">${fmt(pose.reprojErrPx, 2)} px</span> <span class="muted">（解析解 ${fmt(pose0.reprojErrPx, 2)}，单应性 ${fmt(calib.reprojErrPx, 2)}）</span>`],
     ['手机位置 (X, Y, Z)', `${pose.position.map((x) => fmt(x, 0)).join(', ')} mm`],
   ];
   if (truth) {
@@ -311,6 +313,9 @@ function runPose() {
   html += '<dl class="kv">' + rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('') + '</dl>';
   if (calib.reprojErrPx < 1.5 && pose.reprojErrPx > 3 * calib.reprojErrPx + 1) {
     html += '<p class="note warn">位姿的重投影误差明显大于单应性的，内参可能不准（例如等效焦距不对）。可以试试切换内参来源。</p>';
+  }
+  if (intrinsics.source === 'exif' && pose.pitchDeg > 75) {
+    html += '<p class="note info">接近正上方拍摄时，焦距的误差几乎不会让上面的框线错开，但会按比例影响高度（焦距差 1%，高度约差 1%）。EXIF 只给出取整的等效焦距，要让高度更准需要棋盘格标定（步骤 13）。</p>';
   }
   panel.setCustom('pose', '位姿').innerHTML = html;
   panel.message(`位姿：离桌面 ${fmt(pose.heightMm / 10, 1)} cm，俯角 ${fmt(pose.pitchDeg, 1)}°`, 'ok');

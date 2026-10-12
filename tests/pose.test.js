@@ -94,3 +94,51 @@ describe('位姿反推', () => {
     expect(est.pitchDeg).toBeCloseTo(90, 3);
   });
 });
+
+describe('位姿非线性优化（LM）', async () => {
+  const { refinePose, rodrigues } = await import('../src/vision/pose.js');
+
+  it('Rodrigues：绕 Z 轴转 90°', () => {
+    const R = rodrigues([0, 0, Math.PI / 2]);
+    expect(R[0][1]).toBeCloseTo(-1, 12);
+    expect(R[1][0]).toBeCloseTo(1, 12);
+    expect(R[2][2]).toBeCloseTo(1, 12);
+  });
+
+  it('优化后的重投影误差不大于解析解，且位置 / 角度误差更小', () => {
+    const r = rng(11);
+    let sumPos0 = 0;
+    let sumPos1 = 0;
+    for (const pose of randomPoses(20, r)) {
+      const img = world.map(([X, Y]) => {
+        const [u, v] = project(K, pose.R, pose.t, [X, Y, 0]);
+        return [u + 0.5 * gauss(r), v + 0.5 * gauss(r)];
+      });
+      const H = solveHomography(world, img);
+      const p0 = poseFromHomography(K, H, world, img, { refine: false });
+      const p1 = poseFromHomography(K, H, world, img);
+      // LM 最小化的是平方和（RMS），比较 RMS；面板显示的平均距离可能有极小的起伏
+      const rms = (p) => Math.sqrt(world.reduce((acc, [X, Y], i) => {
+        const [u, v] = project(K, p.R, p.t, [X, Y, 0]);
+        return acc + (u - img[i][0]) ** 2 + (v - img[i][1]) ** 2;
+      }, 0) / world.length);
+      expect(rms(p1)).toBeLessThanOrEqual(rms(p0) + 1e-9);
+      const truth = { ...pose, pitchDeg: Math.asin(-pose.R[2][2]) * 180 / Math.PI };
+      sumPos0 += poseTruthError(p0, truth).posErrMm;
+      sumPos1 += poseTruthError(p1, truth).posErrMm;
+    }
+    console.log(`平均位置误差：解析解 ${(sumPos0 / 20).toFixed(3)} mm → LM ${(sumPos1 / 20).toFixed(3)} mm`);
+    expect(sumPos1).toBeLessThan(sumPos0);
+  });
+
+  it('从偏离的初值收敛回真值（无噪声）', () => {
+    const [pose] = randomPoses(1, rng(12));
+    const img = world.map(([X, Y]) => project(K, pose.R, pose.t, [X, Y, 0]).slice(0, 2));
+    const R0 = mul3(rodrigues([0.03, -0.02, 0.04]), pose.R);
+    const t0 = pose.t.map((x) => x + 8);
+    const { R, t, iterations } = refinePose(K, R0, t0, world, img);
+    expect(Math.hypot(...t.map((x, i) => x - pose.t[i]))).toBeLessThan(1e-3);
+    expect(Math.abs(R[2][2] - pose.R[2][2])).toBeLessThan(1e-8);
+    expect(iterations).toBeLessThan(50);
+  });
+});
