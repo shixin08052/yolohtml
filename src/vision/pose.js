@@ -160,3 +160,104 @@ export function refinePose(K, R0, t0, worldPts, imagePts, { maxIter = 50 } = {})
   }
   return { R, t, iterations: it };
 }
+
+/* ------------------------------------------------------------------ */
+/* 由照片估计焦距（单张照片自标定）                                       */
+/* ------------------------------------------------------------------ */
+
+/** 焦距估计可用的条件：相对标准差不超过此值 */
+export const FOCAL_RELIABLE_SIGMA = 0.01;
+
+/**
+ * 在位姿优化中把焦距 f（fx = fy = f，主点固定）也作为未知量，7 个参数一起做 LM。
+ * 斜拍时透视效果明显，f 能从照片里估计出来；接近正上方拍时 f 与高度几乎无法区分（f/Z 不变），
+ * 此时 f 的不确定度很大，判为不可用。
+ * 不确定度由 σ² (JᵀJ)⁻¹ 得到，σ² = 残差平方和 / (2N − 7)。
+ * @param {{fx:number, fy:number, cx:number, cy:number}} k0 初始内参（取 fx 为 f 初值）
+ * @param {number[][]} R0
+ * @param {number[]} t0
+ * @param {number[][]} worldPts 底板坐标 [X, Y]
+ * @param {number[][]} imagePts
+ * @returns {{ f:number, sigmaF:number, reliable:boolean, R:number[][], t:number[], rmsPx:number }}
+ */
+export function estimateFocal(k0, R0, t0, worldPts, imagePts, { maxIter = 100 } = {}) {
+  const { cx, cy } = k0;
+  const Kf = (f) => [[f, 0, cx], [0, f, cy], [0, 0, 1]];
+  let R = R0;
+  let t = [...t0];
+  let f = k0.fx;
+  let r = residuals(Kf(f), R, t, worldPts, imagePts);
+  let cost = sumSq(r);
+  let lambda = 1e-3;
+  const eps = [1e-6, 1e-6, 1e-6, 1e-3, 1e-3, 1e-3, 1e-2];
+  const jacobian = () => {
+    const J = r.map(() => new Array(7).fill(0));
+    for (let k = 0; k < 7; k++) {
+      const d = [0, 0, 0, 0, 0, 0, 0];
+      d[k] = eps[k];
+      const Rk = k < 3 ? mul3(rodrigues(d.slice(0, 3)), R) : R;
+      const tk = k >= 3 && k < 6 ? t.map((x, i) => x + d[3 + i]) : t;
+      const rk = residuals(Kf(f + d[6]), Rk, tk, worldPts, imagePts);
+      for (let i = 0; i < r.length; i++) J[i][k] = (rk[i] - r[i]) / eps[k];
+    }
+    return new Matrix(J);
+  };
+  for (let it = 0; it < maxIter; it++) {
+    const Jm = jacobian();
+    const JtJ = Jm.transpose().mmul(Jm);
+    const Jtr = Jm.transpose().mmul(Matrix.columnVector(r));
+    let improved = false;
+    let converged = false;
+    for (let tries = 0; tries < 12; tries++) {
+      const A = JtJ.clone();
+      for (let k = 0; k < 7; k++) A.set(k, k, A.get(k, k) * (1 + lambda) + 1e-12);
+      let delta;
+      try {
+        delta = solve(A, Jtr.clone().mul(-1)).to1DArray();
+      } catch {
+        lambda *= 10;
+        continue;
+      }
+      const Rn = mul3(rodrigues(delta.slice(0, 3)), R);
+      const tn = t.map((x, i) => x + delta[3 + i]);
+      const fn = f + delta[6];
+      if (!(fn > 0)) {
+        lambda *= 10;
+        continue;
+      }
+      const cn = sumSq(residuals(Kf(fn), Rn, tn, worldPts, imagePts));
+      if (cn < cost) {
+        converged = cost - cn < 1e-9 * (1 + cost);
+        R = orthonormalize(Rn);
+        t = tn;
+        f = fn;
+        r = residuals(Kf(f), R, t, worldPts, imagePts);
+        cost = sumSq(r);
+        lambda = Math.max(lambda / 10, 1e-9);
+        improved = true;
+        break;
+      }
+      lambda *= 10;
+    }
+    if (!improved || converged) break;
+  }
+  // f 的标准差：σ_f² = σ² / ‖J_f 中不能由位姿列 J_p 解释的部分‖²（舒尔补）。
+  // 正上方拍时 J_f 几乎落在 J_p 的列空间里（f 与高度可互换），分母趋于 0，σ_f 趋于无穷。
+  // 这样算不需要对可能奇异的 7×7 矩阵求逆。
+  const Jm = jacobian();
+  const dof = Math.max(1, r.length - 7);
+  const s2 = cost / dof;
+  const Jp = Jm.subMatrix(0, Jm.rows - 1, 0, 5);
+  const Jf = Jm.getColumnVector(6);
+  let sigmaF = Infinity;
+  try {
+    const x = solve(Jp.transpose().mmul(Jp), Jp.transpose().mmul(Jf));
+    const resid = Jf.clone().sub(Jp.mmul(x));
+    const denom = resid.norm() ** 2;
+    if (denom > 1e-12 * Jf.norm() ** 2) sigmaF = Math.sqrt(s2 / denom);
+  } catch {
+    // 位姿部分奇异：f 不可估计
+  }
+  const reliable = Number.isFinite(sigmaF) && sigmaF / f < FOCAL_RELIABLE_SIGMA && Math.abs(f / k0.fx - 1) < 0.3;
+  return { f, sigmaF, reliable, R, t, rmsPx: Math.sqrt(cost / worldPts.length) };
+}

@@ -12,7 +12,7 @@ import { computeIntrinsics, defaultSource } from './vision/intrinsics.js';
 import { renderImagePanel } from './ui/imagePanel.js';
 import { detectMarkersInImage, VALID_IDS } from './vision/aruco.js';
 import { markerCornerErrors, homographyTruthError, poseTruthError } from './vision/evaluate.js';
-import { poseFromHomography } from './vision/pose.js';
+import { poseFromHomography, estimateFocal } from './vision/pose.js';
 import { intrinsicsMatrix } from './math/pinhole.js';
 import { drawPose } from './ui/poseOverlay.js';
 import { boardHomography, rectify } from './vision/homography.js';
@@ -70,11 +70,30 @@ const calibReady = fetch(new URL('intrinsics.json', document.baseURI))
 let intrinsicsNotes = [];
 
 /** 读入照片（上传或示例）后进入 imageLoaded */
+/** 由照片估计的焦距（按照片缓存）：{ bitmap, f, sigmaF, reliable } */
+let focalEstimate = null;
+const selfFocalFor = (image) => (focalEstimate?.bitmap === image.bitmap ? focalEstimate : null);
+
 function setImage(image, truth, source = defaultSource({ image, calib, truth })) {
-  const { intrinsics, notes } = computeIntrinsics(source, { image, calib, truth });
+  const { intrinsics, notes } = computeIntrinsics(source, { image, calib, truth, selfFocal: selfFocalFor(image) });
   intrinsicsNotes = notes;
   store.advance('imageLoaded', { image, intrinsics, truth });
   for (const n of notes) panel.message(n.text, n.level);
+}
+
+/** 渲染"照片"和"内参"分区（估计出焦距后也会刷新） */
+function renderImagePanelNow() {
+  const { image, intrinsics, truth } = store.state;
+  renderImagePanel(panel, {
+    image,
+    intrinsics,
+    truth,
+    notes: intrinsicsNotes,
+    calibAvailable: !!calib,
+    selfFocal: selfFocalFor(image),
+    // 切换来源：重新计算内参，从这一步重跑（后续结果清空）
+    onSourceChange: (source) => setImage(store.state.image, store.state.truth, source),
+  });
 }
 
 store.on('stage:imageLoaded', (st) => {
@@ -92,15 +111,7 @@ store.on('stage:imageLoaded', (st) => {
   }
   tabs.select('debug');
 
-  renderImagePanel(panel, {
-    image,
-    intrinsics,
-    truth,
-    notes: intrinsicsNotes,
-    calibAvailable: !!calib,
-    // 切换来源：重新计算内参，从这一步重跑（后续结果清空）
-    onSourceChange: (source) => setImage(store.state.image, store.state.truth, source),
-  });
+  renderImagePanelNow();
   if (truth) {
     const [X, Y, Z] = truth.position;
     panel.setRows('truth', '真值', [
@@ -314,10 +325,33 @@ function runPose() {
   if (calib.reprojErrPx < 1.5 && pose.reprojErrPx > 3 * calib.reprojErrPx + 1) {
     html += '<p class="note warn">位姿的重投影误差明显大于单应性的，内参可能不准（例如等效焦距不对）。可以试试切换内参来源。</p>';
   }
+  // 由这张照片估计焦距（用"照片估计"作为来源时沿用已有结果，不再重算）
+  const photo = store.state.image;
+  if (!selfFocalFor(photo)) {
+    const est = estimateFocal(intrinsics, pose.R, pose.t, world, image);
+    focalEstimate = { bitmap: photo.bitmap, f: est.f, sigmaF: est.sigmaF, reliable: est.reliable };
+    renderImagePanelNow();
+  }
+  const fe = selfFocalFor(photo);
+  let focalAction = false;
+  if (fe.reliable) {
+    const diff = fe.f / intrinsics.fx - 1;
+    const sig = fe.sigmaF / fe.f;
+    html += `<dl class="kv"><dt>按照片估计焦距</dt><dd>${fmt(fe.f, 0)} ± ${fmt(fe.sigmaF, 0)}（比当前 ${diff >= 0 ? '+' : ''}${fmt(diff * 100, 1)}%）</dd></dl>`;
+    if (intrinsics.source !== 'self' && Math.abs(diff) > Math.max(0.003, 2 * sig)) {
+      html += `<p class="note warn">这张照片是斜拍的，能从照片本身估计焦距：比当前内参${diff > 0 ? '大' : '小'} ${fmt(Math.abs(diff) * 100, 1)}%。斜拍时焦距不准会让上面的框线错开、高度也按比例偏差。</p>`;
+      focalAction = true;
+    }
+  } else if (pose.pitchDeg < 80) {
+    html += '<p class="note info">这张照片无法可靠地估计焦距（码的透视不够明显）。</p>';
+  }
   if (intrinsics.source === 'exif' && pose.pitchDeg > 75) {
     html += '<p class="note info">接近正上方拍摄时，焦距的误差几乎不会让上面的框线错开，但会按比例影响高度（焦距差 1%，高度约差 1%）。EXIF 只给出取整的等效焦距，要让高度更准需要棋盘格标定（步骤 13）。</p>';
   }
-  panel.setCustom('pose', '位姿').innerHTML = html;
+  if (focalAction) html += '<div class="sec-actions"><button type="button" class="btn btn-small" id="btn-use-focal">改用估计的焦距</button></div>';
+  const poseBody = panel.setCustom('pose', '位姿');
+  poseBody.innerHTML = html;
+  poseBody.querySelector('#btn-use-focal')?.addEventListener('click', () => setImage(store.state.image, store.state.truth, 'self'));
   panel.message(`位姿：离桌面 ${fmt(pose.heightMm / 10, 1)} cm，俯角 ${fmt(pose.pitchDeg, 1)}°`, 'ok');
 }
 

@@ -142,3 +142,60 @@ describe('位姿非线性优化（LM）', async () => {
     expect(iterations).toBeLessThan(50);
   });
 });
+
+describe('由照片估计焦距', async () => {
+  const { estimateFocal, FOCAL_RELIABLE_SIGMA } = await import('../src/vision/pose.js');
+  const kNominal = { fx: 3028.4, fy: 3028.4, cx: 2016, cy: 1512 };
+
+  /** 用真实焦距 fTrue 拍照，系统按标称焦距先求位姿，再估计焦距 */
+  function run(pitchDeg, fTrue, noise, seed) {
+    const r = rng(seed);
+    const pose = lookAtPose({ target: [148.5, 105, 0], distance: 300, pitchDeg, yawDeg: 6 });
+    const Ktrue = intrinsicsMatrix({ ...kNominal, fx: fTrue, fy: fTrue });
+    const img = world.map(([X, Y]) => {
+      const [u, v] = project(Ktrue, pose.R, pose.t, [X, Y, 0]);
+      return [u + noise * gauss(r), v + noise * gauss(r)];
+    });
+    const H = solveHomography(world, img);
+    const p = poseFromHomography(intrinsicsMatrix(kNominal), H, world, img);
+    return { est: estimateFocal(kNominal, p.R, p.t, world, img), pose };
+  }
+
+  it('斜拍（45°–70°）、无噪声：实际焦距比标称大 2% 也能准确估计出来', () => {
+    for (const pitch of [45, 55, 70]) {
+      const { est } = run(pitch, 3028.4 * 1.02, 0, 1);
+      expect(est.f / (3028.4 * 1.02)).toBeCloseTo(1, 4);
+      expect(est.reliable).toBe(true);
+    }
+  });
+
+  it('斜拍、0.5 像素噪声：估计误差 < 1%，且在 3σ 以内', () => {
+    for (const [pitch, seed] of [[45, 2], [55, 3], [65, 4]]) {
+      const fTrue = 3028.4 * 0.985;
+      const { est } = run(pitch, fTrue, 0.5, seed);
+      expect(Math.abs(est.f / fTrue - 1)).toBeLessThan(0.01);
+      expect(Math.abs(est.f - fTrue)).toBeLessThan(3 * est.sigmaF + 1e-6);
+      expect(est.reliable).toBe(true);
+    }
+  });
+
+  it('接近正上方（88°–90°）：焦距无法估计，判为不可用', () => {
+    for (const pitch of [88, 90]) {
+      const { est } = run(pitch, 3028.4 * 1.02, 0.5, 5);
+      expect(est.sigmaF / est.f).toBeGreaterThan(FOCAL_RELIABLE_SIGMA);
+      expect(est.reliable).toBe(false);
+    }
+  });
+
+  it('正上方、几乎无噪声时也判为不可用（不确定度不能因矩阵奇异而算成 0）', () => {
+    const { est } = run(90, 3028.4, 0.01, 7);
+    expect(est.reliable).toBe(false);
+    expect(est.sigmaF).toBe(Infinity);
+  });
+
+  it('用估计出的焦距，斜拍时位姿与真值一致（高度误差 < 0.5%）', () => {
+    const { est, pose } = run(50, 3028.4 * 1.02, 0.3, 6);
+    const C = [0, 1, 2].map((j) => -(est.R[0][j] * est.t[0] + est.R[1][j] * est.t[1] + est.R[2][j] * est.t[2]));
+    expect(Math.abs(C[2] / pose.position[2] - 1)).toBeLessThan(0.005);
+  });
+});

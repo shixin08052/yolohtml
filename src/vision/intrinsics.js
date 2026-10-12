@@ -107,13 +107,19 @@ export function lensWarning(focal35) {
 
 /**
  * 按来源计算当前照片的内参
- * @param {'exif'|'calib'|'truth'} source
- * @param {{image: import('../state.js').ImageInput, calib?: object|null, truth?: import('../state.js').GroundTruth|null}} ctx
+ * @param {'exif'|'calib'|'truth'|'self'} source
+ * @param {{image: import('../state.js').ImageInput, calib?: object|null, truth?: import('../state.js').GroundTruth|null,
+ *          selfFocal?: {f:number, reliable:boolean}|null}} ctx  selfFocal：由照片估计的焦距（主点取图像中心）
  * @returns {{ intrinsics: import('../state.js').Intrinsics, notes: {level:'warn'|'info', text:string}[] }}
  */
-export function computeIntrinsics(source, { image, calib = null, truth = null }) {
+export function computeIntrinsics(source, { image, calib = null, truth = null, selfFocal = null }) {
   const { width, height, exif } = image;
   const notes = [];
+  if (source === 'self') {
+    if (!selfFocal?.reliable) throw new Error('这张照片无法估计焦距');
+    const f = selfFocal.f;
+    return { intrinsics: { fx: f, fy: f, cx: width / 2, cy: height / 2, width, height, source: 'self' }, notes };
+  }
   if (source === 'truth') {
     if (!truth) throw new Error('这张照片没有真值');
     return { intrinsics: { ...truth.intrinsics, source: 'truth' }, notes };

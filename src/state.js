@@ -26,7 +26,7 @@
  * @property {number} cy
  * @property {number} width
  * @property {number} height
- * @property {'exif'|'calib'|'truth'} source
+ * @property {'exif'|'calib'|'truth'|'self'} source  self = 由这张照片估计焦距（斜拍时可用）
  */
 
 /**

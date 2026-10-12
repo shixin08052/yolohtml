@@ -12,7 +12,7 @@ const notesHTML = (notes) => notes.map((n) => `<p class="note ${n.level}">${esc(
  *           truth: object|null, notes: {level:string, text:string}[],
  *           calibAvailable: boolean, onSourceChange: (s: string) => void }} p
  */
-export function renderImagePanel(panel, { image, intrinsics, truth, notes, calibAvailable, onSourceChange }) {
+export function renderImagePanel(panel, { image, intrinsics, truth, notes, calibAvailable, selfFocal = null, onSourceChange }) {
   const e = image.exif;
   const camera = [e.make, e.model].filter(Boolean).join(' ');
   const body = panel.setCustom('image', '照片');
@@ -32,6 +32,14 @@ export function renderImagePanel(panel, { image, intrinsics, truth, notes, calib
   const sources = [
     { key: 'exif', label: 'EXIF', enabled: true },
     { key: 'calib', label: '标定文件', enabled: calibAvailable, title: calibAvailable ? '' : '没有 public/intrinsics.json（步骤 13 生成）' },
+    {
+      key: 'self',
+      label: '照片估计',
+      enabled: !!selfFocal?.reliable,
+      title: selfFocal
+        ? selfFocal.reliable ? '' : '这张照片接近正上方拍摄，无法估计焦距（斜拍 45°–75° 时可用）'
+        : '位姿求出后才能估计',
+    },
     ...(truth ? [{ key: 'truth', label: '真值', enabled: true }] : []),
   ];
   k.innerHTML =
@@ -47,7 +55,7 @@ export function renderImagePanel(panel, { image, intrinsics, truth, notes, calib
     kv([
       ['fx / fy', `${fmt(intrinsics.fx)} / ${fmt(intrinsics.fy)}`],
       ['cx / cy', `${fmt(intrinsics.cx)} / ${fmt(intrinsics.cy)}`],
-      ['来源', { exif: 'EXIF 等效焦距', calib: '标定文件', truth: '真值' }[intrinsics.source]],
+      ['来源', { exif: 'EXIF 等效焦距', calib: '标定文件', truth: '真值', self: '由这张照片估计' }[intrinsics.source]],
     ]) +
     notesHTML(notes);
   for (const b of k.querySelectorAll('.seg button')) {
