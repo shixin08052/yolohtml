@@ -87,7 +87,9 @@ export function poseTruthError(pose, truth) {
  * @param {import('../state.js').Part[]} parts
  * @param {import('../state.js').GroundTruth} truth
  * @param {number} [maxDist=20]
+ * 有朝向的零件（电阻周期 180°、螺丝 360°、螺母 60°）同时统计朝向误差（真值带 rotDeg 时）
  * @returns {{ plane: {mean:number, max:number}|null, parallax: {mean:number, max:number}|null,
+ *             yaw: {mean:number, max:number, n:number}|null,
  *             matched: number, unmatchedParts: number, missedTruth: number }}
  */
 export function partsTruthError(parts, truth, maxDist = 20) {
@@ -103,6 +105,8 @@ export function partsTruthError(parts, truth, maxDist = 20) {
   const usedT = new Set();
   const plane = [];
   const parallax = [];
+  const yaw = [];
+  const YAW_PERIOD = { 0: 180, 3: 360, 4: 60 };
   for (const { p, j, d } of pairs) {
     if (d > maxDist || usedP.has(p) || usedT.has(j)) continue;
     usedP.add(p);
@@ -110,11 +114,17 @@ export function partsTruthError(parts, truth, maxDist = 20) {
     const t = truth.parts[j];
     plane.push(Math.hypot(p.xPlane - t.x, p.yPlane - t.y));
     parallax.push(d);
+    const period = YAW_PERIOD[p.cls];
+    if (period && t.rotDeg != null && p.rotDeg != null) {
+      const e = (((p.rotDeg - t.rotDeg) % period) + period) % period;
+      yaw.push(Math.min(e, period - e));
+    }
   }
   const stat = (a) => (a.length ? { mean: a.reduce((s, x) => s + x, 0) / a.length, max: Math.max(...a) } : null);
   return {
     plane: stat(plane),
     parallax: stat(parallax),
+    yaw: yaw.length ? { ...stat(yaw), n: yaw.length } : null,
     matched: usedP.size,
     unmatchedParts: parts.length - usedP.size,
     missedTruth: truth.parts.length - usedT.size,

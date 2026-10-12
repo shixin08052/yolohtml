@@ -22,6 +22,7 @@ import { mul3 } from './math/linalg.js';
 import { drawPose } from './ui/poseOverlay.js';
 import { boardHomography, rectify, invert3 } from './vision/homography.js';
 import { boxToTexture, erasePolygons } from './vision/erase.js';
+import { estimateYaw } from './vision/orientation.js';
 import { measurePaper, EDGE_NAMES, CHECK_LIMITS } from './vision/boardCheck.js';
 import { markerCornersWorld, markerRectOnPage, paperFrame, designFrame, frameMatrix } from './vision/boardLayout.js';
 import { BOARD, MARKERS } from './config.js';
@@ -158,7 +159,9 @@ function updateBoard3D() {
   // 纸张局部坐标 → 底板坐标 → 照片像素
   const Hpaper = mul3(calib.H, frameMatrix(frame));
   const canvas = rectify(image.bitmap, Hpaper, BOARD_TEX_PX_PER_MM, { boardW: frame.w, boardH: frame.h });
-  boardTex = { bitmap: image.bitmap, canvas, frame, toLocal: invert3(Hpaper) };
+  // 贴图像素 → 纸张局部坐标（贴图顶部 = 纸张远端）→ 底板坐标
+  const texToLocal = [[1 / BOARD_TEX_PX_PER_MM, 0, 0], [0, -1 / BOARD_TEX_PX_PER_MM, frame.h], [0, 0, 1]];
+  boardTex = { bitmap: image.bitmap, canvas, frame, toLocal: invert3(Hpaper), toBoard: mul3(frameMatrix(frame), texToLocal), pixels: null };
   refreshBoardTexture();
 }
 
@@ -652,12 +655,33 @@ function applyDetections() {
     return;
   }
   const K = intrinsicsMatrix(intrinsics);
-  const { parts, dropped } = mapDetections(detResult.detections, { Hinv: calib.Hinv, K, R: pose.R, position: pose.position }, { parallax: parallaxOn });
+  const mapped = mapDetections(detResult.detections, { Hinv: calib.Hinv, K, R: pose.R, position: pose.position }, { parallax: parallaxOn });
+  const { dropped } = mapped;
+  const parts = refineYaw(mapped.parts);
   store.advance('detected', { detections: detResult.detections, parts });
   partsLayer.setParts(parts, parallaxOn);
   refreshBoardTexture();
   store.advance('sceneBuilt');
   renderDetectSection({ parts, dropped });
+}
+
+/**
+ * 用照片估计电阻、螺丝、螺母的朝向（检测框是轴对齐的，看不出角度）：
+ * 在底板正射图上取检测框对应的区域分出零件像素，按形状求角度；估计不可靠时沿用 mapping 的 0° / 90° 粗判
+ */
+function refineYaw(parts) {
+  if (!boardTex || boardTex.bitmap !== store.state.image?.bitmap) return parts;
+  if (!boardTex.pixels) {
+    const ctx = boardTex.canvas.getContext('2d');
+    boardTex.pixels = ctx.getImageData(0, 0, boardTex.canvas.width, boardTex.canvas.height);
+  }
+  const tex = { pxPerMm: BOARD_TEX_PX_PER_MM, paperH: boardTex.frame.h };
+  return parts.map((p) => {
+    const det = detResult.detections[p.detIndex];
+    const poly = boxToTexture(det.box, boardTex.toLocal, tex, 0.05);
+    const est = estimateYaw(boardTex.pixels, poly, p.cls, boardTex.toBoard);
+    return est?.reliable ? { ...p, rotDeg: est.rotDeg, yawSource: 'photo' } : p;
+  });
 }
 
 function setParallax(on) {
@@ -682,8 +706,13 @@ function renderDetectSection(mapping) {
   } else {
     const { parts, dropped } = mapping;
     html += `<p class="summary">检测到 <b>${parts.length}</b> 个零件<span class="muted">（来源：${DET_SOURCE_LABELS[detResult.source]}）</span></p>`;
+    const oriented = parts.filter((p) => [0, 3, 4].includes(p.cls));
+    const fromPhoto = oriented.filter((p) => p.yawSource === 'photo').length;
     const counts = CLASSES.map((c) => [c.name, parts.filter((p) => p.cls === c.id).length]).filter(([, n]) => n);
     if (counts.length) html += '<dl class="kv">' + counts.map(([k, n]) => `<dt>${k}</dt><dd>${n}</dd>`).join('') + '</dl>';
+    if (oriented.length) {
+      html += `<p class="muted small">朝向：${fromPhoto} / ${oriented.length} 个电阻、螺丝、螺母按照片估计${fromPhoto < oriented.length ? '，其余看不清，按检测框粗判 0° / 90°' : ''}。</p>`;
+    }
     html += `<label class="check toggle-row"><input type="checkbox" id="parallax-toggle"${parallaxOn ? ' checked' : ''} /> 视差修正</label>`;
     html += '<p class="muted small">零件有高度，斜拍时检测框中心对应零件半高处；修正后按半高求交，不修正则直接落到板面。</p>';
     if (truth && parts.length) {
@@ -692,6 +721,7 @@ function renderDetectSection(mapping) {
       html += '<dl class="kv">';
       html += `<dt>不修正 vs 真值</dt><dd>${cell(e.plane, !parallaxOn)}</dd>`;
       html += `<dt>视差修正 vs 真值</dt><dd>${cell(e.parallax, parallaxOn)}</dd>`;
+      if (e.yaw) html += `<dt>朝向 vs 真值</dt><dd><span class="${e.yaw.max < 10 ? 'ok' : 'bad'}">平均 ${fmt(e.yaw.mean, 1)}° · 最大 ${fmt(e.yaw.max, 1)}°</span> <span class="muted">（${e.yaw.n} 个）</span></dd>`;
       html += '</dl>';
       if (e.unmatchedParts || e.missedTruth) {
         html += `<p class="note info">${e.unmatchedParts} 个零件没有对应的真值，${e.missedTruth} 个真值零件没有被检测到（只统计配对上的）。</p>`;

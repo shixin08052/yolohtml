@@ -85,7 +85,7 @@
 /**
  * 模块 4：零件。x, y 为当前选用方法的结果；xPlane, yPlane 为方法 1（不修正）的结果。
  * 步骤 10 新增（只增不改）：xParallax, yParallax 为方法 2（视差修正）的结果，切换方法时不用重算；
- * rotDeg 为模型绕 Z 轴的朝向（只能从检测框粗略判断 0° / 90°）；detIndex 为对应 detections 的下标
+ * rotDeg 为模型绕 Z 轴的朝向（优先按照片估计，见 vision/orientation.js）；detIndex 为对应 detections 的下标
  * @typedef {Object} Part
  * @property {number} id
  * @property {number} cls
@@ -100,6 +100,7 @@
  * @property {number} yParallax
  * @property {number} rotDeg
  * @property {number} detIndex
+ * @property {'photo'} [yawSource]  朝向按照片估计时为 'photo'；没有时为检测框粗判
  * @property {boolean} reachable
  */
 
@@ -121,8 +122,8 @@
  * @property {[number,number,number]} position
  * @property {number} pitchDeg
  * @property {Marker[]} markers
- * @property {{ cls: number, x: number, y: number, heightMm: number,
- *              box: [number,number,number,number] }[]} parts
+ * @property {{ cls: number, x: number, y: number, heightMm: number, rotDeg?: number,
+ *              box: [number,number,number,number] }[]} parts  rotDeg：绕 Z 轴的摆放角度（步骤 10 补充）
  */
 
 /* ------------------------------------------------------------------ */

@@ -62,6 +62,7 @@ export function makeGroundTruth(preset, parts) {
       x: p.x,
       y: p.y,
       heightMm: CLASSES[p.cls].heightMm,
+      rotDeg: p.rotDeg ?? 0,
       box: [Math.min(...us), Math.min(...vs), Math.max(...us), Math.max(...vs)],
     };
   });
