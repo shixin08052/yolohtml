@@ -20,7 +20,8 @@ import { poseFromHomography, estimateFocal } from './vision/pose.js';
 import { intrinsicsMatrix } from './math/pinhole.js';
 import { mul3 } from './math/linalg.js';
 import { drawPose } from './ui/poseOverlay.js';
-import { boardHomography, rectify } from './vision/homography.js';
+import { boardHomography, rectify, invert3 } from './vision/homography.js';
+import { boxToTexture, erasePolygons } from './vision/erase.js';
 import { measurePaper, EDGE_NAMES, CHECK_LIMITS } from './vision/boardCheck.js';
 import { markerCornersWorld, markerRectOnPage, paperFrame, designFrame, frameMatrix } from './vision/boardLayout.js';
 import { BOARD, MARKERS } from './config.js';
@@ -147,16 +148,44 @@ function fillOutside(canvas) {
   return out;
 }
 
+/** 当前底板贴图的原始正射图（未擦除零件）：{ bitmap, canvas, frame, toLocal } */
+let boardTex = null;
+
 /** 标定完成后：底板按实测纸张摆放，顶面贴按纸张轮廓生成的正射图 */
 function updateBoard3D() {
   const { image, calib } = store.state;
   const frame = calib.paper?.corners ? paperFrame(calib.paper.corners) : designFrame();
   // 纸张局部坐标 → 底板坐标 → 照片像素
   const Hpaper = mul3(calib.H, frameMatrix(frame));
-  const tex = rectify(image.bitmap, Hpaper, BOARD_TEX_PX_PER_MM, { boardW: frame.w, boardH: frame.h });
+  const canvas = rectify(image.bitmap, Hpaper, BOARD_TEX_PX_PER_MM, { boardW: frame.w, boardH: frame.h });
+  boardTex = { bitmap: image.bitmap, canvas, frame, toLocal: invert3(Hpaper) };
+  refreshBoardTexture();
+}
+
+/**
+ * 重新生成底板贴图：照片里的零件被压到板面上、沿视线往后偏，会在 3D 模型旁形成重影，
+ * 默认按检测框把它们擦掉（勾选"板面原图"时保留）
+ */
+function refreshBoardTexture() {
+  if (!boardTex) return;
+  const { canvas, frame, toLocal } = boardTex;
+  const dets = detResult?.bitmap === boardTex.bitmap ? detResult.detections : [];
+  // 每次都在副本上处理，原始正射图保持不变
+  const tex = document.createElement('canvas');
+  tex.width = canvas.width;
+  tex.height = canvas.height;
+  const ctx = tex.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(canvas, 0, 0);
+  if (dets.length && !$('#show-raw-board').checked) {
+    const img = ctx.getImageData(0, 0, tex.width, tex.height);
+    const polys = dets.map((d) => boxToTexture(d.box, toLocal, { pxPerMm: BOARD_TEX_PX_PER_MM, paperH: frame.h }));
+    erasePolygons(img, polys, { featherPx: 1.5 * BOARD_TEX_PX_PER_MM, ringPx: 2 * BOARD_TEX_PX_PER_MM });
+    ctx.putImageData(img, 0, 0);
+  }
   board.setPaper(fillOutside(tex), frame);
   world.requestRender();
 }
+$('#show-raw-board').addEventListener('change', refreshBoardTexture);
 
 const tabs = createTabs($('.main'), (view) => {
   if (view === 'three') {
@@ -626,6 +655,7 @@ function applyDetections() {
   const { parts, dropped } = mapDetections(detResult.detections, { Hinv: calib.Hinv, K, R: pose.R, position: pose.position }, { parallax: parallaxOn });
   store.advance('detected', { detections: detResult.detections, parts });
   partsLayer.setParts(parts, parallaxOn);
+  refreshBoardTexture();
   store.advance('sceneBuilt');
   renderDetectSection({ parts, dropped });
 }
