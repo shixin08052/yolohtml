@@ -1,0 +1,66 @@
+import { describe, it, expect } from 'vitest';
+import { detectMarkers, markerBits, markerSVG, svgScale, getDictionary } from '../src/vision/aruco.js';
+import { rasterMarkers } from './helpers/rasterMarkers.js';
+
+const maxCornerErr = (found, truth) =>
+  Math.max(...found.corners.map((c, i) => Math.hypot(c[0] - truth.corners[i][0], c[1] - truth.corners[i][1])));
+
+describe('ArUco 字典', () => {
+  it('4×4 字典，码本体 6×6', () => {
+    const d = getDictionary();
+    expect(d.nBits).toBe(16);
+    expect(d.markSize).toBe(6);
+    expect(svgScale()).toBeCloseTo(8 / 6, 12);
+  });
+
+  it('ID 0–3 与 OpenCV DICT_4X4_50 的比特一致', () => {
+    // 由 opencv-python 5.0 的 generateImageMarker 读出（行优先，1 = 白）
+    const opencv = ['1011010100110010', '0000111110011010', '0011001100101101', '1001100101000110'];
+    for (let id = 0; id < 4; id++) expect(markerBits(id).flat().join('')).toBe(opencv[id]);
+  });
+
+  it('generateSVG 输出 8×8 viewBox，白格数与比特一致', () => {
+    for (let id = 0; id < 4; id++) {
+      const svg = markerSVG(id);
+      expect(svg).toContain('viewBox="0 0 8 8"');
+      const whiteCells = (svg.match(/width="1" height="1" fill="white"/g) ?? []).length;
+      expect(whiteCells).toBe(markerBits(id).flat().filter((b) => b === 1).length);
+    }
+  });
+});
+
+describe('detectMarkers', () => {
+  it('任意旋转下 ID 正确，角点顺序为码自身左上、右上、右下、左下', () => {
+    for (let id = 0; id < 4; id++) {
+      for (let rot = 0; rot < 4; rot++) {
+        const { image, truth } = rasterMarkers(400, 400, [{ id, x: 100, y: 100, mod: 30, rot }]);
+        const found = detectMarkers(image);
+        expect(found.map((m) => m.id)).toEqual([id]);
+        expect(maxCornerErr(found[0], truth[0])).toBeLessThan(2);
+      }
+    }
+  });
+
+  it('一张图里的 4 个码都能识别，并按 ID 排序', () => {
+    const { image, truth } = rasterMarkers(900, 600, [
+      { id: 2, x: 650, y: 60, mod: 25 },
+      { id: 0, x: 60, y: 380, mod: 25 },
+      { id: 3, x: 60, y: 60, mod: 25, rot: 1 },
+      { id: 1, x: 650, y: 380, mod: 25, rot: 2 },
+    ]);
+    const found = detectMarkers(image);
+    expect(found.map((m) => m.id)).toEqual([0, 1, 2, 3]);
+    for (const m of found) expect(maxCornerErr(m, truth.find((t) => t.id === m.id))).toBeLessThan(2);
+  });
+
+  it('只保留 ID 0–3；同一 ID 出现多次时保留面积最大的', () => {
+    const { image, truth } = rasterMarkers(900, 500, [
+      { id: 7, x: 40, y: 40, mod: 20 },
+      { id: 1, x: 300, y: 40, mod: 15 },
+      { id: 1, x: 500, y: 40, mod: 40 },
+    ]);
+    const found = detectMarkers(image);
+    expect(found.map((m) => m.id)).toEqual([1]);
+    expect(maxCornerErr(found[0], truth[2])).toBeLessThan(2);
+  });
+});

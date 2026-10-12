@@ -1,0 +1,97 @@
+@import './theme.css';
+@import './controls.css';
+
+/* A3 横向，无边距 */
+@page { size: 420mm 297mm; margin: 0; }
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+
+.toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 60px;
+  padding: 0 20px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+}
+.title { font-family: var(--serif); font-size: 18px; font-weight: 500; }
+.spacer { flex: 1; }
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 20px;
+  padding: 20px;
+  align-items: start;
+}
+.sheet-wrap { min-width: 0; }
+.sheet-host svg.sheet {
+  display: block;
+  width: 100%;
+  height: auto;
+  background: #fff;
+  border-radius: 4px;
+  box-shadow: 0 1px 3px rgba(31, 30, 29, 0.12), 0 8px 24px rgba(31, 30, 29, 0.08);
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 14px 16px;
+  margin-bottom: 14px;
+}
+.card h3 { margin: 0 0 8px; font-family: var(--serif); font-size: 15px; font-weight: 500; }
+.muted { color: var(--text-2); }
+.card p { margin: 0 0 10px; line-height: 1.55; }
+.steps { margin: 0; padding-left: 20px; line-height: 1.7; }
+.steps b { font-weight: 600; }
+
+.check-result { line-height: 1.7; font-variant-numeric: tabular-nums; }
+.check-result .ok { color: var(--ok); }
+.check-result .bad { color: var(--err); }
+.check-result table { width: 100%; border-collapse: collapse; margin-top: 6px; }
+.check-result td { padding: 2px 0; }
+.check-result td:last-child { text-align: right; }
+.check-preview {
+  display: block;
+  width: 100%;
+  margin-top: 10px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+}
+
+@media (max-width: 900px) {
+  .layout { grid-template-columns: minmax(0, 1fr); padding: 16px; }
+  .toolbar { padding: 0 16px; }
+}
+
+/* 打印：只保留标定板，按实际尺寸输出 */
+@media print {
+  html, body {
+    width: 420mm;
+    height: 297mm;
+    overflow: hidden;
+    background: #fff;
+  }
+  .toolbar, .side { display: none !important; }
+  .layout { display: block; padding: 0; }
+  .sheet-host svg.sheet {
+    width: 420mm;
+    height: 297mm;
+    border-radius: 0;
+    box-shadow: none;
+  }
+}

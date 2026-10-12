@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>A3 标定板</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/src/board.css" />
+  </head>
+  <body>
+    <header class="toolbar">
+      <div class="title">A3 标定板</div>
+      <div class="spacer"></div>
+      <a class="btn btn-ghost" href="./index.html">返回主页面</a>
+      <button id="btn-check" class="btn">自检</button>
+      <button id="btn-print" class="btn btn-primary">打印</button>
+    </header>
+
+    <main class="layout">
+      <div class="sheet-wrap">
+        <!-- 标定板本体：由 src/boardPage.js 生成的 SVG，按 mm 定位 -->
+        <div id="sheet-host" class="sheet-host"></div>
+      </div>
+
+      <aside class="side">
+        <section class="card">
+          <h3>打印步骤</h3>
+          <ol class="steps">
+            <li>点"打印"，纸张选 <b>A3</b>，方向 <b>横向</b>。</li>
+            <li>缩放选 <b>100% / 实际尺寸</b>，不要选"适合页面"。</li>
+            <li>边距选"无"或"默认"均可（码离纸边 15 mm）。</li>
+            <li>打印后用尺子量每个码的黑色正方形边长，应为 <b>50 mm</b>（±1 mm）。</li>
+            <li>贴到底板上：印有"操作者一侧"的长边朝向自己。</li>
+          </ol>
+        </section>
+
+        <section class="card">
+          <h3>自检</h3>
+          <p class="muted">把页面上的标定板渲染成图片，用识别模块读码，确认 4 个 ID 都能读出。</p>
+          <div id="check-result" class="check-result muted">尚未运行。</div>
+          <canvas id="check-preview" class="check-preview" hidden></canvas>
+        </section>
+      </aside>
+    </main>
+
+    <script type="module" src="/src/boardPage.js"></script>
+  </body>
+</html>

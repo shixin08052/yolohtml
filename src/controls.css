@@ -1,0 +1,27 @@
+/* 按钮、下拉框等通用控件（主页面和标定板页面共用） */
+.btn, .select {
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 8px;
+  border: 1px solid var(--line-strong);
+  background: var(--card);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+  transition: background 0.15s, border-color 0.15s;
+}
+.btn:hover, .select:hover { background: var(--hover); }
+.btn:focus-visible, .select:focus-visible, .tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 500; }
+.btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.select { padding-right: 10px; }
+a.btn { text-decoration: none; }
+.btn:disabled { opacity: 0.55; cursor: default; }
+.btn-ghost { background: transparent; border-color: transparent; color: var(--text-2); }
+.btn-ghost:hover { background: var(--hover); color: var(--text); }

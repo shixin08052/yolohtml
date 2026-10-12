@@ -1,14 +1,36 @@
 import { defineConfig } from 'vite';
 import { resolve } from 'node:path';
 
-// 多页面：index（主页面）；board.html、synth.html 在后续步骤加入
+/**
+ * js-aruco2 的源码用顶层 `this.AR = AR`、`this.CV || require(...)` 导出，
+ * Node 按 CommonJS 加载没问题，但打包器把它当成 ES 模块（顶层 this 为 undefined）。
+ * 这里把这几处 `this.X` 改成 `exports.X`，让打包器识别为 CommonJS。不改动 npm 包本身。
+ */
+function jsArucoCommonJS() {
+  const filter = /js-aruco2[\\/]src[\\/].*\.js$/;
+  return {
+    name: 'js-aruco2-commonjs',
+    transform(code, id) {
+      if (!filter.test(id)) return null;
+      return { code: code.replace(/^(\s*(?:var \w+ = )?)this\.(AR|CV|POS|SVD)\b/gm, '$1exports.$2'), map: null };
+    },
+  };
+}
+
+// 多页面：index（主页面）、board（标定板）；synth.html 在步骤 3 加入
 export default defineConfig({
   // 相对路径，便于部署到 GitHub Pages 的子路径（/yolohtml/）
   base: './',
+  plugins: [jsArucoCommonJS()],
+  optimizeDeps: {
+    // 开发模式的依赖预打包不走上面的 plugins，需要单独挂一次
+    rolldownOptions: { plugins: [jsArucoCommonJS()] },
+  },
   build: {
-    rollupOptions: {
+    rolldownOptions: {
       input: {
         main: resolve(import.meta.dirname, 'index.html'),
+        board: resolve(import.meta.dirname, 'board.html'),
       },
     },
   },
