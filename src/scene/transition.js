@@ -1,8 +1,9 @@
 // "照片 → 3D"转场（约 4 秒，可重播）与"对比"模式。
-// 1. 3D 画布容器改成照片的宽高比，照片盖在画布上；相机放在拍照时手机的位姿上
+// 1. 3D 画面区域改成照片的宽高比，照片盖在上面；相机放在拍照时手机的位姿上
 // 2. 1 秒内照片透明度 1 → 0，同时零件从板面"长出来"（onGrow 回调，步骤 10 接入）
 // 3. 2 秒内相机飞到默认全景视角（位置线性插值 + 四元数 slerp，easeInOutCubic），
-//    画布同时恢复全尺寸，手机模型和视锥逐渐显示
+//    画面区域同时恢复全尺寸，手机模型和视锥逐渐显示
+// 画面区域只改渲染视口（world.setFrame），不改画布尺寸：每帧改尺寸会清空画布而闪烁
 // 4. 启用轨道控制器
 import * as THREE from 'three';
 
@@ -14,7 +15,6 @@ export const TRANSITION_MS = { hold: 300, fade: 1000, fly: 2000, settle: 300 };
 /**
  * @param {{
  *   world: ReturnType<import('./world.js').createWorld>,
- *   view: HTMLElement,           // 3D 视图区域（容器全尺寸时的范围）
  *   container: HTMLElement,      // 3D 画布容器
  *   overlay: HTMLCanvasElement,  // 盖在画布上的照片
  *   phone: ReturnType<import('./phone.js').createPhone>,
@@ -22,7 +22,7 @@ export const TRANSITION_MS = { hold: 300, fade: 1000, fly: 2000, settle: 300 };
  *   onModeChange?: (mode: 'idle'|'playing'|'compare') => void,
  * }} deps
  */
-export function createTransition({ world, view, container, overlay, phone, onGrow = () => {}, onModeChange = () => {} }) {
+export function createTransition({ world, container, overlay, phone, onGrow = () => {}, onModeChange = () => {} }) {
   let mode = 'idle';
   let raf = 0;
 
@@ -31,10 +31,10 @@ export function createTransition({ world, view, container, overlay, phone, onGro
     onModeChange(m);
   };
 
-  /** 容器在视图里的位置与大小（px）；aspect 为 null 时铺满 */
+  /** 画面区域在容器里的位置与大小（px）；aspect 为 null 时铺满 */
   function fitRect(aspect) {
-    const W = view.clientWidth;
-    const H = view.clientHeight;
+    const W = container.clientWidth;
+    const H = container.clientHeight;
     if (!aspect) return { x: 0, y: 0, w: W, h: H };
     let w = W;
     let h = W / aspect;
@@ -46,13 +46,13 @@ export function createTransition({ world, view, container, overlay, phone, onGro
   }
 
   function setRect(r) {
-    Object.assign(container.style, { left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px`, right: 'auto', bottom: 'auto' });
-    world.resize();
+    world.setFrame(r);
+    Object.assign(overlay.style, { left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px`, right: 'auto', bottom: 'auto' });
   }
 
   function resetRect() {
-    for (const k of ['left', 'top', 'width', 'height', 'right', 'bottom']) container.style[k] = '';
-    world.resize();
+    world.setFrame(null);
+    for (const k of ['left', 'top', 'width', 'height', 'right', 'bottom']) overlay.style[k] = '';
   }
 
   /** 把照片画到覆盖层（分辨率跟容器走，最多 2048 宽） */
@@ -90,6 +90,9 @@ export function createTransition({ world, view, container, overlay, phone, onGro
     stop();
     setMode('playing');
     world.setControlsActive(false);
+    // 手机第一次出现时才编译着色器会卡一帧，先让它可见编译一遍
+    phone.setOpacity(1);
+    world.precompile();
     const aspect = intrinsics.width / intrinsics.height;
     const r0 = fitRect(aspect);
     setRect(r0);
@@ -121,7 +124,7 @@ export function createTransition({ world, view, container, overlay, phone, onGro
           overlay.style.opacity = String(1 - k);
           onGrow(easeInOutCubic(k));
         } else if (t < hold + fade + fly) {
-          overlay.hidden = true;
+          if (!overlay.hidden) overlay.hidden = true;
           onGrow(1);
           const e = easeInOutCubic((t - hold - fade) / fly);
           setRect({
@@ -145,9 +148,10 @@ export function createTransition({ world, view, container, overlay, phone, onGro
           // 稍作停顿后交给控制器
         } else {
           finish();
+          world.render();
           return resolve();
         }
-        world.requestRender();
+        world.render(); // 同一帧里更新完立即渲染，不等下一轮渲染循环
         raf = requestAnimationFrame(frame);
       };
       raf = requestAnimationFrame(frame);

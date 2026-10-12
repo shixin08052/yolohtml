@@ -58,8 +58,8 @@ export function createPhone() {
   lens.position.z = -1;
   const ring = new THREE.Mesh(new THREE.TorusGeometry(PHONE.lensRadius, 0.8, 8, 32), ringMat);
   ring.position.z = -2;
+  // 手机不投影：悬在半空的机身在桌面上投下的大块阴影只会干扰观察
   body.add(shell, screen, lens, ring);
-  for (const m of [shell, lens]) m.castShadow = true;
   group.add(body);
 
   // —— 视锥与视野轮廓（底板坐标，不随机身转动）

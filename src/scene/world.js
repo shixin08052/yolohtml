@@ -189,7 +189,7 @@ export function createWorld(container) {
   /**
    * 把相机设成拍照时手机的位姿与内参（转场、对比用）。
    * 纵向视场角 = 2·atan(H / 2fy)；主点不在中心时用 setViewOffset 平移画面。
-   * 画布宽高比应与照片一致（由调用方调整容器）。
+   * 画面区域宽高比应与照片一致（由调用方用 setFrame 设置）。
    * @returns {{position: THREE.Vector3, quaternion: THREE.Quaternion, fov: number, offset: [number, number], size: [number, number]}}
    */
   function photoCameraParams({ pose, intrinsics }) {
@@ -231,34 +231,89 @@ export function createWorld(container) {
   }
   controls.addEventListener('change', requestRender);
 
+  // 画面区域（容器内 CSS px）。转场 / 对比时只在照片比例的这块区域里渲染，
+  // 画布本身尺寸不变——每帧改画布尺寸会清空绘图缓冲，造成闪烁
+  let frame = null;
+  let size = { w: 0, h: 0 };
+
+  function updateAspect() {
+    const a = frame ? frame.w / frame.h : size.w / size.h;
+    if (Number.isFinite(a) && a > 0) {
+      camera.aspect = a;
+      camera.updateProjectionMatrix();
+    }
+  }
+
+  function layoutLabels() {
+    const r = frame ?? { x: 0, y: 0, w: size.w, h: size.h };
+    Object.assign(labelRenderer.domElement.style, { left: `${r.x}px`, top: `${r.y}px`, right: 'auto', bottom: 'auto' });
+    labelRenderer.setSize(r.w, r.h);
+  }
+
+  /**
+   * 设置画面区域；null 表示铺满容器
+   * @param {{x:number, y:number, w:number, h:number}|null} r
+   */
+  function setFrame(r) {
+    frame = r && r.w > 0 && r.h > 0 ? { ...r } : null;
+    updateAspect();
+    layoutLabels();
+    requestRender();
+  }
+
   let sized = false;
   function resize() {
     const w = container.clientWidth;
     const h = container.clientHeight;
     if (w === 0 || h === 0) return; // 标签页隐藏时跳过
+    if (w === size.w && h === size.h) {
+      requestRender();
+      return;
+    }
+    size = { w, h };
     renderer.setSize(w, h);
-    labelRenderer.setSize(w, h);
-    camera.aspect = w / h;
-    camera.updateProjectionMatrix();
+    updateAspect();
+    layoutLabels();
     if (!sized && controlsActive) {
       sized = true;
       setDefaultView();
     }
-    requestRender();
+    // 改尺寸会清空画布，立刻重画，避免露出一帧空白
+    render();
   }
 
+  const letterbox = new THREE.Color();
   function render() {
-    renderer.render(scene, camera);
+    needRender = false;
+    if (frame) {
+      // 区域外填视图底色，区域内照常渲染场景
+      const bg = renderer.getClearColor(new THREE.Color());
+      renderer.setScissorTest(false);
+      renderer.setClearColor(letterbox.set(cssVar('--surface')));
+      renderer.clear();
+      renderer.setClearColor(bg);
+      const y = size.h - frame.y - frame.h; // WebGL 视口原点在左下角
+      renderer.setViewport(frame.x, y, frame.w, frame.h);
+      renderer.setScissor(frame.x, y, frame.w, frame.h);
+      renderer.setScissorTest(true);
+      renderer.render(scene, camera);
+      renderer.setScissorTest(false);
+      renderer.setViewport(0, 0, size.w, size.h);
+    } else {
+      renderer.render(scene, camera);
+    }
     labelRenderer.render(scene, camera);
+  }
+
+  /** 预编译场景里所有可见物体的着色器，避免物体第一次出现时卡一下 */
+  function precompile() {
+    renderer.compile(scene, camera);
   }
 
   renderer.setAnimationLoop(() => {
     if (container.clientWidth === 0) return; // 不可见时不渲染
     const moving = controlsActive ? controls.update() : false; // 阻尼仍在衰减时返回 true
-    if (needRender || moving) {
-      needRender = false;
-      render();
-    }
+    if (needRender || moving) render();
   });
 
   new ResizeObserver(resize).observe(container);
@@ -272,6 +327,8 @@ export function createWorld(container) {
     controls,
     resize,
     render,
+    setFrame,
+    precompile,
     requestRender,
     setDefaultView,
     getDefaultView,

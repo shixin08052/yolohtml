@@ -61,7 +61,6 @@ let transitionPending = false; // 有新位姿、还没在 3D 视图里播过转
 
 const transition = createTransition({
   world,
-  view: $('#view-three'),
   container: $('#three-container'),
   overlay: $('#photo-overlay'),
   phone,
