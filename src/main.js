@@ -52,6 +52,32 @@ $('#three-reset').addEventListener('click', () => world.setDefaultView());
 /** 3D 底板贴图的分辨率（px/mm），比调试小窗的正射图更清晰 */
 const BOARD_TEX_PX_PER_MM = 4;
 
+/**
+ * 纸张有一部分在照片外时，正射图那里是透明的（3D 里会显示成黑色）：
+ * 用照片内纸张的平均颜色填上。
+ */
+function fillOutside(canvas) {
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const d = img.data;
+  let r = 0, g = 0, b = 0, n = 0, holes = 0;
+  for (let i = 0; i < d.length; i += 4 * 7) {
+    if (d[i + 3] === 255) {
+      r += d[i]; g += d[i + 1]; b += d[i + 2]; n++;
+    }
+  }
+  for (let i = 3; i < d.length; i += 4) if (d[i] < 255) holes++;
+  if (!holes || !n) return canvas;
+  const out = document.createElement('canvas');
+  out.width = canvas.width;
+  out.height = canvas.height;
+  const octx = out.getContext('2d');
+  octx.fillStyle = `rgb(${Math.round(r / n)}, ${Math.round(g / n)}, ${Math.round(b / n)})`;
+  octx.fillRect(0, 0, out.width, out.height);
+  octx.drawImage(canvas, 0, 0);
+  return out;
+}
+
 /** 标定完成后：底板按实测纸张摆放，顶面贴按纸张轮廓生成的正射图 */
 function updateBoard3D() {
   const { image, calib } = store.state;
@@ -59,7 +85,7 @@ function updateBoard3D() {
   // 纸张局部坐标 → 底板坐标 → 照片像素
   const Hpaper = mul3(calib.H, frameMatrix(frame));
   const tex = rectify(image.bitmap, Hpaper, BOARD_TEX_PX_PER_MM, { boardW: frame.w, boardH: frame.h });
-  board.setPaper(tex, frame);
+  board.setPaper(fillOutside(tex), frame);
   world.requestRender();
 }
 

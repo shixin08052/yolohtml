@@ -1,7 +1,7 @@
 // 全部可调参数。长度单位 mm，角度在代码内部用弧度。
 
-// 底板：A4 横向
-export const BOARD = { width: 297, height: 210, thickness: 3 };
+// 底板：A4 横向，就是一张普通 A4 纸（70–80 g/m² 的纸厚约 0.1 mm）
+export const BOARD = { width: 297, height: 210, thickness: 0.1 };
 
 // ArUco：4×4 字典，ID 0–3，边长 40 mm，码外边距板边 12 mm
 // 码"上方"统一朝 +Y（远离操作者）
