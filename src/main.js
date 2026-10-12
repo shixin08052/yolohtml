@@ -44,6 +44,9 @@ function updateTruthOverlay() {
   debugView.setOverlay('truth', on ? (ctx, s, dpr) => drawTruth(ctx, truth, s, 1.5 * dpr) : null);
 }
 $('#show-truth').addEventListener('change', updateTruthOverlay);
+$('#zoom-in').addEventListener('click', () => debugView.zoomBy(1.5));
+$('#zoom-out').addEventListener('click', () => debugView.zoomBy(1 / 1.5));
+$('#zoom-reset').addEventListener('click', () => debugView.reset());
 
 /* ------------------------------------------------------------------ */
 /* 内参：标定文件、来源切换                                              */

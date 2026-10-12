@@ -45,7 +45,13 @@
               <label class="check" id="markers-toggle" hidden><input id="show-markers" type="checkbox" checked /> 识别结果</label>
               <label class="check" id="rect-toggle" hidden><input id="show-rect" type="checkbox" checked /> 正射图</label>
               <label class="check" id="truth-toggle" hidden><input id="show-truth" type="checkbox" checked /> 叠加真值</label>
-              <span class="hint">滚轮缩放 · 拖动平移 · 双击复位</span>
+              <span class="zoom-btns">
+                <button type="button" class="icon-btn" id="zoom-out" aria-label="缩小">−</button>
+                <button type="button" class="icon-btn" id="zoom-in" aria-label="放大">＋</button>
+                <button type="button" class="icon-btn text" id="zoom-reset">复位</button>
+              </span>
+              <span class="hint hint-mouse">滚轮缩放 · 拖动平移 · 双击复位</span>
+              <span class="hint hint-touch">双指缩放 · 单指拖动 · 双击复位</span>
             </div>
             <!-- 正射图小窗：点击放大 / 缩小 -->
             <figure id="rect-inset" class="inset" hidden>

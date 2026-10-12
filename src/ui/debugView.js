@@ -1,5 +1,8 @@
 // 调试视图：2D canvas，显示原图并在上面画叠加层。
-// 叠加层以"原图像素坐标"绘制，视图负责缩放与平移：滚轮缩放（以光标为中心）、拖动平移、双击复位。
+// 叠加层以"原图像素坐标"绘制，视图负责缩放与平移：
+// - 鼠标：滚轮缩放（以光标为中心）、拖动平移、双击复位
+// - 触屏：双指捏合缩放（以两指中点为中心）、单指拖动平移、双击复位
+// - 也可以调用 zoomBy / reset（界面上的 − ＋ 复位按钮）
 import { cssVar, onThemeChange } from './theme.js';
 
 /**
@@ -17,8 +20,10 @@ export function createDebugView(canvas) {
 
   function fit() {
     if (!image) return;
-    const pad = 16 * dpr();
+    // 留边不超过画布的 1/8；布局过程中画布可能只有几个像素高，不能让缩放比变成负数
+    const pad = Math.min(16 * dpr(), canvas.width / 8, canvas.height / 8);
     const s = Math.min((canvas.width - 2 * pad) / image.width, (canvas.height - 2 * pad) / image.height);
+    if (!(s > 0)) return;
     view.s = s;
     view.tx = (canvas.width - image.width * s) / 2;
     view.ty = (canvas.height - image.height * s) / 2;
@@ -52,6 +57,7 @@ export function createDebugView(canvas) {
       return;
     }
     if (!view.fitted) fit();
+    if (!view.fitted) return; // 画布太小，等下一次尺寸变化
     ctx.setTransform(view.s, 0, 0, view.s, view.tx, view.ty);
     // 放大很多时关掉平滑，便于看清像素
     ctx.imageSmoothingEnabled = view.s < 2;
@@ -64,47 +70,116 @@ export function createDebugView(canvas) {
     }
   }
 
+  /** 视图缩放范围：最小为整图的一半，最大 40 倍 */
+  const clampScale = (sc) => {
+    const minS = Math.min(canvas.width / image.width, canvas.height / image.height) * 0.5;
+    return Math.min(40, Math.max(minS, sc));
+  };
+
+  /** 以画布上的点 (mx, my)（设备像素）为中心缩放到 newS */
+  function zoomAt(mx, my, newS) {
+    const ix = (mx - view.tx) / view.s;
+    const iy = (my - view.ty) / view.s;
+    view.s = clampScale(newS);
+    view.tx = mx - ix * view.s;
+    view.ty = my - iy * view.s;
+    draw();
+  }
+
+  /** 客户端坐标 → 画布设备像素 */
+  const toCanvas = (clientX, clientY) => {
+    const r = canvas.getBoundingClientRect();
+    return [(clientX - r.left) * dpr(), (clientY - r.top) * dpr()];
+  };
+
   // 滚轮缩放（以光标为中心）
   canvas.addEventListener(
     'wheel',
     (e) => {
       if (!image) return;
       e.preventDefault();
-      const r = canvas.getBoundingClientRect();
-      const mx = (e.clientX - r.left) * dpr();
-      const my = (e.clientY - r.top) * dpr();
-      const ix = (mx - view.tx) / view.s;
-      const iy = (my - view.ty) / view.s;
-      const k = Math.exp(-e.deltaY * 0.0015);
-      const minS = Math.min(canvas.width / image.width, canvas.height / image.height) * 0.5;
-      view.s = Math.min(40, Math.max(minS, view.s * k));
-      view.tx = mx - ix * view.s;
-      view.ty = my - iy * view.s;
-      draw();
+      const [mx, my] = toCanvas(e.clientX, e.clientY);
+      zoomAt(mx, my, view.s * Math.exp(-e.deltaY * 0.0015));
     },
     { passive: false },
   );
 
-  // 拖动平移
-  let drag = null;
+  // 指针：单指 / 鼠标拖动平移，双指捏合缩放
+  /** @type {Map<number, {x:number, y:number}>} 当前按下的指针（客户端坐标） */
+  const pointers = new Map();
+  let pan = null; // { x, y, tx, ty }
+  let pinch = null; // { dist, mid: [x, y], s, tx, ty }
+
+  const twoPointers = () => [...pointers.values()].slice(0, 2);
+  function startPinch() {
+    const [a, b] = twoPointers();
+    const mid = toCanvas((a.x + b.x) / 2, (a.y + b.y) / 2);
+    pinch = { dist: Math.hypot(a.x - b.x, a.y - b.y) || 1, mid, s: view.s, tx: view.tx, ty: view.ty };
+    pan = null;
+  }
+  function startPan() {
+    const [p] = pointers.values();
+    pan = { x: p.x, y: p.y, tx: view.tx, ty: view.ty };
+    pinch = null;
+  }
+
   canvas.addEventListener('pointerdown', (e) => {
-    if (!image || e.button !== 0) return;
-    drag = { x: e.clientX, y: e.clientY, tx: view.tx, ty: view.ty };
+    if (!image || (e.pointerType === 'mouse' && e.button !== 0)) return;
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     canvas.setPointerCapture(e.pointerId);
+    if (pointers.size >= 2) startPinch();
+    else startPan();
     canvas.style.cursor = 'grabbing';
   });
+
   canvas.addEventListener('pointermove', (e) => {
-    if (!drag) return;
-    view.tx = drag.tx + (e.clientX - drag.x) * dpr();
-    view.ty = drag.ty + (e.clientY - drag.y) * dpr();
-    draw();
+    if (!pointers.has(e.pointerId)) return;
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pinch && pointers.size >= 2) {
+      const [a, b] = twoPointers();
+      const dist = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+      const mid = toCanvas((a.x + b.x) / 2, (a.y + b.y) / 2);
+      // 捏合开始时两指中点下的原图点，跟随当前中点移动
+      const ix = (pinch.mid[0] - pinch.tx) / pinch.s;
+      const iy = (pinch.mid[1] - pinch.ty) / pinch.s;
+      view.s = clampScale(pinch.s * (dist / pinch.dist));
+      view.tx = mid[0] - ix * view.s;
+      view.ty = mid[1] - iy * view.s;
+      draw();
+    } else if (pan) {
+      view.tx = pan.tx + (e.clientX - pan.x) * dpr();
+      view.ty = pan.ty + (e.clientY - pan.y) * dpr();
+      draw();
+    }
   });
-  const endDrag = () => {
-    drag = null;
-    canvas.style.cursor = '';
+
+  // 双击 / 双指轻点后的双击：自己判断，触屏上浏览器不一定发 dblclick
+  let lastTap = null; // { t, x, y }
+  const endPointer = (e) => {
+    if (!pointers.has(e.pointerId)) return;
+    const start = pan && pointers.size === 1 ? pan : null;
+    pointers.delete(e.pointerId);
+    if (pointers.size >= 2) startPinch();
+    else if (pointers.size === 1) startPan();
+    else {
+      pan = null;
+      pinch = null;
+      canvas.style.cursor = '';
+      // 轻点（几乎没移动）才算一次点击
+      if (e.pointerType !== 'mouse' && start && Math.hypot(e.clientX - start.x, e.clientY - start.y) < 10) {
+        const now = performance.now();
+        if (lastTap && now - lastTap.t < 320 && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 30) {
+          lastTap = null;
+          fit();
+          draw();
+        } else {
+          lastTap = { t: now, x: e.clientX, y: e.clientY };
+        }
+      }
+    }
   };
-  canvas.addEventListener('pointerup', endDrag);
-  canvas.addEventListener('pointercancel', endDrag);
+  canvas.addEventListener('pointerup', endPointer);
+  canvas.addEventListener('pointercancel', endPointer);
   canvas.addEventListener('dblclick', () => {
     fit();
     draw();
@@ -133,6 +208,11 @@ export function createDebugView(canvas) {
     reset() {
       fit();
       draw();
+    },
+    /** 以画布中心缩放 k 倍 */
+    zoomBy(k) {
+      if (!image) return;
+      zoomAt(canvas.width / 2, canvas.height / 2, view.s * k);
     },
     redraw: draw,
     resize,
