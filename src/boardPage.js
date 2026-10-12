@@ -4,7 +4,7 @@ import { BOARD, MARKERS } from './config.js';
 import { detectMarkers, detectMarkersInImage, VALID_IDS } from './vision/aruco.js';
 import { markerCornersOnPage } from './vision/boardLayout.js';
 import { buildBoardSVG, renderBoardToCanvas } from './ui/boardSheet.js';
-import { checkBoardPhoto } from './vision/boardCheck.js';
+import { checkBoardPhoto, EDGE_NAMES } from './vision/boardCheck.js';
 import { applyH } from './vision/homography.js';
 
 const sheet = buildBoardSVG();
@@ -141,9 +141,15 @@ function renderPhotoResult(out, file, bitmap, det, r) {
   if (r.paper) {
     const { edges, widthMm, heightMm, scaleX, scaleY } = r.paper;
     html += '<h4>纸张（设计 ' + BOARD.width + ' × ' + BOARD.height + ' mm）</h4><table>';
-    html += `<tr><td>实测宽 × 高</td><td>${fmt(widthMm)} × ${fmt(heightMm)} mm</td></tr>`;
-    html += `<tr><td>打印比例</td><td>${scaleX ? fmt(scaleX * 100) + '%' : '—'} × ${scaleY ? fmt(scaleY * 100) + '%' : '—'}</td></tr>`;
-    html += `<tr><td>纸边外移 左/右/下/上</td><td>${[edges.left, edges.right, edges.bottom, edges.top].map((e) => fmt(e)).join(' / ')} mm</td></tr>`;
+    const pct = (k) => (k ? fmt(k * 100) + '%' : '—');
+    html += `<tr><td>实测长边 × 短边</td><td>${fmt(widthMm)} × ${fmt(heightMm)} mm</td></tr>`;
+    html += `<tr><td>打印比例（长边 × 短边）</td><td>${pct(scaleX)} × ${pct(scaleY)}</td></tr>`;
+    // 纸边相对设计位置的外移；测不出时写原因
+    const why = { outside: '太靠近照片边缘', contrast: '对比不够' };
+    for (const k of ['bottom', 'top', 'left', 'right']) {
+      const v = edges[k] != null ? `外移 ${fmt(edges[k])} mm` : `<span class="warn">${why[r.paper.reasons[k]]}</span>`;
+      html += `<tr><td>${EDGE_NAMES[k]}</td><td>${v}</td></tr>`;
+    }
     html += '</table>';
   }
   out.innerHTML = html;

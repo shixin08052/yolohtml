@@ -38,14 +38,27 @@ function lumaAt(img, u, v) {
   );
 }
 
+/** 纸边的名称：用版面上的文字和码来指代，照片怎么旋转都不会混淆 */
+export const EDGE_NAMES = {
+  bottom: '印有"操作者一侧"的长边',
+  top: '远端长边（印有说明文字的一侧）',
+  left: 'ID0、ID3 所在的短边',
+  right: 'ID1、ID2 所在的短边',
+};
+
 /**
  * 测量纸边。对每条边在若干位置沿法线方向采样亮度剖面（底板坐标，步长 0.25 mm，
- * 纸内 8 mm 到纸外 15 mm），取"纸内亮、纸外暗"跳变最大处为纸边，再取中位数。
- * 采样位置避开版面上的文字（只在两侧码所在的列 / 左右边的中段）。
+ * 纸内 8 mm 到纸外最多 15 mm；超出照片的部分截掉，纸外至少要有 3 mm 桌面），
+ * 取"纸内亮、纸外暗"跳变最大处为纸边，再取中位数。
+ * 采样位置避开版面上的文字（长边只在两侧码所在的列取样，短边取中段）。
+ * 只用底板坐标，与照片的旋转方向无关。
  * @param {{width:number, height:number, data:Uint8ClampedArray}} img RGBA
  * @param {number[][]} H 底板 mm → 该图像像素
  * @returns {{edges: {left:number|null, right:number|null, bottom:number|null, top:number|null},
+ *            reasons: {[edge:string]: 'outside'|'contrast'|null},
  *            widthMm:number|null, heightMm:number|null, scaleX:number|null, scaleY:number|null}}
+ *   edges.x 为纸边相对设计位置向外的偏移（mm）；reasons.x 为测不出的原因：
+ *   'outside' 纸边太靠近照片边缘（或在照片外），'contrast' 纸与桌面对比不够
  */
 export function measurePaper(img, H) {
   const W = BOARD.width;
@@ -53,7 +66,9 @@ export function measurePaper(img, H) {
   const step = 0.25;
   const inside = 8;
   const outside = 15;
+  const minOutside = 3;
   const minContrast = 20;
+  const win = Math.round(1.5 / step); // 比较内外均值的窗口（1.5 mm）
 
   const along = (a, b, n) => Array.from({ length: n }, (_, i) => a + ((b - a) * i) / (n - 1));
   // 每条边：基准位置、法线方向（指向纸外）、采样位置
@@ -65,28 +80,38 @@ export function measurePaper(img, H) {
   };
 
   const edges = {};
+  const reasons = {};
   for (const [name, d] of Object.entries(defs)) {
     const offsets = [];
+    let clipped = 0;
     for (const t of d.ts) {
       const base = d.at(t);
       const prof = [];
+      let complete = true;
       for (let s = -inside; s <= outside + 1e-9; s += step) {
-        const p = [base[0] + d.n[0] * s, base[1] + d.n[1] * s];
-        prof.push(lumaAt(img, ...applyH(H, p)));
+        const v = lumaAt(img, ...applyH(H, [base[0] + d.n[0] * s, base[1] + d.n[1] * s]));
+        if (v == null) {
+          complete = s > 0; // 纸内部分超出照片：整条作废；纸外部分超出：截断
+          break;
+        }
+        prof.push(v);
       }
-      if (prof.some((x) => x == null)) continue;
-      // 平滑后找"内侧均值 − 外侧均值"最大的位置（窗口 1.5 mm）
-      const w = Math.round(1.5 / step);
+      // 纸外可用长度不足 minOutside：这一处测不了
+      if (!complete || (prof.length - 1) * step - inside < minOutside) {
+        clipped++;
+        continue;
+      }
+      // 找"内侧均值 − 外侧均值"最大的位置
       let best = -Infinity;
       let bestK = -1;
-      for (let k = w; k < prof.length - w; k++) {
+      for (let k = win; k < prof.length - win; k++) {
         let a = 0;
         let b = 0;
-        for (let j = 1; j <= w; j++) {
+        for (let j = 1; j <= win; j++) {
           a += prof[k - j];
           b += prof[k + j];
         }
-        const c = (a - b) / w;
+        const c = (a - b) / win;
         if (c > best) {
           best = c;
           bestK = k;
@@ -97,16 +122,18 @@ export function measurePaper(img, H) {
     if (offsets.length >= 3) {
       offsets.sort((a, b) => a - b);
       edges[name] = offsets[Math.floor(offsets.length / 2)];
+      reasons[name] = null;
     } else {
       edges[name] = null;
+      reasons[name] = clipped * 2 >= d.ts.length ? 'outside' : 'contrast';
     }
   }
 
-  // edges.x 为纸边相对设计位置向外的偏移（mm）
   const widthMm = edges.left != null && edges.right != null ? W + edges.left + edges.right : null;
   const heightMm = edges.bottom != null && edges.top != null ? Hh + edges.bottom + edges.top : null;
   return {
     edges,
+    reasons,
     widthMm,
     heightMm,
     // 打印比例 = 设计纸宽 / 测得纸宽（内容缩小时，纸在底板坐标系里显得更大）
@@ -200,10 +227,19 @@ export function checkBoardPhoto(markers, img) {
     result.paper = paper;
     if (paper.scaleX == null || paper.scaleY == null) {
       worse('warn');
-      messages.push('没能测出纸边，无法判断打印比例。请把纸放在颜色较深的桌面上，让整张纸和四周一圈桌面都在画面里。');
+      const bad = Object.keys(paper.edges).filter((k) => paper.edges[k] == null);
+      const near = bad.filter((k) => paper.reasons[k] === 'outside').map((k) => EDGE_NAMES[k]);
+      const dim = bad.filter((k) => paper.reasons[k] === 'contrast').map((k) => EDGE_NAMES[k]);
+      const parts = [];
+      if (near.length) parts.push(`${near.join('、')}离照片边缘太近（纸外要能看到至少几毫米桌面）`);
+      if (dim.length) parts.push(`${dim.join('、')}与桌面对比不够（请换颜色较深的桌面）`);
+      messages.push(`没能测出纸边，无法判断打印比例：${parts.join('；')}。拍照时让整张纸四周都留出一圈桌面。`);
+      // 一个方向测出来了也告诉用户
+      if (paper.scaleX != null) messages.push(`已测出的方向：沿长边 ${(paper.scaleX * 100).toFixed(1)}%。`);
+      if (paper.scaleY != null) messages.push(`已测出的方向：沿短边 ${(paper.scaleY * 100).toFixed(1)}%。`);
     } else {
       const dev = Math.max(Math.abs(paper.scaleX - 1), Math.abs(paper.scaleY - 1));
-      const pct = `横向 ${(paper.scaleX * 100).toFixed(1)}%、纵向 ${(paper.scaleY * 100).toFixed(1)}%`;
+      const pct = `沿长边 ${(paper.scaleX * 100).toFixed(1)}%、沿短边 ${(paper.scaleY * 100).toFixed(1)}%`;
       if (dev > CHECK_LIMITS.warnScale) {
         worse('bad');
         messages.push(`打印比例不对：${pct}。请在打印设置里选择 100% / 实际尺寸后重新打印。`);
