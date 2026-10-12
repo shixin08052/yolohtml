@@ -6,6 +6,8 @@ import { createInfoPanel } from './ui/infoPanel.js';
 import { createDebugView } from './ui/debugView.js';
 import { drawTruth } from './ui/truthOverlay.js';
 import { createWorld } from './scene/world.js';
+import { createBoard } from './scene/board.js';
+import { buildBoardSVG, renderBoardToCanvas } from './ui/boardSheet.js';
 import { loadSampleIndex, loadSample } from './vision/samples.js';
 import { loadImageFile, ImageFormatError } from './vision/image.js';
 import { computeIntrinsics, defaultSource } from './vision/intrinsics.js';
@@ -14,10 +16,11 @@ import { detectMarkersInImage, VALID_IDS } from './vision/aruco.js';
 import { markerCornerErrors, homographyTruthError, poseTruthError } from './vision/evaluate.js';
 import { poseFromHomography, estimateFocal } from './vision/pose.js';
 import { intrinsicsMatrix } from './math/pinhole.js';
+import { mul3 } from './math/linalg.js';
 import { drawPose } from './ui/poseOverlay.js';
 import { boardHomography, rectify } from './vision/homography.js';
 import { measurePaper, EDGE_NAMES, CHECK_LIMITS } from './vision/boardCheck.js';
-import { markerCornersWorld, markerRectOnPage } from './vision/boardLayout.js';
+import { markerCornersWorld, markerRectOnPage, paperFrame, designFrame, frameMatrix } from './vision/boardLayout.js';
 import { BOARD, MARKERS } from './config.js';
 import { drawMarkers } from './ui/markerOverlay.js';
 
@@ -28,6 +31,38 @@ const panel = createInfoPanel($('#info-panel'));
 createStepper($('#stepper'), store);
 const debugView = createDebugView($('#debug-canvas'));
 const world = createWorld($('#three-container'));
+/* ------------------------------------------------------------------ */
+/* 3D 场景：底板                                                        */
+/* ------------------------------------------------------------------ */
+
+const board = createBoard();
+world.scene.add(board.group);
+// 还没有照片时，顶面先贴打印版面
+renderBoardToCanvas(buildBoardSVG(), 4)
+  .then((c) => {
+    if (!store.state.calib) {
+      board.setPaper(c, designFrame());
+      world.requestRender();
+    }
+  })
+  .catch((err) => console.error(err));
+$('#show-axes').addEventListener('change', (e) => world.setAxesVisible(e.target.checked));
+$('#three-reset').addEventListener('click', () => world.setDefaultView());
+
+/** 3D 底板贴图的分辨率（px/mm），比调试小窗的正射图更清晰 */
+const BOARD_TEX_PX_PER_MM = 4;
+
+/** 标定完成后：底板按实测纸张摆放，顶面贴按纸张轮廓生成的正射图 */
+function updateBoard3D() {
+  const { image, calib } = store.state;
+  const frame = calib.paper?.corners ? paperFrame(calib.paper.corners) : designFrame();
+  // 纸张局部坐标 → 底板坐标 → 照片像素
+  const Hpaper = mul3(calib.H, frameMatrix(frame));
+  const tex = rectify(image.bitmap, Hpaper, BOARD_TEX_PX_PER_MM, { boardW: frame.w, boardH: frame.h });
+  board.setPaper(tex, frame);
+  world.requestRender();
+}
+
 const tabs = createTabs($('.main'), (view) => {
   if (view === 'three') world.resize();
   else debugView.resize();
@@ -280,6 +315,13 @@ async function runCalibration({ force = false } = {}) {
 }
 
 store.on('stage:calibrated', (st) => showRectified(st.calib.rectified));
+store.on('stage:calibrated', () => {
+  try {
+    updateBoard3D();
+  } catch (err) {
+    console.error(err);
+  }
+});
 
 /* ------------------------------------------------------------------ */
 /* 模块 3：手机位姿                                                     */

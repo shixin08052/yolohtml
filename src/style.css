@@ -189,6 +189,18 @@ body { background: var(--bg); overflow: hidden; -webkit-font-smoothing: antialia
 .inset figcaption { margin-top: 4px; font-size: 12px; color: var(--text); }
 .three-container { position: absolute; inset: 0; overflow: hidden; }
 .three-container canvas { display: block; }
+.three-container canvas { touch-action: none; }
+.label-layer { position: absolute; inset: 0; pointer-events: none; }
+.marker-tag {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(61, 123, 217, 0.92);
+  color: #fff;
+  font: 600 12px/1.4 var(--sans);
+  white-space: nowrap;
+  transform: translateY(-14px);
+}
+.axis-label { font: 700 13px/1 var(--sans); text-shadow: 0 0 3px #fff, 0 0 3px #fff; }
 
 /* ---------------- 信息面板 ---------------- */
 .info-panel {
