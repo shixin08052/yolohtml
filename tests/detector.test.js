@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { detectionsFileName, serializeDetections, parseDetections, detectionsFromTruth, detect } from '../src/vision/detector.js';
+import { detectionsFileName, serializeDetections, parseDetections, detectionsFromTruth, detect, classIdByName, modelClassMap } from '../src/vision/detector.js';
 import { CLASSES } from '../src/config.js';
 
 const image = { fileName: 'IMG_0001.HEIC', width: 4032, height: 3024 };
 const dets = [
   { cls: 1, name: CLASSES[1].name, score: 0.934, box: [100.04, 200.06, 180.5, 290] },
-  { cls: 2, name: CLASSES[2].name, score: 1, box: [1000, 1200, 1060, 1250] },
+  { cls: 0, name: CLASSES[0].name, score: 1, box: [1000, 1200, 1060, 1250] },
 ];
 
 describe('检测结果文件', () => {
@@ -30,7 +30,7 @@ describe('检测结果文件', () => {
   });
 
   it('直接是数组也能读；框的两角顺序颠倒时自动整理；缺置信度按 1', () => {
-    const back = parseDetections([{ cls: 2, box: [50, 60, 10, 20] }], image);
+    const back = parseDetections([{ cls: 1, box: [50, 60, 10, 20] }], image);
     expect(back[0].box).toEqual([10, 20, 50, 60]);
     expect(back[0].score).toBe(1);
   });
@@ -49,9 +49,29 @@ describe('检测结果文件', () => {
     expect(() => parseDetections({ foo: 1 }, image)).toThrow(/detections/);
   });
 
+  it('有类别名时按名字认类别：predict_dump.py 的输出（模型类别 ID）和旧文件（已删除的电容、螺丝跳过）都能读', () => {
+    const json = {
+      detections: [
+        { cls: 2, name: 'LED', score: 0.98, box: [0, 0, 10, 10] }, // 模型里 LED 是 2
+        { cls: 0, name: '色环电阻', score: 0.9, box: [20, 0, 30, 10] },
+        { cls: 1, name: '电解电容', score: 0.8, box: [40, 0, 50, 10] },
+        { cls: 3, name: 'screw', score: 0.8, box: [60, 0, 70, 10] },
+      ],
+    };
+    expect(parseDetections(json, image).map((d) => [d.cls, d.name])).toEqual([[1, 'LED'], [0, '色环电阻']]);
+  });
+
+  it('类别名 → 类别 ID；模型类别对照表', () => {
+    expect(['resistor', 'LED', 'led', '色环电阻', 'capacitor', 'person'].map(classIdByName)).toEqual([0, 1, 1, 0, -1, -1]);
+    // 步骤 13 的模型：4 类（电容、螺丝没有训练数据）
+    expect(modelClassMap(['resistor', 'capacitor', 'led', 'screw'])).toEqual([0, -1, 1, -1]);
+    expect(modelClassMap(['resistor', 'led'])).toEqual([0, 1]);
+    expect(modelClassMap(['person', 'bicycle', 'car'])).toBeNull();
+  });
+
   it('合成图：mock 检测直接用真值框', async () => {
-    const truth = { parts: [{ cls: 3, x: 1, y: 2, heightMm: 4, box: [1, 2, 3, 4] }] };
-    expect(detectionsFromTruth(truth)).toEqual([{ cls: 3, name: CLASSES[3].name, score: 1, box: [1, 2, 3, 4] }]);
+    const truth = { parts: [{ cls: 1, x: 1, y: 2, heightMm: 4, box: [1, 2, 3, 4] }] };
+    expect(detectionsFromTruth(truth)).toEqual([{ cls: 1, name: CLASSES[1].name, score: 1, box: [1, 2, 3, 4] }]);
     expect(await detect(image, { truth })).toEqual(detectionsFromTruth(truth));
     // 已删除的类别被跳过
     expect(detectionsFromTruth({ parts: [...truth.parts, { cls: 5, x: 0, y: 0, heightMm: 1, box: [0, 0, 1, 1] }] })).toHaveLength(1);

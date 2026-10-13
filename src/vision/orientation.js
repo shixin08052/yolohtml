@@ -1,15 +1,13 @@
 // 零件朝向估计（纯函数，不碰 DOM）。
 // 检测框是轴对齐的矩形，分不出斜放的角度，所以直接看照片：在底板正射图（俯视、毫米比例）上
 // 取检测框对应的区域，按框外一圈纸面的颜色把零件像素分出来，再看零件像素的形状：
-// - 长条零件（电阻、螺丝、躺平的 LED）：主轴方向（二阶矩）；螺丝、LED 再比较两端的"粗细"，
-//   判断螺帽 / 灯体在哪头
-// - 圆形零件（电容）没有朝向
+// - 长条零件（电阻、躺平的 LED）：主轴方向（二阶矩）；LED 再比较两端的"粗细"，判断灯体在哪头
 // 正射图把有高度的零件沿视线往后"拉长"了一点，但这些零件躺平后只有 3–6 mm 高，影响不大。
 // 检测框只框本体（不含引脚）。LED 本体的长宽比只有约 1.5，单看框内判断不准，所以在框外扩约 10 mm 的范围里找
 // 零件像素，把一段引脚也算进来；只保留与框内零件像素相连的部分，避免把旁边的零件算进来。
 
-/** 需要估计朝向的类别及方式：screw 粗头在模型局部 −X，led 粗头（灯体）在局部 +X */
-const MODE = { 0: 'axis', 2: 'led', 3: 'screw' };
+/** 需要估计朝向的类别及方式：led 粗头（灯体）在模型局部 +X */
+const MODE = { 0: 'axis', 1: 'led' };
 
 /** 中值 */
 function median(a) {
@@ -143,7 +141,7 @@ const wrap = (a, period) => {
  * @param {number[][]} pts
  * @param {number} cls
  * @returns {{ rotDeg: number, reliable: boolean, elong?: number, headRatio?: number }|null}
- *   rotDeg：模型绕 Z 轴的转角（与 parts.js 的模型约定一致：长轴沿局部 X、螺帽在局部 −X）
+ *   rotDeg：模型绕 Z 轴的转角（与 parts.js 的模型约定一致：长轴沿局部 X、LED 灯体在局部 +X）
  */
 export function yawFromPoints(pts, cls) {
   const mode = MODE[cls];
@@ -178,7 +176,7 @@ export function yawFromPoints(pts, cls) {
 
   if (mode === 'axis') return { rotDeg: wrap(deg(phi), 180), reliable, elong };
 
-  // 螺丝：沿主轴投影，比较两端各 1/4 长度内的像素数（螺帽那头更粗）
+  // LED：沿主轴投影，比较两端各 1/4 长度内的像素数（灯体那头更粗）
   const c = Math.cos(phi);
   const s = Math.sin(phi);
   const proj = pts.map(([x, y]) => (x - mx) * c + (y - my) * s).sort((a, b) => a - b);
@@ -192,9 +190,8 @@ export function yawFromPoints(pts, cls) {
     else if (p >= hi - q) nHi++;
   }
   const headRatio = Math.max(nLo, nHi) / Math.max(1, Math.min(nLo, nHi));
-  // 螺丝模型的螺帽在局部 −X：粗头在 +主轴 那头时整体转 180°；LED 的灯体在局部 +X，正好相反
-  const wideAtHi = nHi > nLo;
-  const rot = (mode === 'screw') === wideAtHi ? deg(phi) + 180 : deg(phi);
+  // LED 的灯体在局部 +X：粗头在 −主轴 那头时整体转 180°
+  const rot = nHi > nLo ? deg(phi) : deg(phi) + 180;
   return { rotDeg: wrap(rot, 360), reliable, elong, headRatio };
 }
 

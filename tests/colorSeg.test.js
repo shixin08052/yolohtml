@@ -53,7 +53,7 @@ describe('颜色分割', () => {
     ]);
     const parts = segmentParts(img, Hinv, PPM);
     expect(parts).toHaveLength(2);
-    const led = parts.find((p) => p.cls === 2);
+    const led = parts.find((p) => p.cls === 1);
     const res = parts.find((p) => p.cls === 0);
     expect(led.box).toEqual([...toPx(100, 105.8), ...toPx(108.5, 100)].map(Math.round));
     // 色环缝隙被闭运算连起来，电阻只有一个框
@@ -63,12 +63,12 @@ describe('颜色分割', () => {
 
 describe('YOLO 与颜色分割合并', () => {
   const yolo = [
-    { cls: 2, name: 'LED', score: 0.95, box: [100, 100, 140, 130] },
+    { cls: 1, name: 'LED', score: 0.95, box: [100, 100, 140, 130] },
     { cls: 0, name: '色环电阻', score: 0.9, box: [300, 100, 340, 115] },
   ];
   it('YOLO 框过的零件不重复加（颜色框偏大也算覆盖）；YOLO 漏掉的补上，标为 color', () => {
     const color = [
-      { cls: 2, box: [95, 96, 150, 136] }, // 同一个 LED，颜色框偏大
+      { cls: 1, box: [95, 96, 150, 136] }, // 同一个 LED，颜色框偏大
       { cls: 0, box: [302, 101, 338, 114] }, // 同一个电阻
       { cls: 0, box: [500, 200, 540, 214] }, // YOLO 漏掉的电阻
     ];
@@ -85,7 +85,7 @@ describe('YOLO 与颜色分割合并', () => {
   });
 
   it('没有 YOLO 结果时颜色候选全部补上', () => {
-    const { dets, added } = fuseDetections([], [{ cls: 2, box: [0, 0, 10, 10] }, { cls: 0, box: [20, 0, 30, 10] }]);
+    const { dets, added } = fuseDetections([], [{ cls: 1, box: [0, 0, 10, 10] }, { cls: 0, box: [20, 0, 30, 10] }]);
     expect(added).toBe(2);
     expect(dets.every((d) => d.origin === 'color')).toBe(true);
   });

@@ -23,15 +23,15 @@ describe('零件模型', () => {
   }
 
   it('电阻、LED 有引脚：引脚伸出本体之外；LED 引脚只在灯头的反方向', () => {
-    for (const cls of [0, 2]) {
+    for (const cls of [0, 1]) {
       const m = createPartMesh(cls);
       const full = new THREE.Box3().setFromObject(m);
       const body = bodyBox(m);
       expect(full.max.x - full.min.x).toBeGreaterThan(body.max.x - body.min.x + 10);
     }
-    const led = createPartMesh(2);
+    const led = createPartMesh(1);
     const full = new THREE.Box3().setFromObject(led);
     expect(full.min.x).toBeLessThan(-20);
-    expect(full.max.x).toBeCloseTo(PART_SIZE[2].lx / 2, 1);
+    expect(full.max.x).toBeCloseTo(PART_SIZE[1].lx / 2, 1);
   });
 });

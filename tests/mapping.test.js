@@ -147,7 +147,7 @@ describe('mapDetections：合成图真值框', () => {
     const truth = makeGroundTruth(SYNTH_PRESETS[0], [
       { cls: 1, x: 150, y: 100 },
       { cls: 1, x: 32, y: 32 }, // 码 0 上
-      { cls: 2, x: 200, y: 80 },
+      { cls: 0, x: 200, y: 80 },
     ]);
     const dets = truth.parts.map((p) => ({ cls: p.cls, score: 0.9, box: p.box }));
     const { parts, dropped } = mapDetections(dets, camFromPose(truth));

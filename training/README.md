@@ -28,7 +28,8 @@
 | `tools/make_chessboard.py` | 生成棋盘格矢量 PDF（默认 A4 横向，9 × 6 内角点，方格 25 mm，带 100 mm 比例尺；`--paper a3/letter`、`--square`）；现成的在 `tools/chessboard_a4.pdf` |
 | `tools/calibrate_camera.py` | 棋盘格标定 → `public/intrinsics.json` |
 
-- 类别（顺序固定，必须与 `training/parts.yaml`、网页 `src/config.js` 一致）：`0 resistor 色环电阻`、`1 capacitor 电解电容`、`2 led LED`、`3 screw 螺丝`。
+- 类别（顺序固定，必须与 `training/parts.yaml` 一致）：`0 resistor 色环电阻`、`1 capacitor 电解电容`、`2 led LED`、`3 screw 螺丝`。
+  - 网页（`src/config.js`）后来只保留电阻、LED 两类（ID 0、1），按类别名对应模型输出（`resistor`、`led`），所以这里的 4 类表不用改，已标注的数据和已训练的模型都照常可用；重新训练时也可以只用这两类。
 
 ---
 

@@ -69,7 +69,7 @@ describe('分拣规划', () => {
     expect(s.slice(0, 4).every((q) => q.floor === BIN_WALL)).toBe(true);
     expect(s[4].floor).toBe(BIN_WALL + 3);
     expect([s[4].x, s[4].y]).toEqual([s[0].x, s[0].y]);
-    // 圆形零件（电容 Φ8）放在盒内；长条零件每层 2 个
+    // 圆形零件（按 Φ8 算，目前没有这类零件）放在盒内；长条零件每层 2 个
     for (const [ox, oy] of BIN_SLOTS) {
       expect(Math.abs(ox) + 4).toBeLessThan(bin.size[0] / 2 - BIN_WALL);
       expect(Math.abs(oy) + 4).toBeLessThan(bin.size[1] / 2 - BIN_WALL);
@@ -84,19 +84,20 @@ describe('分拣规划', () => {
     expect(tasks).toHaveLength(5);
     const keys = tasks.map((t) => t.to.join(','));
     expect(new Set(keys).size).toBe(5);
-    expect(tasks.filter((t) => t.to[2] === BIN_WALL + GRASP_Z)).toHaveLength(4);
-    expect(tasks.filter((t) => t.to[2] === BIN_WALL + 12 + GRASP_Z)).toHaveLength(1);
+    // LED 高 5.8，长条零件每层 2 个：2 + 2 + 1
+    const at = (layer) => tasks.filter((t) => Math.abs(t.to[2] - (BIN_WALL + layer * 5.8 + GRASP_Z)) < 1e-9).length;
+    expect([at(0), at(1), at(2)]).toEqual([2, 2, 1]);
   });
 
   it('夹在本体中心（检测框中心），LED 也不再偏移', () => {
-    const [led] = makeParts([{ cls: 2, x: 150, y: 100, rotDeg: 30 }]);
+    const [led] = makeParts([{ cls: 1, x: 150, y: 100, rotDeg: 30 }]);
     expect(graspPoint(led)).toEqual([150, 100, GRASP_Z]);
   });
 
   it('放下后零件中心正好落在盒内位置上；长条零件沿料盒长边（Y）摆放，整体在盒内', () => {
     const list = makeParts([
-      { cls: 2, x: 212, y: 82, rotDeg: 30 }, { cls: 2, x: 60, y: 100, rotDeg: -70 }, { cls: 2, x: 150, y: 150, rotDeg: 160 },
-      { cls: 3, x: 72, y: 122, rotDeg: -35 }, { cls: 0, x: 188, y: 176, rotDeg: 80 },
+      { cls: 1, x: 212, y: 82, rotDeg: 30 }, { cls: 1, x: 60, y: 100, rotDeg: -70 }, { cls: 1, x: 150, y: 150, rotDeg: 160 },
+      { cls: 0, x: 72, y: 122, rotDeg: -35 }, { cls: 0, x: 188, y: 176, rotDeg: 80 },
     ]);
     const { tasks } = plan(list, BINS, ARM);
     expect(tasks).toHaveLength(5);
@@ -126,7 +127,7 @@ describe('分拣规划', () => {
   });
 
   it('不可达零件放进"已跳过"并给出原因', () => {
-    const bad = makeParts([{ cls: 0, x: 148.5, y: 240 }, { cls: 2, x: 100, y: 100 }]);
+    const bad = makeParts([{ cls: 0, x: 148.5, y: 240 }, { cls: 1, x: 100, y: 100 }]);
     const { tasks, skipped } = plan(bad, BINS, ARM);
     expect(tasks.map((t) => t.partId)).toEqual([1]);
     expect(skipped).toHaveLength(1);
@@ -135,10 +136,9 @@ describe('分拣规划', () => {
     expect(skipped[0].skipReason).toMatch(/底座/);
   });
 
-  it('夹爪方向：长条零件垂直于长轴，圆形零件不转', () => {
+  it('夹爪方向：长条零件（电阻、LED）垂直于长轴', () => {
     expect(gripYawFor({ cls: 0, rotDeg: 20 })).toBeCloseTo((110 * Math.PI) / 180, 12);
-    expect(gripYawFor({ cls: 3, rotDeg: -35 })).toBeCloseTo((55 * Math.PI) / 180, 12);
-    expect(gripYawFor({ cls: 2, rotDeg: 30 })).toBeCloseTo((120 * Math.PI) / 180, 12);
-    expect(gripYawFor({ cls: 1, rotDeg: 0 })).toBeNull();
+    expect(gripYawFor({ cls: 0, rotDeg: -35 })).toBeCloseTo((55 * Math.PI) / 180, 12);
+    expect(gripYawFor({ cls: 1, rotDeg: 30 })).toBeCloseTo((120 * Math.PI) / 180, 12);
   });
 });

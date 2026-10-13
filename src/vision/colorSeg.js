@@ -10,7 +10,7 @@ import { inWorkArea } from './mapping.js';
 export const COLOR_SEG = { redSat: 100, redVal: 50, blueSat: 60, closeMm: 1.5, minMm: 2 };
 
 const RESISTOR = 0;
-const LED = 2;
+const LED = 1;
 
 /**
  * OpenCV 约定的 HSV

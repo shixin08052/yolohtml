@@ -47,10 +47,6 @@ const RESISTOR = [
   [[160, 164, 168], rect(-11, 11, 0.6)],
   [[200, 161, 101], rect(-4, 4, 3)],
 ];
-const SCREW = [
-  [[140, 145, 150], rect(-4.75, 7.25, 2.5)],
-  [[140, 145, 150], rect(-7.25, -4.75, 4)],
-];
 // 躺平的 LED（与 parts.js 一致，本体居中）：本体 x ∈ [−4.25, 4.25]，灯头朝 +X，两根引脚从 −4.25 伸向 −X
 const LED = [
   [[170, 174, 178], (x, y) => x >= -24.25 && x <= -4 && Math.abs(Math.abs(y) - 1.27) <= 0.3],
@@ -87,18 +83,10 @@ describe('零件朝向估计', () => {
     }
   });
 
-  it('螺丝：主轴方向 + 螺帽在哪头（周期 360°）', () => {
-    for (const rot of [0, 20, -35, 100, 170, -120]) {
-      const r = estimateYaw(render(SCREW, rot), region(), 3, toBoard);
-      expect(r.reliable).toBe(true);
-      expect(angDiff(r.rotDeg, rot, 360)).toBeLessThan(3);
-    }
-  });
-
   it('躺平的 LED：检测框只框本体，外扩 10 mm 把引脚也算进来，得到主轴方向和灯头朝向（周期 360°）', () => {
     for (const rot of [0, 30, -70, 160, -120]) {
       const seed = bodyBox(8.5, 5.8, rot);
-      const r = estimateYaw(render(LED, rot), expandPoly(seed, 10 * PPM), 2, toBoard, { seed });
+      const r = estimateYaw(render(LED, rot), expandPoly(seed, 10 * PPM), 1, toBoard, { seed });
       expect(r.reliable).toBe(true);
       expect(angDiff(r.rotDeg, rot, 360)).toBeLessThan(3);
     }
@@ -106,20 +94,20 @@ describe('零件朝向估计', () => {
 
   it('只看本体框（不外扩）时 LED 长宽比不够，判为不可靠', () => {
     const seed = bodyBox(8.5, 5.8, 30);
-    const r = estimateYaw(render(LED, 30), seed, 2, toBoard, { seed });
+    const r = estimateYaw(render(LED, 30), seed, 1, toBoard, { seed });
     expect(r === null || r.reliable === false).toBe(true);
   });
 
   it('外扩区域里有别的零件（不相连）时不受影响', () => {
-    // 旁边 8 mm 处放一个电容（Φ8 的圆）
+    // 旁边 8 mm 处有一团别的东西（Φ8 的圆）
     const cap = [[[60, 90, 160], (X, Y) => Math.hypot(X - 50, Y - 62) < 4]];
     for (const rot of [0, 30]) {
       const seed = bodyBox(8.5, 5.8, rot);
       const img = render(LED, rot, { extra: cap });
-      const r = estimateYaw(img, expandPoly(seed, 10 * PPM), 2, toBoard, { seed });
+      const r = estimateYaw(img, expandPoly(seed, 10 * PPM), 1, toBoard, { seed });
       expect(angDiff(r.rotDeg, rot, 360)).toBeLessThan(3);
-      // 不用 seed 时会被电容带偏
-      const bad = estimateYaw(img, expandPoly(seed, 10 * PPM), 2, toBoard);
+      // 不用 seed 时会被它带偏
+      const bad = estimateYaw(img, expandPoly(seed, 10 * PPM), 1, toBoard);
       expect(angDiff(bad.rotDeg, rot, 360)).toBeGreaterThan(3);
     }
   });
@@ -133,18 +121,19 @@ describe('零件朝向估计', () => {
     }
   });
 
-  it('正射图里零件沿视线被拉长 3 mm 时，电阻、螺丝的角度误差仍小于 8°', () => {
+  it('正射图里零件沿视线被拉长 3 mm 时，电阻、LED 的角度误差仍小于 8°', () => {
     for (const rot of [20, -35, 100]) {
       const smear = [0, 3]; // 沿 +Y（远离手机）
       const r0 = estimateYaw(render(RESISTOR, rot, { smear }), region(), 0, toBoard);
       expect(angDiff(r0.rotDeg, rot, 180)).toBeLessThan(8);
-      const r3 = estimateYaw(render(SCREW, rot, { smear }), region(), 3, toBoard);
-      expect(angDiff(r3.rotDeg, rot, 360)).toBeLessThan(8);
+      const seed = bodyBox(8.5, 5.8, rot);
+      const r1 = estimateYaw(render(LED, rot, { smear }), expandPoly(seed, 10 * PPM), 1, toBoard, { seed });
+      expect(angDiff(r1.rotDeg, rot, 360)).toBeLessThan(8);
     }
   });
 
-  it('圆形零件不估计；零件像素太少返回 null', () => {
-    expect(estimateYaw(render(RESISTOR, 0), region(), 1, toBoard)).toBeNull();
+  it('不认识的类别不估计；零件像素太少返回 null', () => {
+    expect(estimateYaw(render(RESISTOR, 0), region(), 5, toBoard)).toBeNull();
     expect(yawFromPoints([[0, 0], [1, 1]], 0)).toBeNull();
   });
 

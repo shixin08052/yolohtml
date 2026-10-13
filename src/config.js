@@ -16,12 +16,10 @@ export const WORK_AREA = { margin: 12, markerPadding: 5 };
 // 默认相机：iPhone 13 Pro 主摄
 export const CAMERA = { expectedFocal35: 26, refWidth: 4032, refHeight: 3024 };
 
-// 类别（高度为占位值，等实测后替换）
+// 类别：只有手头的两种元件（都躺平放置）。key 与模型类别名对应：模型输出的类别 ID 按名字换成这里的 ID
 export const CLASSES = [
-  { id: 0, key: 'resistor',  name: '色环电阻', heightMm: 3,  color: '#3f7fd0' }, // 蓝色金属膜电阻（与实物一致）
-  { id: 1, key: 'capacitor', name: '电解电容', heightMm: 12, color: '#3a3f4b' }, // 深灰外壳（与电阻的蓝色区分开）
-  { id: 2, key: 'led',       name: 'LED',      heightMm: 5.8, color: '#d94c4c' }, // 躺平放置
-  { id: 3, key: 'screw',     name: '螺丝',     heightMm: 4,  color: '#9aa0a6' },
+  { id: 0, key: 'resistor', name: '色环电阻', heightMm: 3,   color: '#3f7fd0' }, // 蓝色金属膜电阻（与实物一致）
+  { id: 1, key: 'led',      name: 'LED',      heightMm: 5.8, color: '#d94c4c' },
 ];
 
 // 机械臂：底座旋转 + 大臂 + 小臂 + 腕部俯仰 + 腕部转动，夹爪始终竖直向下，转动夹爪让两指对准零件
@@ -37,12 +35,10 @@ export const ARM = {
 // 料盒壁厚（mm）：盒底上表面高 BIN_WALL
 export const BIN_WALL = 2;
 
-// 料盒：每类一个，左右各 2 个（size 为 X 宽、Y 长、高，mm）
+// 料盒：每类一个，电阻在左、LED 在右（size 为 X 宽、Y 长、高，mm）
 export const BINS = [
-  { id: 0, cls: 0, center: [-40, 70],  size: [60, 66, 35] },
-  { id: 1, cls: 1, center: [-40, 140], size: [60, 66, 35] },
-  { id: 2, cls: 2, center: [337, 70],  size: [60, 66, 35] },
-  { id: 3, cls: 3, center: [337, 140], size: [60, 66, 35] },
+  { id: 0, cls: 0, center: [-40, 105], size: [60, 66, 35] },
+  { id: 1, cls: 1, center: [337, 105], size: [60, 66, 35] },
 ];
 
 // 检测：输入尺寸、置信度阈值、NMS 阈值（只用于原始输出）、同类去重阈值

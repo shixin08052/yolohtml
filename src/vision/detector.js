@@ -13,6 +13,26 @@ export class MockMissingError extends Error {
   }
 }
 
+/**
+ * 类别名 → 本项目的类别 ID（认 key 和中文名，不区分大小写）；对不上返回 -1
+ * @param {string} name
+ */
+export function classIdByName(name) {
+  const n = String(name ?? '').trim().toLowerCase();
+  return CLASSES.findIndex((c) => c.key === n || c.name.toLowerCase() === n);
+}
+
+/**
+ * 模型类别 ID → 本项目类别 ID 的对照表（按类别名对应）。模型里有、这里没有的类别（例如训练时留着的电容、螺丝）
+ * 对应 -1，检测结果里去掉。一个都对不上（官方 COCO 等）时返回 null，表示不是零件模型。
+ * @param {string[]} names 模型的类别名（按模型类别 ID 排列）
+ * @returns {number[]|null}
+ */
+export function modelClassMap(names) {
+  const map = names.map(classIdByName);
+  return map.some((i) => i >= 0) ? map : null;
+}
+
 /** 照片名 → 检测结果文件名：IMG_0001.HEIC → IMG_0001.detections.json */
 export function detectionsFileName(fileName) {
   const base = String(fileName || 'photo').replace(/\.[^./\\]+$/, '');
@@ -59,20 +79,29 @@ export function parseDetections(json, { width, height }) {
     sx = width / json.width;
     sy = height / json.height;
   }
-  return list.map((d, i) => {
-    const cls = Number(d.cls);
-    if (!CLASSES[cls]) throw new Error(`第 ${i + 1} 个检测的类别 ${d.cls} 无效`);
+  const out = [];
+  list.forEach((d, i) => {
+    // 有类别名时按名字认（predict_dump.py 的输出用的是模型的类别 ID，旧文件里还有已删除的类别），对不上的跳过；
+    // 没有类别名时直接用 cls
+    let cls = Number(d.cls);
+    if (d.name != null) {
+      cls = classIdByName(d.name);
+      if (cls < 0) return;
+    } else if (!CLASSES[cls]) {
+      throw new Error(`第 ${i + 1} 个检测的类别 ${d.cls} 无效`);
+    }
     if (!Array.isArray(d.box) || d.box.length !== 4 || !d.box.every(Number.isFinite)) {
       throw new Error(`第 ${i + 1} 个检测的 box 无效`);
     }
     const [a, b, c, e] = d.box;
-    return {
+    out.push({
       cls,
       name: CLASSES[cls].name,
       score: Number.isFinite(d.score) ? d.score : 1,
       box: [Math.min(a, c) * sx, Math.min(b, e) * sy, Math.max(a, c) * sx, Math.max(b, e) * sy],
-    };
+    });
   });
+  return out;
 }
 
 /** 合成图真值 → 检测结果（置信度 1）；跳过当前没有的类别（例如旧真值文件里已删除的类别） */
@@ -136,10 +165,14 @@ export function createOnnxDetector(modelUrl, { prefer = 'auto', names = null } =
       await this.init();
       const copy = await createImageBitmap(bitmap);
       const r = await call({ type: 'detect', bitmap: copy, scoreThreshold, iouThreshold, dedupIou }, [copy]);
-      // 零件模型用中文类别名；其他模型（官方 COCO）用模型自带的类别名
-      const partsModel = !names || names.length === CLASSES.length;
-      const label = (d) => ({ cls: d.cls, name: (partsModel ? CLASSES[d.cls]?.name : null) ?? names?.[d.cls] ?? String(d.cls), score: d.score, box: d.box });
-      return { ...r, raw: r.raw.map(label), dets: r.dets.map(label) };
+      // raw 保留模型自己的类别 ID 和类别名（与 predict_dump.py 的输出对照）；
+      // dets：零件模型按类别名换成本项目的类别 ID 和中文名，去掉这里没有的类别；其他模型（官方 COCO）保持原样
+      const map = names ? modelClassMap(names) : CLASSES.map((c) => c.id);
+      const own = (d) => ({ cls: d.cls, name: names?.[d.cls] ?? String(d.cls), score: d.score, box: d.box });
+      const dets = map
+        ? r.dets.filter((d) => map[d.cls] >= 0).map((d) => ({ ...own(d), cls: map[d.cls], name: CLASSES[map[d.cls]].name }))
+        : r.dets.map(own);
+      return { ...r, raw: r.raw.map(own), dets };
     },
     terminate() {
       worker.terminate();

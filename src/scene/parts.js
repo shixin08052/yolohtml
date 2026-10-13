@@ -1,6 +1,6 @@
 // 零件模型：每个类别用基础几何体拼成（步骤 3 合成图使用，步骤 10 的 3D 场景复用）。
 // 模型的局部坐标：原点在零件本体中心正下方的板面上；底板 X、Y、Z 分别对应 Three.js 的 x、−z、y。
-// 长条形零件（电阻、螺丝、LED，都是躺平放的）沿局部 X 方向放置，绕 Z 轴旋转 rotDeg 后摆到板上。
+// 长条形零件（电阻、LED，都是躺平放的）沿局部 X 方向放置，绕 Z 轴旋转 rotDeg 后摆到板上。
 // 检测框只框零件本体（不含电阻、LED 的引脚）：引脚是模型里固定的部分，知道本体中心和朝向就能摆出整个零件。
 // 引脚网格带 userData.lead = true，计算本体包围盒时排除。
 import * as THREE from 'three';
@@ -14,9 +14,7 @@ import { toThree } from '../math/coords.js';
  */
 export const PART_SIZE = {
   0: { lx: 8, ly: 3, h: 3 },       // 色环电阻：本体 Φ3×8（另有两根引脚，各伸出 7 mm）
-  1: { lx: 8, ly: 8, h: 12 },      // 电解电容：Φ8×12
-  2: { lx: 8.5, ly: 5.8, h: 5.8 }, // LED（躺平）：Φ5.8 底边 + Φ5 灯体 + 半球头，灯头朝局部 +X（另有两根引脚 20 / 18 mm 伸向 −X）
-  3: { lx: 14.5, ly: 4, h: 4 },    // 螺丝（横躺）：杆 Φ2.5×12，圆头 Φ4×2.5
+  1: { lx: 8.5, ly: 5.8, h: 5.8 }, // LED（躺平）：Φ5.8 底边 + Φ5 灯体 + 半球头，灯头朝局部 +X（另有两根引脚 20 / 18 mm 伸向 −X）
 };
 
 /**
@@ -103,18 +101,10 @@ export function createPartMesh(cls) {
       break;
     }
     case 1: {
-      // 电解电容：竖立圆柱，顶面浅色（CylinderGeometry 的材质组：侧面、顶面、底面）
-      const topMat = new THREE.MeshStandardMaterial({ color: '#c8ccd2', metalness: 0.5, roughness: 0.4 });
-      const can = new THREE.Mesh(new THREE.CylinderGeometry(4, 4, 12, 40), [material(1), topMat, material(1)]);
-      can.position.y = 6;
-      g.add(can);
-      break;
-    }
-    case 2: {
       // LED（躺平，像实物那样侧放在桌上）：灯体靠底边撑起，轴心高 2.9；两根引脚从底边伸出、斜搭到桌面
       // 未平移前：底边 x ∈ [−2.5, −1.5]，灯体 [−1.5, 3.5]，半球头到 6.0，引脚到 −22.5；整体平移 −1.75 使本体居中
       const S = LED_SHIFT;
-      const mat = material(2, { roughness: 0.25, transparent: true, opacity: 0.92 });
+      const mat = material(1, { roughness: 0.25, transparent: true, opacity: 0.92 });
       const axisY = 2.9;
       g.add(lyingCylinder(2.9, 1, mat, -2 + S, axisY)); // 底边
       g.add(lyingCylinder(2.5, 5, mat, 1 + S, axisY)); // 灯体
@@ -128,13 +118,6 @@ export function createPartMesh(cls) {
         const p1 = new THREE.Vector3(-2.5 - len + S, 0.25, z);
         g.add(Object.assign(rod(p0, p1, 0.25, lead), { userData: { lead: true } }));
       }
-      break;
-    }
-    case 3: {
-      // 螺丝（横躺）：杆 + 圆头
-      const mat = material(3, { metalness: 0.45, roughness: 0.35 });
-      g.add(lyingCylinder(1.25, 12, mat, 1.25, 2));
-      g.add(lyingCylinder(2, 2.5, mat, -6, 2));
       break;
     }
     default:
