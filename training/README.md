@@ -87,6 +87,8 @@ python autolabel.py --images data/images --labels data/labels --preview data/pre
 
 新建 Colab 笔记本，**"修改 → 笔记本设置 → 硬件加速器"选 GPU**（免费版一般是 T4），然后依次运行下面的单元格。
 
+> 更省事：直接打开写好的笔记本 `training/colab_train.ipynb`（Colab 里"文件 → 打开笔记本 → GitHub"，或下载后"上传笔记本"），内容与下面第 3–5 节的单元格相同，从上到下运行即可。
+
 ```python
 # 单元格 1：确认 GPU、挂载 Google Drive
 !nvidia-smi
