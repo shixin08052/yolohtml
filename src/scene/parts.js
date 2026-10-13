@@ -15,8 +15,6 @@ export const PART_SIZE = {
   1: { lx: 8, ly: 8, h: 12 },      // 电解电容：Φ8×12
   2: { lx: 5, ly: 5, h: 9 },       // LED：Φ5，柱体 6.5 + 半球
   3: { lx: 14.5, ly: 4, h: 4 },    // 螺丝（横躺）：杆 Φ2.5×12，圆头 Φ4×2.5
-  4: { lx: 8, ly: 6.93, h: 3 },    // 螺母：外接圆 Φ8 的六棱柱，厚 3，孔 Φ3.4
-  5: { lx: 10, ly: 10, h: 1 },     // 垫片：外 Φ10，内 Φ5，厚 1
 };
 
 const material = (cls, opts = {}) =>
@@ -76,36 +74,6 @@ export function createPartMesh(cls) {
       const mat = material(3, { metalness: 0.45, roughness: 0.35 });
       g.add(lyingCylinder(1.25, 12, mat, 1.25, 2));
       g.add(lyingCylinder(2, 2.5, mat, -6, 2));
-      break;
-    }
-    case 4: {
-      // 螺母：带孔六棱柱（外接圆半径 4，角朝局部 X）
-      const shape = new THREE.Shape();
-      for (let i = 0; i < 6; i++) {
-        const a = (i * Math.PI) / 3;
-        const p = [4 * Math.cos(a), 4 * Math.sin(a)];
-        if (i === 0) shape.moveTo(...p);
-        else shape.lineTo(...p);
-      }
-      shape.closePath();
-      const hole = new THREE.Path();
-      hole.absarc(0, 0, 1.7, 0, Math.PI * 2, true);
-      shape.holes.push(hole);
-      const geo = new THREE.ExtrudeGeometry(shape, { depth: 3, bevelEnabled: false, curveSegments: 24 });
-      geo.rotateX(-Math.PI / 2); // 挤出方向朝上
-      g.add(new THREE.Mesh(geo, material(4, { metalness: 0.45, roughness: 0.4 })));
-      break;
-    }
-    case 5: {
-      // 垫片：薄圆环
-      const shape = new THREE.Shape();
-      shape.absarc(0, 0, 5, 0, Math.PI * 2, false);
-      const hole = new THREE.Path();
-      hole.absarc(0, 0, 2.5, 0, Math.PI * 2, true);
-      shape.holes.push(hole);
-      const geo = new THREE.ExtrudeGeometry(shape, { depth: 1, bevelEnabled: false, curveSegments: 40 });
-      geo.rotateX(-Math.PI / 2);
-      g.add(new THREE.Mesh(geo, material(5, { metalness: 0.45, roughness: 0.35 })));
       break;
     }
     default:

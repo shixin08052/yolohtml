@@ -45,18 +45,6 @@ const SCREW = [
   [[140, 145, 150], rect(-4.75, 7.25, 2.5)],
   [[140, 145, 150], rect(-7.25, -4.75, 4)],
 ];
-const hexInside = (x, y) => {
-  const r = Math.hypot(x, y);
-  if (r < 1.7) return false;
-  // 外接圆半径 4、角朝 0°：到各边的距离 ≤ 4·cos30°
-  for (let k = 0; k < 6; k++) {
-    const t = ((k + 0.5) * Math.PI) / 3;
-    if (x * Math.cos(t) + y * Math.sin(t) > 4 * Math.cos(Math.PI / 6)) return false;
-  }
-  return true;
-};
-const NUT = [[[110, 116, 124], hexInside]];
-
 /** 零件周围 30×30 mm 的区域（图像像素） */
 const region = () => [[50 - 15, 50 + 15], [50 + 15, 50 + 15], [50 + 15, 50 - 15], [50 - 15, 50 - 15]].map(toPx);
 
@@ -83,14 +71,6 @@ describe('零件朝向估计', () => {
     }
   });
 
-  it('螺母：角的方向（周期 60°）', () => {
-    for (const rot of [0, 15, -20, 28]) {
-      const r = estimateYaw(render(NUT, rot), region(), 4, toBoard);
-      expect(r.reliable).toBe(true);
-      expect(angDiff(r.rotDeg, rot, 60)).toBeLessThan(4);
-    }
-  });
-
   it('正射图里零件沿视线被拉长 3 mm 时，电阻、螺丝的角度误差仍小于 8°', () => {
     for (const rot of [20, -35, 100]) {
       const smear = [0, 3]; // 沿 +Y（远离手机）
@@ -102,7 +82,7 @@ describe('零件朝向估计', () => {
   });
 
   it('圆形零件不估计；零件像素太少返回 null', () => {
-    expect(estimateYaw(render(NUT, 0), region(), 1, toBoard)).toBeNull();
+    expect(estimateYaw(render(RESISTOR, 0), region(), 1, toBoard)).toBeNull();
     expect(yawFromPoints([[0, 0], [1, 1]], 0)).toBeNull();
   });
 

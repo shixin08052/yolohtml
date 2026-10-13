@@ -2,12 +2,11 @@
 // 检测框是轴对齐的矩形，分不出斜放的角度，所以直接看照片：在底板正射图（俯视、毫米比例）上
 // 取检测框对应的区域，按框外一圈纸面的颜色把零件像素分出来，再看零件像素的形状：
 // - 长条零件（电阻、螺丝）：主轴方向（二阶矩）；螺丝再比较两端的"粗细"判断螺帽在哪头
-// - 螺母：六棱柱，轮廓的 6 次谐波给出角的方向（周期 60°）
-// - 圆形零件（电容、LED、垫片）没有朝向
+// - 圆形零件（电容、LED）没有朝向
 // 正射图把有高度的零件沿视线往后"拉长"了一点，但电阻、螺丝只有 3–4 mm 高，影响不大。
 
 /** 需要估计朝向的类别及方式 */
-const MODE = { 0: 'axis', 3: 'screw', 4: 'hex' };
+const MODE = { 0: 'axis', 3: 'screw' };
 
 /** 中值 */
 function median(a) {
@@ -92,8 +91,8 @@ const wrap = (a, period) => {
  * 由零件像素（底板坐标）估计朝向
  * @param {number[][]} pts
  * @param {number} cls
- * @returns {{ rotDeg: number, reliable: boolean, elong?: number, headRatio?: number, hexStrength?: number }|null}
- *   rotDeg：模型绕 Z 轴的转角（与 parts.js 的模型约定一致：长轴沿局部 X、螺帽在局部 −X、螺母的角朝局部 X）
+ * @returns {{ rotDeg: number, reliable: boolean, elong?: number, headRatio?: number }|null}
+ *   rotDeg：模型绕 Z 轴的转角（与 parts.js 的模型约定一致：长轴沿局部 X、螺帽在局部 −X）
  */
 export function yawFromPoints(pts, cls) {
   const mode = MODE[cls];
@@ -107,25 +106,6 @@ export function yawFromPoints(pts, cls) {
   }
   mx /= n;
   my /= n;
-
-  if (mode === 'hex') {
-    // r⁴ 加权突出六个角；6 次谐波的辐角 ÷ 6 = 角的方向
-    let re = 0;
-    let im = 0;
-    let wsum = 0;
-    for (const [x, y] of pts) {
-      const dx = x - mx;
-      const dy = y - my;
-      const r2 = dx * dx + dy * dy;
-      const w = r2 * r2;
-      const a = 6 * Math.atan2(dy, dx);
-      re += w * Math.cos(a);
-      im += w * Math.sin(a);
-      wsum += w;
-    }
-    const strength = Math.hypot(re, im) / (wsum || 1);
-    return { rotDeg: wrap(deg(Math.atan2(im, re)) / 6, 60), reliable: strength > 0.02, hexStrength: strength };
-  }
 
   let sxx = 0;
   let syy = 0;

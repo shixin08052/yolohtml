@@ -5,7 +5,7 @@ import { CLASSES } from '../src/config.js';
 const image = { fileName: 'IMG_0001.HEIC', width: 4032, height: 3024 };
 const dets = [
   { cls: 1, name: CLASSES[1].name, score: 0.934, box: [100.04, 200.06, 180.5, 290] },
-  { cls: 5, name: CLASSES[5].name, score: 1, box: [1000, 1200, 1060, 1250] },
+  { cls: 2, name: CLASSES[2].name, score: 1, box: [1000, 1200, 1060, 1250] },
 ];
 
 describe('检测结果文件', () => {
@@ -44,7 +44,7 @@ describe('检测结果文件', () => {
   });
 
   it('类别或框无效时报错', () => {
-    expect(() => parseDetections([{ cls: 9, box: [0, 0, 1, 1] }], image)).toThrow(/类别/);
+    expect(() => parseDetections([{ cls: 4, box: [0, 0, 1, 1] }], image)).toThrow(/类别/);
     expect(() => parseDetections([{ cls: 1, box: [0, 0, 1] }], image)).toThrow(/box/);
     expect(() => parseDetections({ foo: 1 }, image)).toThrow(/detections/);
   });
@@ -53,6 +53,8 @@ describe('检测结果文件', () => {
     const truth = { parts: [{ cls: 3, x: 1, y: 2, heightMm: 4, box: [1, 2, 3, 4] }] };
     expect(detectionsFromTruth(truth)).toEqual([{ cls: 3, name: CLASSES[3].name, score: 1, box: [1, 2, 3, 4] }]);
     expect(await detect(image, { truth })).toEqual(detectionsFromTruth(truth));
+    // 已删除的类别被跳过
+    expect(detectionsFromTruth({ parts: [...truth.parts, { cls: 5, x: 0, y: 0, heightMm: 1, box: [0, 0, 1, 1] }] })).toHaveLength(1);
     await expect(detect(image, { mode: 'onnx' })).rejects.toThrow(/步骤 14/);
   });
 });

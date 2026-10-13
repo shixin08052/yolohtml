@@ -87,7 +87,7 @@ export function poseTruthError(pose, truth) {
  * @param {import('../state.js').Part[]} parts
  * @param {import('../state.js').GroundTruth} truth
  * @param {number} [maxDist=20]
- * 有朝向的零件（电阻周期 180°、螺丝 360°、螺母 60°）同时统计朝向误差（真值带 rotDeg 时）
+ * 有朝向的零件（电阻周期 180°、螺丝 360°）同时统计朝向误差（真值带 rotDeg 时）
  * @returns {{ plane: {mean:number, max:number}|null, parallax: {mean:number, max:number}|null,
  *             yaw: {mean:number, max:number, n:number}|null,
  *             matched: number, unmatchedParts: number, missedTruth: number }}
@@ -106,7 +106,7 @@ export function partsTruthError(parts, truth, maxDist = 20) {
   const plane = [];
   const parallax = [];
   const yaw = [];
-  const YAW_PERIOD = { 0: 180, 3: 360, 4: 60 };
+  const YAW_PERIOD = { 0: 180, 3: 360 };
   for (const { p, j, d } of pairs) {
     if (d > maxDist || usedP.has(p) || usedT.has(j)) continue;
     usedP.add(p);

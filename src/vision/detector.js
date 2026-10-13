@@ -74,9 +74,11 @@ export function parseDetections(json, { width, height }) {
   });
 }
 
-/** 合成图真值 → 检测结果（置信度 1） */
+/** 合成图真值 → 检测结果（置信度 1）；跳过当前没有的类别（例如旧真值文件里已删除的类别） */
 export function detectionsFromTruth(truth) {
-  return truth.parts.map((p) => ({ cls: p.cls, name: CLASSES[p.cls].name, score: 1, box: [...p.box] }));
+  return truth.parts
+    .filter((p) => CLASSES[p.cls])
+    .map((p) => ({ cls: p.cls, name: CLASSES[p.cls].name, score: 1, box: [...p.box] }));
 }
 
 /**

@@ -119,7 +119,7 @@ export function createWorld(container) {
 
   /**
    * 默认视角的相机位置与目标点（不应用）。
-   * - 没有手机时：从右侧偏前（方位 62°、仰角 48°）看：机械臂立在底板前方，从正面或右前方看会挡住底板
+   * - 只有底板时：从操作者一侧（−Y）、仰角 50° 看向底板中心（机械臂在底板远端，不挡视线）
    * - 有手机时（全景）：从右前方斜看（方位 40°、仰角 28°），让底板和手机都在画面里
    * 相机距离按画面宽高比计算，保证所有要看的点都在视场内并留出边距。
    * @param {number} [aspect] 画面宽高比（默认取当前相机）
@@ -127,8 +127,8 @@ export function createWorld(container) {
    */
   function getDefaultView(aspect = camera.aspect) {
     const pts = [...basePoints, ...(focusPoints ?? [])];
-    const az = ((focusPoints ? focusAzimuth : 62) * Math.PI) / 180;
-    const el = ((focusPoints ? 28 : 48) * Math.PI) / 180;
+    const az = ((focusPoints ? focusAzimuth : 0) * Math.PI) / 180;
+    const el = ((focusPoints ? 28 : 50) * Math.PI) / 180;
     // 目标点：所有点包围盒的中心
     const lo = [0, 1, 2].map((i) => Math.min(...pts.map((p) => p[i])));
     const hi = [0, 1, 2].map((i) => Math.max(...pts.map((p) => p[i])));

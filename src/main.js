@@ -35,7 +35,7 @@ import { partsTruthError } from './vision/evaluate.js';
 import { CLASSES, WORK_AREA, ARM, BINS } from './config.js';
 import { createArm } from './scene/arm.js';
 import { createBins } from './scene/bins.js';
-import { ikWorld, fkWorld, fkChain, fromBase } from './robot/ik.js';
+import { ikWorld, fkWorld, fkChain, fromBase, pathClear } from './robot/ik.js';
 import * as THREE from 'three';
 import { toThree } from './math/coords.js';
 
@@ -143,7 +143,7 @@ world.scene.add(bins.group);
     for (const dx of [-1, 1]) for (const dy of [-1, 1]) pts.push([cx + (dx * sx) / 2, cy + (dy * sy) / 2, h]);
   }
   const [bx, by] = ARM.base;
-  pts.push([bx - 50, by - 50, 0], [bx + 50, by - 50, 0]);
+  pts.push([bx - 50, by + 50, 0], [bx + 50, by + 50, 0]);
   const chain = fkChain(arm.homeAngles, ARM);
   for (const k of ['shoulder', 'elbow', 'wrist']) pts.push(fromBase(chain[k], ARM));
   world.setBasePoints(pts);
@@ -212,9 +212,10 @@ function renderArmSection(r) {
     html += `<dt>目标</dt><dd>${r.target.map((x) => fmt(x, 1)).join(', ')} mm</dd>`;
     html += `<dt>指尖（fk）</dt><dd>${r.tip.map((x) => fmt(x, 3)).join(', ')} mm</dd>`;
     html += `<dt>误差</dt><dd><span class="${e < 0.1 ? 'ok' : 'bad'}">${e < 0.001 ? e.toExponential(1) : fmt(e, 3)} mm</span></dd>`;
-    html += `<dt>关节角 θ₀ θ₁ θ₂ θ₃</dt><dd>${r.angles.map(d).join(' · ')}</dd>`;
+    html += `<dt>关节角 θ₀ θ₁ θ₂ θ₃ θ₄</dt><dd>${r.angles.map(d).join(' · ')}</dd>`;
     html += `<dt>夹爪俯仰</dt><dd>${d(r.angles[1] + r.angles[2] + r.angles[3])}（−90° 为竖直向下）</dd>`;
     html += '</dl>';
+    if (r.viaHome) html += '<p class="muted small">直接过去途中会碰到自身，先回到初始姿态再过去。</p>';
   }
   html += '<div class="sec-actions"><button type="button" class="btn btn-small" id="btn-arm-home">回到初始姿态</button></div>';
   body.innerHTML = html;
@@ -235,8 +236,16 @@ function armGoto(X, Y) {
   }
   const tip = fkWorld(s.angles, ARM);
   const err = Math.hypot(tip[0] - X, tip[1] - Y, tip[2] - target[2]);
-  renderArmSection({ reachable: true, target, tip, err, angles: s.angles });
-  arm.animateTo(s.angles).catch(() => {});
+  // 关节空间直线插值途中会碰到自身时，先回初始姿态再过去
+  const cur = arm.angles;
+  const viaHome = !pathClear(cur, s.angles, ARM);
+  if (viaHome && !(pathClear(cur, arm.homeAngles, ARM) && pathClear(arm.homeAngles, s.angles, ARM))) {
+    armTarget.show(target, false);
+    renderArmSection({ reachable: false, target, reason: '找不到不碰撞的运动路径' });
+    return;
+  }
+  renderArmSection({ reachable: true, target, tip, err, angles: s.angles, viaHome });
+  arm.animatePath(viaHome ? [arm.homeAngles, s.angles] : [s.angles]).catch(() => {});
 }
 
 // 区分点击与拖动（拖动是在转视角）
@@ -803,7 +812,7 @@ function applyDetections() {
 }
 
 /**
- * 用照片估计电阻、螺丝、螺母的朝向（检测框是轴对齐的，看不出角度）：
+ * 用照片估计电阻、螺丝的朝向（检测框是轴对齐的，看不出角度）：
  * 在底板正射图上取检测框对应的区域分出零件像素，按形状求角度；估计不可靠时沿用 mapping 的 0° / 90° 粗判
  */
 function refineYaw(parts) {
@@ -843,12 +852,12 @@ function renderDetectSection(mapping) {
   } else {
     const { parts, dropped } = mapping;
     html += `<p class="summary">检测到 <b>${parts.length}</b> 个零件<span class="muted">（来源：${DET_SOURCE_LABELS[detResult.source]}）</span></p>`;
-    const oriented = parts.filter((p) => [0, 3, 4].includes(p.cls));
+    const oriented = parts.filter((p) => [0, 3].includes(p.cls));
     const fromPhoto = oriented.filter((p) => p.yawSource === 'photo').length;
     const counts = CLASSES.map((c) => [c.name, parts.filter((p) => p.cls === c.id).length]).filter(([, n]) => n);
     if (counts.length) html += '<dl class="kv">' + counts.map(([k, n]) => `<dt>${k}</dt><dd>${n}</dd>`).join('') + '</dl>';
     if (oriented.length) {
-      html += `<p class="muted small">朝向：${fromPhoto} / ${oriented.length} 个电阻、螺丝、螺母按照片估计${fromPhoto < oriented.length ? '，其余看不清，按检测框粗判 0° / 90°' : ''}。</p>`;
+      html += `<p class="muted small">朝向：${fromPhoto} / ${oriented.length} 个电阻、螺丝按照片估计${fromPhoto < oriented.length ? '，其余看不清，按检测框粗判 0° / 90°' : ''}。</p>`;
     }
     html += `<label class="check toggle-row"><input type="checkbox" id="parallax-toggle"${parallaxOn ? ' checked' : ''} /> 视差修正</label>`;
     html += '<p class="muted small">零件有高度，斜拍时检测框中心对应零件半高处；修正后按半高求交，不修正则直接落到板面。</p>';

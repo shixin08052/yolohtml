@@ -22,13 +22,11 @@ export const CLASSES = [
   { id: 1, key: 'capacitor', name: '电解电容', heightMm: 12, color: '#3b6fb6' },
   { id: 2, key: 'led',       name: 'LED',      heightMm: 9,  color: '#d94c4c' },
   { id: 3, key: 'screw',     name: '螺丝',     heightMm: 4,  color: '#9aa0a6' },
-  { id: 4, key: 'nut',       name: '螺母',     heightMm: 3,  color: '#7d8590' },
-  { id: 5, key: 'washer',    name: '垫片',     heightMm: 1,  color: '#b0b6bd' },
 ];
 
-// 机械臂：底座旋转 + 大臂 + 小臂 + 腕部俯仰，夹爪始终竖直向下
+// 机械臂：底座旋转 + 大臂 + 小臂 + 腕部俯仰 + 腕部转动，夹爪始终竖直向下，转动夹爪让两指对准零件
 export const ARM = {
-  base: [148.5, -80, 0], // 底板前边中点外侧
+  base: [148.5, 290, 0], // 底板远端（远离操作者一侧）中点外侧，不挡拍照视线
   L0: 80,                // 底座高
   L1: 200,               // 大臂
   L2: 180,               // 小臂
@@ -36,14 +34,12 @@ export const ARM = {
   approach: 60,          // 抓取 / 放置前在目标正上方的悬停高度
 };
 
-// 料盒：每类一个，左右各 3 个（size 为 X 宽、Y 长、高，mm）
+// 料盒：每类一个，左右各 2 个（size 为 X 宽、Y 长、高，mm）
 export const BINS = [
-  { id: 0, cls: 0, center: [-40, 35],  size: [60, 66, 35] },
-  { id: 1, cls: 1, center: [-40, 105], size: [60, 66, 35] },
-  { id: 2, cls: 2, center: [-40, 175], size: [60, 66, 35] },
-  { id: 3, cls: 3, center: [337, 35],  size: [60, 66, 35] },
-  { id: 4, cls: 4, center: [337, 105], size: [60, 66, 35] },
-  { id: 5, cls: 5, center: [337, 175], size: [60, 66, 35] },
+  { id: 0, cls: 0, center: [-40, 70],  size: [60, 66, 35] },
+  { id: 1, cls: 1, center: [-40, 140], size: [60, 66, 35] },
+  { id: 2, cls: 2, center: [337, 70],  size: [60, 66, 35] },
+  { id: 3, cls: 3, center: [337, 140], size: [60, 66, 35] },
 ];
 
 export const DETECT = { imgsz: 1024, scoreThreshold: 0.4, iouThreshold: 0.5 };
