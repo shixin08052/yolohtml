@@ -3,6 +3,7 @@
 > 本文档交给 Claude Code 执行。请先完整阅读第 0–6 节，再从第 7 节的步骤 1 开始。
 >
 > **变更记录：**
+> - 2026-10-13 电阻改为蓝色（与实物的蓝色金属膜电阻一致），电解电容改为深灰以免撞色；合成图重新生成。检测增加"颜色分割补漏"：YOLO 之外再按颜色（红色 LED、蓝色电阻）找零件，YOLO 没框到的补上。3D 板面默认改为纯色（干净的打印版面），照片贴图改为可选。
 > - 2026-10-13 步骤 13 由另一个对话在 Colab 上完成（分支 claude/upbeat-johnson-d955qn，已合并）：本次只标注、训练了电阻和 LED 两类，测试集 mAP50 0.995；相机标定 RMS 1.32 px。
 > - 2026-10-13 检测框改为只框零件本体（不含电阻、LED 的引脚）：模型原点改在本体中心，`PART_SIZE` 改为本体尺寸，合成图真值框只投影本体（重新生成）；夹取点就是框中心（去掉 LED 夹取偏移）；朝向估计在框外扩 10 mm 的范围里找与框内零件相连的像素（把一段引脚算进来）；底板贴图按模型和朝向把照片里的引脚也擦掉。
 > - 2026-10-13 步骤 13：训练改在 Google Colab 上进行（原为 AutoDL）；`training/README.md` 写成交给另一个对话执行的任务文档，拍照、标注、相机标定在用户本地完成。
@@ -87,6 +88,7 @@ sorting-twin/
 │  │  ├─ pose.js              # 模块 3
 │  │  ├─ detector.js          # 模块 4：mock / onnx 两种模式
 │  │  ├─ detector.worker.js
+│  │  ├─ colorSeg.js          # 颜色分割补漏（红色 LED、蓝色电阻），补 YOLO 漏检
 │  │  └─ mapping.js           # 模块 4：像素 → 底板坐标
 │  ├─ scene/
 │  │  ├─ world.js, board.js, parts.js, bins.js
@@ -183,8 +185,8 @@ export const CAMERA = { expectedFocal35: 26, refWidth: 4032, refHeight: 3024 };
 
 // 类别（高度为占位值，等实测后替换）
 export const CLASSES = [
-  { id: 0, key: 'resistor',  name: '色环电阻', heightMm: 3,  color: '#c8a165' },
-  { id: 1, key: 'capacitor', name: '电解电容', heightMm: 12, color: '#3b6fb6' },
+  { id: 0, key: 'resistor',  name: '色环电阻', heightMm: 3,  color: '#3f7fd0' }, // 蓝色金属膜电阻（与实物一致）
+  { id: 1, key: 'capacitor', name: '电解电容', heightMm: 12, color: '#3a3f4b' }, // 深灰外壳（与电阻的蓝色区分开）
   { id: 2, key: 'led',       name: 'LED',      heightMm: 5.8, color: '#d94c4c' }, // 躺平放置
   { id: 3, key: 'screw',     name: '螺丝',     heightMm: 4,  color: '#9aa0a6' },
 ];
@@ -598,6 +600,8 @@ export const DETECT = { imgsz: 1024, scoreThreshold: 0.4, iouThreshold: 0.5 };
   - 推理结果做同类去重（`DETECT.dedupIou = 0.7`）：步骤 13 的模型偶尔对同一零件出两个框（训练报告），这两个框的分数对输入的微小差异很敏感。mock 检测文件同样去重。
   - 信息面板：检测方式（模型推理 / mock）、模型（零件模型 / 官方 COCO 调试）、后端（自动 / 仅 WASM）可切换；显示推理后端、模型加载耗时（下载 + 初始化）、推理耗时（前处理 + 推理 + 后处理）、检测数量（原始 → 去重后）。合成图默认用真值框（mock），其他照片默认模型推理。
   - 示例列表加入 3 张真实照片（`public/samples/real/`，步骤 13 的测试集）。
+  - 颜色分割补漏（`src/vision/colorSeg.js`，做法同 `training/autolabel.py`）：在标定用的缩小图上，只在零件区域内取红色（LED）、蓝色（电阻）像素，闭运算后取连通块外接框。颜色分割几乎不漏但框常偏大，所以以 YOLO 为准：颜色框附近（IoU > 0.1 或中心互相落入）没有任何 YOLO 框时才补上（置信度记 0.5，调试视图里画虚线、标"颜色"）。面板可关闭，只对零件模型生效。实测 3 张真实照片和合成图：颜色候选数与 YOLO 去重后的框数相同、类别一致、IoU 0.81–0.98，没有多补；耗时 0.3–1 秒。
+  - 3D 板面（工具栏"板面"）：默认"纯色"——用标定板的设计版面（白纸 + 码 + 版面文字）按实测纸张位置贴上，照片里的阴影、折痕都不出现；"照片"为擦掉零件后的照片正射图，"照片原图"不擦。
   - 实测（无头 Chrome）：3 张真实照片去重前的原始输出与 `predict_dump.py` 框数相同，坐标最大差 0.16 像素、置信度最大差 0.03；官方 COCO 模型在 bus.jpg 上一致（最大差 0.34 像素）；WebGPU（SwiftShader 软件模拟）与 WASM 结果逐项相同。单元测试另在 Node 里用真实模型跑这 3 张照片（jpeg-js 解码，与 PIL 解码有细微差异，所以比较去重后的结果）。
 
 **验收标准：**

@@ -23,6 +23,7 @@ import { drawPose } from './ui/poseOverlay.js';
 import { boardHomography, rectify, invert3 } from './vision/homography.js';
 import { boxToTexture, erasePolygons } from './vision/erase.js';
 import { estimateYaw, expandPoly } from './vision/orientation.js';
+import { segmentParts, fuseDetections } from './vision/colorSeg.js';
 import { measurePaper, EDGE_NAMES, CHECK_LIMITS } from './vision/boardCheck.js';
 import { markerCornersWorld, markerRectOnPage, paperFrame, designFrame, frameMatrix } from './vision/boardLayout.js';
 import { BOARD, MARKERS } from './config.js';
@@ -55,8 +56,11 @@ const world = createWorld($('#three-container'));
 
 const board = createBoard();
 world.scene.add(board.group);
+/** 打印版面（页面坐标，4 px/mm）：没有照片时直接贴；"纯色"板面也用它，按实测纸张位置重新排 */
+const DESIGN_PX_PER_MM = 4;
+const designRaster = renderBoardToCanvas(buildBoardSVG(), DESIGN_PX_PER_MM);
 // 还没有照片时，顶面先贴打印版面
-renderBoardToCanvas(buildBoardSVG(), 4)
+designRaster
   .then((c) => {
     if (!store.state.calib) {
       board.setPaper(c, designFrame());
@@ -316,9 +320,21 @@ function updateBoard3D() {
  * 重新生成底板贴图：照片里的零件被压到板面上、沿视线往后偏，会在 3D 模型旁形成重影，
  * 默认按检测框把它们擦掉（勾选"板面原图"时保留）
  */
+let skinToken = 0;
 function refreshBoardTexture() {
   if (!boardTex) return;
   const { canvas, frame, toLocal } = boardTex;
+  const skin = $('#board-skin').value;
+  const token = ++skinToken;
+  if (skin === 'plain') {
+    // 纯色：干净的打印版面（白纸 + 码），按实测纸张位置摆放；照片里的阴影、污渍都不要
+    designRaster.then((design) => {
+      if (token !== skinToken || boardTex?.frame !== frame) return;
+      board.setPaper(plainTexture(design, boardTex), frame);
+      world.requestRender();
+    });
+    return;
+  }
   const dets = detResult?.bitmap === boardTex.bitmap ? detResult.detections : [];
   // 每次都在副本上处理，原始正射图保持不变
   const tex = document.createElement('canvas');
@@ -326,7 +342,7 @@ function refreshBoardTexture() {
   tex.height = canvas.height;
   const ctx = tex.getContext('2d', { willReadFrequently: true });
   ctx.drawImage(canvas, 0, 0);
-  if (dets.length && !$('#show-raw-board').checked) {
+  if (dets.length && skin === 'photo') {
     const img = ctx.getImageData(0, 0, tex.width, tex.height);
     const polys = dets.map((d) => boxToTexture(d.box, toLocal, { pxPerMm: BOARD_TEX_PX_PER_MM, paperH: frame.h }));
     // 检测框只框本体：照片里的引脚按模型和估计的朝向推出位置，一并擦掉（朝向没估计出来的不擦）
@@ -349,7 +365,27 @@ function refreshBoardTexture() {
   board.setPaper(fillOutside(tex), frame);
   world.requestRender();
 }
-$('#show-raw-board').addEventListener('change', refreshBoardTexture);
+$('#board-skin').addEventListener('change', refreshBoardTexture);
+
+/**
+ * "纯色"板面贴图：把打印版面（页面坐标）画到纸张局部坐标的贴图上。
+ * 打印机会把内容整体印偏，纸张位置按实测（boardTex.frame），码和文字的位置按底板坐标，所以要换算：
+ * 版面像素 → 页面 mm → 底板 mm → 纸张局部 mm → 贴图像素（都是仿射，合成一个矩阵交给 canvas）
+ */
+function plainTexture(design, { frame, toBoard }) {
+  const k = BOARD_TEX_PX_PER_MM;
+  const tex = document.createElement('canvas');
+  tex.width = Math.round(frame.w * k);
+  tex.height = Math.round(frame.h * k);
+  const ctx = tex.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, tex.width, tex.height);
+  const designToBoard = [[1 / DESIGN_PX_PER_MM, 0, 0], [0, -1 / DESIGN_PX_PER_MM, BOARD.height], [0, 0, 1]];
+  const m = mul3(invert3(toBoard), designToBoard); // 版面像素 → 贴图像素
+  ctx.setTransform(m[0][0], m[1][0], m[0][1], m[1][1], m[0][2], m[1][2]);
+  ctx.drawImage(design, 0, 0);
+  return tex;
+}
 
 const tabs = createTabs($('.main'), (view) => {
   if (view === 'three') {
@@ -598,7 +634,8 @@ async function runCalibration({ force = false } = {}) {
       const paper = { corners: m.corners, edges: m.edges, reasons: m.reasons, widthMm: m.widthMm, heightMm: m.heightMm, scaleX: m.scaleX, scaleY: m.scaleY };
       calib = { markers, H: hom.H, Hinv: hom.Hinv, reprojErrPx: hom.reprojErrPx, rectified, paper };
     }
-    markerResult = { bitmap: image.bitmap, markers, ms, hom, calib };
+    // 缩小图（长边 1600）留着给颜色分割用，不必再读一遍全尺寸照片
+    markerResult = { bitmap: image.bitmap, markers, ms, hom, calib, small: { imageData: det.imageData, scale: det.scale } };
   }
   $('#markers-toggle').hidden = false;
   updateMarkerOverlay();
@@ -720,7 +757,30 @@ store.on('stage:posed', () => {
 const DET_SOURCE_LABELS = { truth: '合成图真值框', mock: 'mock 检测文件', onnx: '模型推理（ONNX）', manual: '手动框选', file: '载入的检测文件', none: '无' };
 
 /** 检测设置：mode 为 null 时自动选（合成图用真值框，其他照片用模型推理） */
-const detSettings = { mode: null, model: 'parts', prefer: 'auto' };
+const detSettings = { mode: null, model: 'parts', prefer: 'auto', colorAssist: true };
+
+/**
+ * 颜色分割（在标定时的缩小图上做），返回原图像素上的候选框
+ * @returns {{ parts: {cls:number, box:number[]}[], ms: number }|null}
+ */
+function colorCandidates() {
+  const { calib, image } = store.state;
+  const small = markerResult?.bitmap === image?.bitmap ? markerResult.small : null;
+  if (!calib || !small) return null;
+  const t0 = performance.now();
+  const k = small.scale;
+  const Hs = [calib.H[0].map((x) => x * k), calib.H[1].map((x) => x * k), calib.H[2]];
+  // 板中心附近 1 mm 对应的像素数
+  const p = (X, Y) => {
+    const w = Hs[2][0] * X + Hs[2][1] * Y + Hs[2][2];
+    return [(Hs[0][0] * X + Hs[0][1] * Y + Hs[0][2]) / w, (Hs[1][0] * X + Hs[1][1] * Y + Hs[1][2]) / w];
+  };
+  const a = p(BOARD.width / 2 - 5, BOARD.height / 2);
+  const b = p(BOARD.width / 2 + 5, BOARD.height / 2);
+  const pxPerMm = Math.hypot(b[0] - a[0], b[1] - a[1]) / 10;
+  const parts = segmentParts(small.imageData, invert3(Hs), pxPerMm).map((c) => ({ ...c, box: c.box.map((v) => v / k) }));
+  return { parts, ms: performance.now() - t0 };
+}
 const detMode = () => detSettings.mode ?? (store.state.truth ? 'mock' : 'onnx');
 
 /** 当前照片的检测结果（换内参来源时沿用，手动框选的修改也存在这里） */
@@ -806,7 +866,18 @@ async function runDetect({ force = false } = {}) {
     }
     try {
       detections = await detect(image, { mode, truth, model: detSettings.model, prefer: detSettings.prefer });
-      if (mode === 'onnx') onnx = lastOnnxRun;
+      if (mode === 'onnx') {
+        onnx = lastOnnxRun;
+        // 颜色分割补漏：YOLO 没框到、颜色分割找到的零件补上（只对零件模型）
+        if (detSettings.colorAssist && detSettings.model === 'parts') {
+          const c = colorCandidates();
+          if (c) {
+            const fused = fuseDetections(detections, c.parts, { names: (cls) => CLASSES[cls].name });
+            detections = fused.dets;
+            onnx = { ...onnx, color: { candidates: c.parts.length, added: fused.added, ms: c.ms } };
+          }
+        }
+      }
     } catch (err) {
       if (err instanceof MockMissingError) {
         note = `没有找到 mock 检测文件 ${detectionsFileName(image.fileName)}。可以点"框选"在照片上手动框出零件，保存后下次用"载入"读回。`;
@@ -824,7 +895,7 @@ async function runDetect({ force = false } = {}) {
     boxEditor.setBoxes(detections);
     if (onnx) {
       const t = onnx;
-      panel.message(`推理完成（${t.info.backend === 'webgpu' ? 'WebGPU' : 'WASM'}）：${t.raw.length} 个框，同类去重后 ${t.dets.length} 个，推理 ${t.inferMs.toFixed(0)} ms`, 'ok');
+      panel.message(`推理完成（${t.info.backend === 'webgpu' ? 'WebGPU' : 'WASM'}）：${t.raw.length} 个框，同类去重后 ${t.dets.length} 个，推理 ${t.inferMs.toFixed(0)} ms${t.color ? `；颜色分割补上 ${t.color.added} 个` : ''}`, 'ok');
     }
   }
   $('#dets-toggle').hidden = false;
@@ -960,6 +1031,7 @@ function renderDetControls() {
   if (mode === 'onnx') {
     html += `<label>模型 <select class="select" id="det-model">${Object.entries(MODELS).map(([k, m]) => opt(k, m.label, detSettings.model)).join('')}</select></label>`;
     html += `<label>后端 <select class="select" id="det-prefer">${opt('auto', '自动（优先 WebGPU）', detSettings.prefer)}${opt('wasm', '仅 WASM', detSettings.prefer)}</select></label>`;
+    html += `<label title="按颜色（红色 LED、蓝色电阻）找零件，YOLO 没框到的补上，虚线框表示"><input type="checkbox" id="det-color"${detSettings.colorAssist ? ' checked' : ''} /> 颜色分割补漏</label>`;
   }
   html += `<button type="button" class="btn btn-small" id="btn-det-rerun"${detResult?.pending ? ' disabled' : ''}>重新检测</button></div>`;
   const t = detResult?.onnx;
@@ -972,6 +1044,9 @@ function renderDetControls() {
     html += `<dt>模型加载</dt><dd>${fmt(i.loadMs, 0)} ms <span class="muted">（下载 ${fmt(i.fetchMs, 0)} + 初始化 ${fmt(i.createMs, 0)}）</span></dd>`;
     html += `<dt>推理耗时</dt><dd>${fmt(t.prepMs + t.inferMs + t.postMs, 0)} ms <span class="muted">（前处理 ${fmt(t.prepMs, 0)} + 推理 ${fmt(t.inferMs, 0)} + 后处理 ${fmt(t.postMs, 0)}）</span></dd>`;
     html += `<dt>检测数量</dt><dd>${t.raw.length} 个 → 同类去重后 ${t.dets.length} 个 <span class="muted">（置信度 ≥ ${DETECT.scoreThreshold}，IoU > ${DETECT.dedupIou} 视为重复）</span></dd>`;
+    if (t.color) {
+      html += `<dt>颜色分割</dt><dd>${t.color.candidates} 个候选，补上 <b>${t.color.added}</b> 个 YOLO 漏掉的 <span class="muted">（${fmt(t.color.ms, 0)} ms，虚线框）</span></dd>`;
+    }
     html += '</dl>';
     if (t.model !== 'parts') {
       const names = {};
@@ -994,6 +1069,10 @@ function bindDetControls(body) {
   });
   body.querySelector('#det-prefer')?.addEventListener('change', (e) => {
     detSettings.prefer = e.target.value;
+    rerun();
+  });
+  body.querySelector('#det-color')?.addEventListener('change', (e) => {
+    detSettings.colorAssist = e.target.checked;
     rerun();
   });
   body.querySelector('#btn-det-rerun')?.addEventListener('click', rerun);
@@ -1225,4 +1304,4 @@ sampleSelect.addEventListener('change', async (e) => {
 panel.message('页面已就绪。', 'ok');
 
 // 调试用：在控制台访问
-window.__twin = { store, panel, debugView, world, phone, transition, partsLayer, boxEditor, arm, armGoto, sortPlayer, getOnnxDetector, get detResult() { return detResult; }, get sortPlan() { return sortPlan; }, get calib() { return calib; } };
+window.__twin = { store, panel, debugView, world, phone, transition, partsLayer, boxEditor, arm, armGoto, sortPlayer, getOnnxDetector, colorCandidates, get detResult() { return detResult; }, get sortPlan() { return sortPlan; }, get calib() { return calib; } };

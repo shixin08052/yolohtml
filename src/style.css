@@ -342,3 +342,4 @@ body { background: var(--bg); overflow: hidden; -webkit-font-smoothing: antialia
 .det-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-bottom: 8px; font-size: 13px; color: var(--text-2); }
 .det-controls label { display: inline-flex; align-items: center; gap: 6px; }
 .det-controls .select { height: 30px; padding: 0 8px; font-size: 13px; }
+.view-tools .select-small { height: 26px; padding: 0 6px; font-size: 12px; }

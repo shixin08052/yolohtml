@@ -18,8 +18,8 @@ export const CAMERA = { expectedFocal35: 26, refWidth: 4032, refHeight: 3024 };
 
 // 类别（高度为占位值，等实测后替换）
 export const CLASSES = [
-  { id: 0, key: 'resistor',  name: '色环电阻', heightMm: 3,  color: '#c8a165' },
-  { id: 1, key: 'capacitor', name: '电解电容', heightMm: 12, color: '#3b6fb6' },
+  { id: 0, key: 'resistor',  name: '色环电阻', heightMm: 3,  color: '#3f7fd0' }, // 蓝色金属膜电阻（与实物一致）
+  { id: 1, key: 'capacitor', name: '电解电容', heightMm: 12, color: '#3a3f4b' }, // 深灰外壳（与电阻的蓝色区分开）
   { id: 2, key: 'led',       name: 'LED',      heightMm: 5.8, color: '#d94c4c' }, // 躺平放置
   { id: 3, key: 'screw',     name: '螺丝',     heightMm: 4,  color: '#9aa0a6' },
 ];

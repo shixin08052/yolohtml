@@ -25,13 +25,15 @@ export function drawDetections(ctx, boxes, scale, dpr = 1, { selected = -1, draf
     const sel = i === selected;
     ctx.lineWidth = sel ? lw * 1.8 : lw;
     ctx.strokeStyle = color;
-    ctx.setLineDash([]);
+    // 颜色分割补上的框用虚线
+    ctx.setLineDash(d.origin === 'color' ? [5 * lw, 3 * lw] : []);
     ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+    ctx.setLineDash([]);
     if (sel) {
       ctx.fillStyle = `${color}22`;
       ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
     }
-    const text = `${CLASSES[d.cls]?.name ?? d.name ?? d.cls}${showScore && d.score < 1 ? ` ${d.score.toFixed(2)}` : ''}`;
+    const text = `${CLASSES[d.cls]?.name ?? d.name ?? d.cls}${d.origin === 'color' ? ' · 颜色' : showScore && d.score < 1 ? ` ${d.score.toFixed(2)}` : ''}`;
     const tw = ctx.measureText(text).width;
     const pad = 3 * dpr / scale;
     ctx.fillStyle = color;
