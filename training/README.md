@@ -19,6 +19,7 @@
 | 脚本 | 作用 |
 | --- | --- |
 | `training/prepare_images.py` | HEIC / JPG → 按 EXIF 方向转正的 JPG |
+| `training/autolabel.py` | 按颜色预标注：红色 LED、蓝色电阻，只框本体（见第 2 节） |
 | `training/detections_to_yolo.py` | 网页"框选"保存的 `*.detections.json` → YOLO 标注 `*.txt` |
 | `training/split_dataset.py` | 按照片划分训练 / 验证 / 测试 = 8 : 1 : 1（种子 42），生成带绝对路径的 `datasets/parts/parts.yaml` |
 | `training/train.py`（`train.sh`） | 训练，默认 `yolo26n.pt`、imgsz 1024、150 轮、batch 自动 |
@@ -44,7 +45,9 @@
 
 ## 2. 标注【需要用户，执行者协助】
 
-**规则**：每个零件一个紧贴的矩形框，包住整个零件，**电阻、LED 的引脚也框进去**（网页靠引脚判断 LED 朝向）；被遮住一半以上或只露一点的可以不标；码和文字不标。
+**规则**：每个零件一个紧贴的矩形框，**只框本体，不框引脚**（电阻框色环那一段，LED 框红色灯体；夹爪只夹本体，引脚太细、又常弯，框进去反而让框忽大忽小）；被遮住一半以上或只露一点的可以不标；码和文字不标。本项目只用电阻（0）和 LED（2），电容（1）、螺丝（3）不标，但类别顺序保持不变。
+
+> 网页步骤 14 要跟着改：LED 夹取点不再沿长轴偏移（`src/robot/planner.js`），朝向估计把框外扩几毫米把引脚纳入（`src/vision/orientation.js`），LED 模型按灯体中心摆放（`src/scene/parts.js`）。
 
 先把照片转正（在用户电脑上执行，需要 Python 3.10+，`pip install pillow pillow-heif`）：
 
@@ -52,7 +55,20 @@
 python training/prepare_images.py raw data/images
 ```
 
-然后二选一：
+**预标注（推荐，先跑这个）**：零件放在标定板上、LED 是红色、电阻是蓝色时，可以按颜色自动框出本体（只需要 `pip install opencv-python numpy`，CPU 几秒一张）：
+
+```bash
+cd training
+python autolabel.py --images data/images --labels data/labels --preview data/preview
+```
+
+- 靠 4 个码求标定板位置，只在零件区域（板内缩 12 mm、挖掉码）里找，地面和文字不会误检；找不到码的照片会列出来，需要手工标或删掉。
+- 打印每张照片的电阻、LED 个数，和大多数照片不同的单独列出（两个零件挨在一起会合成一个框），优先检查这些。
+- `data/preview/` 里是画好框的缩略图，翻一遍就能看出问题。
+- 已有的标注默认不覆盖（免得冲掉手工改过的），要重新生成加 `--overwrite`。
+- 修正：在 makesense.ai 里导入照片 → Object Detection → Actions → Import Annotations → 选 YOLO，把 `data/labels/` 里的 `*.txt` 和 `labels.txt` 一起选上 → 改完 Export Annotations（YOLO），用导出的 `*.txt` 覆盖 `data/labels/`。
+
+然后二选一（手工标注，或修正预标注）：
 
 **方式 A：用本项目网页的"框选"工具（坐标约定与网页完全一致）**
 1. 打开网页（GitHub Pages，或在仓库根目录 `npm install && npm run dev`）。
