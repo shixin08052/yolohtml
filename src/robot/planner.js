@@ -1,6 +1,7 @@
 // 分拣规划（纯函数，不碰 DOM）。
 // 1. 每个零件：指尖下到离板面 GRASP_Z 处夹取（指尖垫片高 10 mm，正好包住躺平零件的中部）；
-//    长条零件（电阻、螺丝、LED）两指连线垂直于长轴，LED 夹在灯体上（不夹引脚）；圆形零件夹爪不转。
+//    长条零件（电阻、螺丝、LED）两指连线垂直于长轴；夹在本体中心（检测框只框本体，框中心就是本体中心）；
+//    圆形零件夹爪不转。
 //    抓取点和正上方 approach 高度处都要可达（含碰撞检查），否则跳过
 // 2. 放进对应类别的料盒：长条零件搬运途中转动夹爪，放下时沿料盒长边（Y）摆放，每层 2 个；
 //    圆形零件每层 2 × 2 个；放满一层往上叠一层。放置点和盒口上方悬停点都要可达
@@ -13,9 +14,6 @@ export const GRIP_WIDTH = { 0: 2.9, 1: 8, 2: 5, 3: 2.5 };
 
 /** 夹取时指尖离零件底面的高度（mm）：指尖略高于板面 */
 export const GRASP_Z = 0.5;
-
-/** 夹取点沿零件长轴（模型局部 +X）离零件中心的距离（mm）：LED 夹在灯体中部 */
-export const GRASP_OFFSET = { 2: 9.25 };
 
 /** 有长轴的类别（夹爪两指连线要垂直于长轴） */
 const LONG = new Set([0, 2, 3]);
@@ -39,13 +37,11 @@ export function gripYawFor(part) {
 }
 
 /**
- * 夹取点（底板坐标）：零件中心沿长轴偏移 GRASP_OFFSET，高度 GRASP_Z
+ * 夹取点（底板坐标）：零件本体中心，高度 GRASP_Z
  * @param {import('../state.js').Part} part
  */
 export function graspPoint(part) {
-  const off = GRASP_OFFSET[part.cls] ?? 0;
-  const a = rad(part.rotDeg ?? 0);
-  return [part.x + off * Math.cos(a), part.y + off * Math.sin(a), GRASP_Z];
+  return [part.x, part.y, GRASP_Z];
 }
 
 /**
@@ -64,27 +60,18 @@ export function binSlot(bin, k, layerH, long = false) {
 }
 
 /**
- * 放置点：让零件中心正好落在 slot 上。零件挂在夹爪上随夹爪转动，搬运途中转过的角度
- * Δ = (θ₀ + θ₄)放 − (θ₀ + θ₄)取（θ₀ 走最短方向，与 lerpAngles 一致），零件中心 = 指尖 − R(朝向 + Δ)·(偏移, 0)。
- * Δ 又取决于放置点本身，迭代几次即可收敛。
+ * 放置点：夹在本体中心，所以指尖落在 slot 上，零件中心就在 slot 上。
+ * 零件挂在夹爪上随夹爪转动，搬运途中转过的角度 Δ = (θ₀ + θ₄)放 − (θ₀ + θ₄)取（θ₀ 走最短方向，与 lerpAngles 一致）；
+ * 长条零件放下时要沿料盒长边（Y），所以放下时的夹爪方向比抓取时多转 (90° − 朝向)。
  * @returns {{ to: number[], placeYaw: number|null, partYawDeg: number } | { error: string }}
  */
 function placeFor(part, pickAngles, slot, z, arm) {
-  const off = GRASP_OFFSET[part.cls] ?? 0;
   const rot = rad(part.rotDeg ?? 0);
-  // 长条零件放下时沿 Y：夹爪方向比抓取时多转 (90° − 朝向)
   const placeYaw = LONG.has(part.cls) ? gripYawFor(part) + (Math.PI / 2 - rot) : null;
-  let to = [slot.x, slot.y, z];
-  let delta = 0;
-  for (let i = 0; i < 4; i++) {
-    const s = ikWorld(to, arm, { gripYaw: placeYaw });
-    if (!s.reachable) return { error: s.reason };
-    delta = wrapPi(s.angles[0] - pickAngles[0]) + (s.angles[4] - pickAngles[4]);
-    const next = [slot.x + off * Math.cos(rot + delta), slot.y + off * Math.sin(rot + delta), z];
-    const moved = Math.hypot(next[0] - to[0], next[1] - to[1]);
-    to = next;
-    if (moved < 1e-6) break;
-  }
+  const to = [slot.x, slot.y, z];
+  const s = ikWorld(to, arm, { gripYaw: placeYaw });
+  if (!s.reachable) return { error: s.reason };
+  const delta = wrapPi(s.angles[0] - pickAngles[0]) + (s.angles[4] - pickAngles[4]);
   return { to, placeYaw, partYawDeg: ((rot + delta) * 180) / Math.PI };
 }
 

@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { plan, binSlot, gripYawFor, graspPoint, BIN_SLOTS, BIN_SLOTS_LONG, GRASP_Z, GRASP_OFFSET } from '../src/robot/planner.js';
+import * as THREE from 'three';
+import { plan, binSlot, gripYawFor, graspPoint, BIN_SLOTS, BIN_SLOTS_LONG, GRASP_Z } from '../src/robot/planner.js';
 import { ikWorld } from '../src/robot/ik.js';
-import { PART_SIZE } from '../src/scene/parts.js';
+import { PART_SIZE, createPartMesh } from '../src/scene/parts.js';
 import { ARM, BINS, BIN_WALL, CLASSES } from '../src/config.js';
 import layout from '../src/synth/layout.json';
 
@@ -87,12 +88,9 @@ describe('分拣规划', () => {
     expect(tasks.filter((t) => t.to[2] === BIN_WALL + 12 + GRASP_Z)).toHaveLength(1);
   });
 
-  it('LED 夹在灯体中部（沿长轴偏离中心），不夹引脚', () => {
+  it('夹在本体中心（检测框中心），LED 也不再偏移', () => {
     const [led] = makeParts([{ cls: 2, x: 150, y: 100, rotDeg: 30 }]);
-    const g = graspPoint(led);
-    const off = GRASP_OFFSET[2];
-    expect(g[0]).toBeCloseTo(150 + off * Math.cos(Math.PI / 6), 9);
-    expect(g[1]).toBeCloseTo(100 + off * Math.sin(Math.PI / 6), 9);
+    expect(graspPoint(led)).toEqual([150, 100, GRASP_Z]);
   });
 
   it('放下后零件中心正好落在盒内位置上；长条零件沿料盒长边（Y）摆放，整体在盒内', () => {
@@ -114,14 +112,14 @@ describe('分拣规划', () => {
       const b = ikWorld(t.to, ARM, { gripYaw: t.placeYaw }).angles;
       const d = Math.atan2(Math.sin(b[0] - a[0]), Math.cos(b[0] - a[0])) + (b[4] - a[4]);
       const yaw = (p.rotDeg * Math.PI) / 180 + d;
-      const off = GRASP_OFFSET[p.cls] ?? 0;
-      const center = [t.to[0] - off * Math.cos(yaw), t.to[1] - off * Math.sin(yaw)];
+      const center = [t.to[0], t.to[1]];
       expect(center[0]).toBeCloseTo(slot.x, 6);
       expect(center[1]).toBeCloseTo(slot.y, 6);
       // 沿 Y 摆放
       expect(Math.abs(Math.cos(yaw))).toBeLessThan(1e-6);
-      // 整体在盒内（盒壁内侧）
-      const half = PART_SIZE[p.cls].lx / 2;
+      // 整个模型（含引脚）在盒内（盒壁内侧）：沿 Y 摆放时，长轴两端离中心最远的距离
+      const full = new THREE.Box3().setFromObject(createPartMesh(p.cls));
+      const half = Math.max(-full.min.x, full.max.x);
       expect(Math.abs(center[1] - bin.center[1]) + half).toBeLessThan(bin.size[1] / 2 - BIN_WALL);
       expect(Math.abs(center[0] - bin.center[0]) + PART_SIZE[p.cls].ly / 2).toBeLessThan(bin.size[0] / 2 - BIN_WALL);
     }

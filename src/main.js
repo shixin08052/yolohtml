@@ -22,13 +22,13 @@ import { mul3 } from './math/linalg.js';
 import { drawPose } from './ui/poseOverlay.js';
 import { boardHomography, rectify, invert3 } from './vision/homography.js';
 import { boxToTexture, erasePolygons } from './vision/erase.js';
-import { estimateYaw } from './vision/orientation.js';
+import { estimateYaw, expandPoly } from './vision/orientation.js';
 import { measurePaper, EDGE_NAMES, CHECK_LIMITS } from './vision/boardCheck.js';
 import { markerCornersWorld, markerRectOnPage, paperFrame, designFrame, frameMatrix } from './vision/boardLayout.js';
 import { BOARD, MARKERS } from './config.js';
 import { drawMarkers } from './ui/markerOverlay.js';
 import { createBoxEditor } from './ui/boxEditor.js';
-import { createPartsLayer } from './scene/parts.js';
+import { createPartsLayer, leadFootprint } from './scene/parts.js';
 import { detect, MockMissingError, detectionsFileName, serializeDetections, parseDetections } from './vision/detector.js';
 import { mapDetections, selectMethod } from './vision/mapping.js';
 import { partsTruthError } from './vision/evaluate.js';
@@ -329,6 +329,20 @@ function refreshBoardTexture() {
   if (dets.length && !$('#show-raw-board').checked) {
     const img = ctx.getImageData(0, 0, tex.width, tex.height);
     const polys = dets.map((d) => boxToTexture(d.box, toLocal, { pxPerMm: BOARD_TEX_PX_PER_MM, paperH: frame.h }));
+    // 检测框只框本体：照片里的引脚按模型和估计的朝向推出位置，一并擦掉（朝向没估计出来的不擦）
+    const toTex = invert3(boardTex.toBoard);
+    const parts = store.state.image?.bitmap === boardTex.bitmap ? store.state.parts ?? [] : [];
+    for (const p of parts) {
+      const f = leadFootprint(p.cls);
+      if (!f || p.yawSource !== 'photo') continue;
+      const a = (p.rotDeg * Math.PI) / 180;
+      const w = f.halfW + 1; // 留 1 mm 余量
+      polys.push([[f.minX - 1, -w], [f.maxX + 1, -w], [f.maxX + 1, w], [f.minX - 1, w]].map(([lx, ly]) => {
+        const X = p.x + lx * Math.cos(a) - ly * Math.sin(a);
+        const Y = p.y + lx * Math.sin(a) + ly * Math.cos(a);
+        return [toTex[0][0] * X + toTex[0][1] * Y + toTex[0][2], toTex[1][0] * X + toTex[1][1] * Y + toTex[1][2]];
+      }));
+    }
     erasePolygons(img, polys, { featherPx: 1.5 * BOARD_TEX_PX_PER_MM, ringPx: 2 * BOARD_TEX_PX_PER_MM });
     ctx.putImageData(img, 0, 0);
   }
@@ -816,6 +830,9 @@ function applyDetections() {
   refreshPlan();
 }
 
+/** 估计朝向时检测框向外扩的距离（mm）：把电阻、LED 的一段引脚也纳入 */
+const YAW_SEARCH_MM = 10;
+
 /**
  * 用照片估计电阻、螺丝、LED 的朝向（检测框是轴对齐的，看不出角度）：
  * 在底板正射图上取检测框对应的区域分出零件像素，按形状求角度；估计不可靠时沿用 mapping 的 0° / 90° 粗判
@@ -829,8 +846,9 @@ function refineYaw(parts) {
   const tex = { pxPerMm: BOARD_TEX_PX_PER_MM, paperH: boardTex.frame.h };
   return parts.map((p) => {
     const det = detResult.detections[p.detIndex];
-    const poly = boxToTexture(det.box, boardTex.toLocal, tex, 0.05);
-    const est = estimateYaw(boardTex.pixels, poly, p.cls, boardTex.toBoard);
+    // 检测框只框本体：外扩 YAW_SEARCH_MM 把一段引脚也纳入，只保留与框内零件相连的像素
+    const seed = boxToTexture(det.box, boardTex.toLocal, tex, 0.05);
+    const est = estimateYaw(boardTex.pixels, expandPoly(seed, YAW_SEARCH_MM * BOARD_TEX_PX_PER_MM), p.cls, boardTex.toBoard, { seed });
     return est?.reliable ? { ...p, rotDeg: est.rotDeg, yawSource: 'photo' } : p;
   });
 }

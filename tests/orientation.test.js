@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { estimateYaw, yawFromPoints, foregroundPoints } from '../src/vision/orientation.js';
+import { estimateYaw, yawFromPoints, foregroundPoints, expandPoly } from '../src/vision/orientation.js';
 
 // 400×400 像素的正射图 = 100×100 mm，4 px/mm，图像顶部是底板远端
 const PPM = 4;
@@ -13,7 +13,7 @@ const toPx = ([X, Y]) => [X * PPM, (SIZE / PPM - Y) * PPM];
  * @param {number} rotDeg
  * @param {{ smear?: number[] }} [opts] smear：再按这个位移叠画一次（模拟正射图里零件沿视线被拉长）
  */
-function render(shapes, rotDeg, { smear = null } = {}) {
+function render(shapes, rotDeg, { smear = null, extra = null } = {}) {
   const data = new Uint8ClampedArray(SIZE * SIZE * 4);
   const a = (rotDeg * Math.PI) / 180;
   const c = Math.cos(a);
@@ -30,6 +30,12 @@ function render(shapes, rotDeg, { smear = null } = {}) {
         const ly = -s * X + c * Y;
         for (const [color, inside] of shapes) if (inside(lx, ly)) col = color;
       }
+      // extra：另一个零件（底板坐标，不随 rotDeg 转）
+      if (extra) {
+        const X = (x + 0.5) / PPM;
+        const Y = SIZE / PPM - (y + 0.5) / PPM;
+        for (const [color, inside] of extra) if (inside(X, Y)) col = color;
+      }
       data.set([...col, 255], o);
     }
   }
@@ -45,11 +51,23 @@ const SCREW = [
   [[140, 145, 150], rect(-4.75, 7.25, 2.5)],
   [[140, 145, 150], rect(-7.25, -4.75, 4)],
 ];
-// 躺平的 LED（与 parts.js 一致，包围盒居中）：灯体在 +X，两根引脚伸向 −X
+// 躺平的 LED（与 parts.js 一致，本体居中）：本体 x ∈ [−4.25, 4.25]，灯头朝 +X，两根引脚从 −4.25 伸向 −X
 const LED = [
-  [[170, 174, 178], (x, y) => x >= -14.25 && x <= 6 && Math.abs(Math.abs(y) - 1.27) <= 0.3],
-  [[200, 60, 60], (x, y) => x >= 5.75 && x <= 14.25 && Math.abs(y) <= 2.6],
+  [[170, 174, 178], (x, y) => x >= -24.25 && x <= -4 && Math.abs(Math.abs(y) - 1.27) <= 0.3],
+  [[200, 60, 60], (x, y) => x >= -4.25 && x <= 4.25 && Math.abs(y) <= 2.6],
 ];
+
+/** 本体（局部 ±lx/2 × ±ly/2）转 rotDeg 后的轴对齐外接框（图像像素），即只框本体的检测框 */
+function bodyBox(lx, ly, rotDeg) {
+  const a = (rotDeg * Math.PI) / 180;
+  const pts = [[-lx / 2, -ly / 2], [lx / 2, -ly / 2], [lx / 2, ly / 2], [-lx / 2, ly / 2]].map(([x, y]) => [
+    50 + x * Math.cos(a) - y * Math.sin(a),
+    50 + x * Math.sin(a) + y * Math.cos(a),
+  ]);
+  const xs = pts.map((p) => p[0]);
+  const ys = pts.map((p) => p[1]);
+  return [[Math.min(...xs), Math.max(...ys)], [Math.max(...xs), Math.max(...ys)], [Math.max(...xs), Math.min(...ys)], [Math.min(...xs), Math.min(...ys)]].map(toPx);
+}
 
 /** 零件周围 30×30 mm 的区域（图像像素） */
 const region = () => [[50 - 15, 50 + 15], [50 + 15, 50 + 15], [50 + 15, 50 - 15], [50 - 15, 50 - 15]].map(toPx);
@@ -77,11 +95,41 @@ describe('零件朝向估计', () => {
     }
   });
 
-  it('躺平的 LED：主轴方向 + 灯体在哪头（周期 360°）', () => {
+  it('躺平的 LED：检测框只框本体，外扩 10 mm 把引脚也算进来，得到主轴方向和灯头朝向（周期 360°）', () => {
     for (const rot of [0, 30, -70, 160, -120]) {
-      const r = estimateYaw(render(LED, rot), region(), 2, toBoard);
+      const seed = bodyBox(8.5, 5.8, rot);
+      const r = estimateYaw(render(LED, rot), expandPoly(seed, 10 * PPM), 2, toBoard, { seed });
       expect(r.reliable).toBe(true);
       expect(angDiff(r.rotDeg, rot, 360)).toBeLessThan(3);
+    }
+  });
+
+  it('只看本体框（不外扩）时 LED 长宽比不够，判为不可靠', () => {
+    const seed = bodyBox(8.5, 5.8, 30);
+    const r = estimateYaw(render(LED, 30), seed, 2, toBoard, { seed });
+    expect(r === null || r.reliable === false).toBe(true);
+  });
+
+  it('外扩区域里有别的零件（不相连）时不受影响', () => {
+    // 旁边 8 mm 处放一个电容（Φ8 的圆）
+    const cap = [[[60, 90, 160], (X, Y) => Math.hypot(X - 50, Y - 62) < 4]];
+    for (const rot of [0, 30]) {
+      const seed = bodyBox(8.5, 5.8, rot);
+      const img = render(LED, rot, { extra: cap });
+      const r = estimateYaw(img, expandPoly(seed, 10 * PPM), 2, toBoard, { seed });
+      expect(angDiff(r.rotDeg, rot, 360)).toBeLessThan(3);
+      // 不用 seed 时会被电容带偏
+      const bad = estimateYaw(img, expandPoly(seed, 10 * PPM), 2, toBoard);
+      expect(angDiff(bad.rotDeg, rot, 360)).toBeGreaterThan(3);
+    }
+  });
+
+  it('电阻：只框本体 + 外扩时同样准确', () => {
+    for (const rot of [20, 80, -35]) {
+      const seed = bodyBox(8, 3, rot);
+      const r = estimateYaw(render(RESISTOR, rot), expandPoly(seed, 10 * PPM), 0, toBoard, { seed });
+      expect(r.reliable).toBe(true);
+      expect(angDiff(r.rotDeg, rot, 180)).toBeLessThan(2);
     }
   });
 
