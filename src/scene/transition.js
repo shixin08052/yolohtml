@@ -106,14 +106,35 @@ export function createTransition({ world, container, overlay, phone, onGrow = ()
 
     const from = world.photoCameraParams({ pose, intrinsics });
     world.applyCamera(from);
-    // 飞行终点：全尺寸画布下的默认视角
-    const r1 = fitRect(null);
-    const to = world.getDefaultView(r1.w / r1.h);
-    const toQuat = new THREE.Quaternion().setFromRotationMatrix(
-      new THREE.Matrix4().lookAt(to.position, to.target, new THREE.Vector3(0, 1, 0)),
-    );
     const { hold, fade, fly, settle } = TRANSITION_MS;
     const t0 = performance.now();
+    const lookAt = new THREE.Matrix4();
+    const up = new THREE.Vector3(0, 1, 0);
+
+    /** 飞行进度 e（0–1）时的画面区域与相机。终点（全尺寸画面的默认视角）每帧重算：转场途中画面尺寸可能变化 */
+    function flyTo(e) {
+      const r0 = fitRect(aspect);
+      const r1 = fitRect(null);
+      const to = world.getDefaultView(r1.w / r1.h);
+      const toQuat = new THREE.Quaternion().setFromRotationMatrix(lookAt.lookAt(to.position, to.target, up));
+      setRect({
+        x: r0.x + (r1.x - r0.x) * e,
+        y: r0.y + (r1.y - r0.y) * e,
+        w: r0.w + (r1.w - r0.w) * e,
+        h: r0.h + (r1.h - r0.h) * e,
+      });
+      world.applyCamera(
+        {
+          position: from.position.clone().lerp(to.position, e),
+          quaternion: from.quaternion.clone().slerp(toQuat, e),
+          fov: from.fov + (to.fov - from.fov) * e,
+          offset: from.offset,
+          size: from.size,
+        },
+        1 - e,
+      );
+      phone.setOpacity(e);
+    }
 
     return new Promise((resolve) => {
       const frame = (now) => {
@@ -125,33 +146,17 @@ export function createTransition({ world, container, overlay, phone, onGrow = ()
           const k = (t - hold) / fade;
           overlay.style.opacity = String(1 - k);
           onGrow(easeInOutCubic(k));
-        } else if (t < hold + fade + fly) {
+        } else {
+          // 飞行，以及之后的停顿。某一帧来得晚（主线程忙、手机掉帧）跳过了飞行终点时，这里也会先摆到终点，
+          // 不会停在半路、等交给控制器时再跳一下
           if (!overlay.hidden) overlay.hidden = true;
           onGrow(1);
-          const e = easeInOutCubic((t - hold - fade) / fly);
-          setRect({
-            x: r0.x + (r1.x - r0.x) * e,
-            y: r0.y + (r1.y - r0.y) * e,
-            w: r0.w + (r1.w - r0.w) * e,
-            h: r0.h + (r1.h - r0.h) * e,
-          });
-          world.applyCamera(
-            {
-              position: from.position.clone().lerp(to.position, e),
-              quaternion: from.quaternion.clone().slerp(toQuat, e),
-              fov: from.fov + (to.fov - from.fov) * e,
-              offset: from.offset,
-              size: from.size,
-            },
-            1 - e,
-          );
-          phone.setOpacity(e);
-        } else if (t < hold + fade + fly + settle) {
-          // 稍作停顿后交给控制器
-        } else {
-          finish();
-          world.render();
-          return resolve();
+          flyTo(easeInOutCubic(Math.min(1, (t - hold - fade) / fly)));
+          if (t >= hold + fade + fly + settle) {
+            finish();
+            world.render();
+            return resolve();
+          }
         }
         world.render(); // 同一帧里更新完立即渲染，不等下一轮渲染循环
         raf = requestAnimationFrame(frame);
