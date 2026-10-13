@@ -25,7 +25,7 @@
 | `training/train.py`（`train.sh`） | 训练，默认 `yolo26n.pt`、imgsz 1024、150 轮、batch 自动 |
 | `training/export.py`（`export.sh`） | 导出 ONNX（默认端到端输出 `[1, 300, 6]`），复制到 `public/models/` 并写说明 json |
 | `training/predict_dump.py` | 推理结果写成网页 `*.detections.json` 格式，供步骤 14 对比 |
-| `tools/make_chessboard.py` | 生成 A4 棋盘格（9 × 6 内角点，方格 25 mm） |
+| `tools/make_chessboard.py` | 生成棋盘格矢量 PDF（默认 A4 横向，9 × 6 内角点，方格 25 mm，带 100 mm 比例尺；`--paper a3/letter`、`--square`）；现成的在 `tools/chessboard_a4.pdf` |
 | `tools/calibrate_camera.py` | 棋盘格标定 → `public/intrinsics.json` |
 
 - 类别（顺序固定，必须与 `training/parts.yaml`、网页 `src/config.js` 一致）：`0 resistor 色环电阻`、`1 capacitor 电解电容`、`2 led LED`、`3 screw 螺丝`。
@@ -176,10 +176,10 @@ print(picked)
 标定只需要 CPU，在用户电脑的仓库根目录执行（`pip install opencv-python pillow pillow-heif`）：
 
 ```bash
-python tools/make_chessboard.py        # 生成 chessboard_a4.png：10 × 7 个方格（9 × 6 个内角点），方格 25 mm
+python tools/make_chessboard.py        # 生成 chessboard_a4.pdf：10 × 7 个方格（9 × 6 个内角点），方格 25 mm；也可直接用仓库里的 tools/chessboard_a4.pdf
 ```
 
-1. **【需要用户】** A4 打印 `chessboard_a4.png`，选"实际大小 / 100%"。用尺子量 5 个方格总长除以 5，得到实际方格边长（例如 24.9 mm）。贴平在硬板上。
+1. **【需要用户】** 用 Edge / Acrobat 等 PDF 阅读器打开 `chessboard_a4.pdf`，A4 打印，缩放选"实际大小 / 100%"（不要选"适合页面"；Windows"照片"的打印窗口会缩放，不要用）。先量页面下方的 100 mm 比例尺确认没被缩放，再量 5 个方格总长除以 5，得到实际方格边长（例如 24.9 mm）。贴平在硬板上。
 2. **【需要用户】** 用**同一台 iPhone、主摄 1×** 拍 15–25 张：棋盘格占画面 1/3 以上，正面、左右上下倾斜 20°–45° 都拍，让棋盘格出现在画面中间和四个角附近，清晰、无反光。照片放进 `calib_photos/`。
 3. 运行：
 
