@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite';
+import { defineConfig, defaultClientConditions } from 'vite';
 import { resolve } from 'node:path';
 
 /**
@@ -22,6 +22,13 @@ export default defineConfig({
   // 相对路径，便于部署到 GitHub Pages 的子路径（/yolohtml/）
   base: './',
   plugins: [jsArucoCommonJS()],
+  resolve: {
+    // onnxruntime-web 默认入口会把 wasm 文件一起打包进 assets（约 42 MB）；这个条件选用"外部 wasm"版本，
+    // 运行时从 public/ort/ 按 env.wasm.wasmPaths 加载（scripts/copy-ort.mjs 复制），避免重复
+    conditions: ['onnxruntime-web-use-extern-wasm', ...defaultClientConditions],
+  },
+  // Worker 里有动态 import（按设备选 WebGPU / WASM 版本），需要 ES 模块格式
+  worker: { format: 'es' },
   optimizeDeps: {
     // 开发模式的依赖预打包不走上面的 plugins，需要单独挂一次
     rolldownOptions: { plugins: [jsArucoCommonJS()] },

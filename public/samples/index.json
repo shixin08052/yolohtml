@@ -1,8 +1,38 @@
 {
-  "说明": "示例列表。合成图由 synth.html 生成，带真值 JSON（GroundTruth）",
+  "说明": "示例列表。合成图由 synth.html 生成，带真值 JSON（GroundTruth）；真实照片是步骤 13 的测试集照片（训练时没见过），旁边的 *.detections.json 是 Python（predict_dump.py）的推理结果，用于和网页推理对比",
   "samples": [
-    { "key": "synth_90", "label": "合成图 · 俯角 90°", "image": "synth_90.png", "truth": "synth_90.truth.json" },
-    { "key": "synth_65", "label": "合成图 · 俯角 65°", "image": "synth_65.png", "truth": "synth_65.truth.json" },
-    { "key": "synth_45", "label": "合成图 · 俯角 45°", "image": "synth_45.png", "truth": "synth_45.truth.json" }
+    {
+      "key": "synth_90",
+      "label": "合成图 · 俯角 90°",
+      "image": "synth_90.png",
+      "truth": "synth_90.truth.json"
+    },
+    {
+      "key": "synth_65",
+      "label": "合成图 · 俯角 65°",
+      "image": "synth_65.png",
+      "truth": "synth_65.truth.json"
+    },
+    {
+      "key": "synth_45",
+      "label": "合成图 · 俯角 45°",
+      "image": "synth_45.png",
+      "truth": "synth_45.truth.json"
+    },
+    {
+      "key": "IMG_9521",
+      "label": "真实照片 · IMG_9521",
+      "image": "real/IMG_9521.jpg"
+    },
+    {
+      "key": "IMG_9532",
+      "label": "真实照片 · IMG_9532",
+      "image": "real/IMG_9532.jpg"
+    },
+    {
+      "key": "IMG_9533",
+      "label": "真实照片 · IMG_9533",
+      "image": "real/IMG_9533.jpg"
+    }
   ]
 }

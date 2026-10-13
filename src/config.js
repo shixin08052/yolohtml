@@ -45,4 +45,12 @@ export const BINS = [
   { id: 3, cls: 3, center: [337, 140], size: [60, 66, 35] },
 ];
 
-export const DETECT = { imgsz: 1024, scoreThreshold: 0.4, iouThreshold: 0.5 };
+// 检测：输入尺寸、置信度阈值、NMS 阈值（只用于原始输出）、同类去重阈值
+// 去重：训练数据少，端到端模型偶尔对同一个零件出两个框（IoU 0.96–0.98，分数 0.5–0.75），同类 IoU 大于 dedupIou 的只留高分
+export const DETECT = { imgsz: 1024, scoreThreshold: 0.4, iouThreshold: 0.5, dedupIou: 0.7 };
+
+// 模型文件（public/models/，步骤 13 导出）：parts 为零件模型，coco 为官方 COCO 模型（调试用）
+export const MODELS = {
+  parts: { label: '零件模型', file: 'models/best.onnx' },
+  coco: { label: '官方 COCO（调试）', file: 'models/yolo26n_coco.onnx' },
+};

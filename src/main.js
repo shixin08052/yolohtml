@@ -29,10 +29,10 @@ import { BOARD, MARKERS } from './config.js';
 import { drawMarkers } from './ui/markerOverlay.js';
 import { createBoxEditor } from './ui/boxEditor.js';
 import { createPartsLayer, leadFootprint } from './scene/parts.js';
-import { detect, MockMissingError, detectionsFileName, serializeDetections, parseDetections } from './vision/detector.js';
+import { detect, MockMissingError, detectionsFileName, serializeDetections, parseDetections, lastOnnxRun, getOnnxDetector } from './vision/detector.js';
 import { mapDetections, selectMethod } from './vision/mapping.js';
 import { partsTruthError } from './vision/evaluate.js';
-import { CLASSES, WORK_AREA, ARM, BINS } from './config.js';
+import { CLASSES, WORK_AREA, ARM, BINS, MODELS, DETECT } from './config.js';
 import { createArm } from './scene/arm.js';
 import { createBins } from './scene/bins.js';
 import { ikWorld, fkWorld, fkChain, fromBase, pathClear } from './robot/ik.js';
@@ -717,7 +717,11 @@ store.on('stage:posed', () => {
 /* 模块 4：零件检测（mock）、手动框选、坐标映射、3D 零件                    */
 /* ------------------------------------------------------------------ */
 
-const DET_SOURCE_LABELS = { truth: '合成图真值框', mock: 'mock 检测文件', manual: '手动框选', file: '载入的检测文件', none: '无' };
+const DET_SOURCE_LABELS = { truth: '合成图真值框', mock: 'mock 检测文件', onnx: '模型推理（ONNX）', manual: '手动框选', file: '载入的检测文件', none: '无' };
+
+/** 检测设置：mode 为 null 时自动选（合成图用真值框，其他照片用模型推理） */
+const detSettings = { mode: null, model: 'parts', prefer: 'auto' };
+const detMode = () => detSettings.mode ?? (store.state.truth ? 'mock' : 'onnx');
 
 /** 当前照片的检测结果（换内参来源时沿用，手动框选的修改也存在这里） */
 let detResult = null; // { bitmap, detections, source, note }
@@ -786,23 +790,42 @@ function resetDetections() {
   updateDetOverlay();
 }
 
-/** 位姿求出后：检测（同一张照片沿用已有结果），再映射 */
-async function runDetect() {
+/** 位姿求出后：检测（同一张照片沿用已有结果，force 时重跑），再映射 */
+async function runDetect({ force = false } = {}) {
   const { image, truth } = store.state;
-  if (detResult?.bitmap !== image.bitmap) {
+  if (force || detResult?.bitmap !== image.bitmap) {
+    const mode = detMode();
     let detections = [];
-    let source = truth ? 'truth' : 'mock';
+    let source = mode === 'onnx' ? 'onnx' : truth ? 'truth' : 'mock';
     let note = null;
+    let onnx = null;
+    if (mode === 'onnx') {
+      // 推理期间先显示"检测中"
+      detResult = { bitmap: image.bitmap, detections: [], source, note: null, pending: true };
+      renderDetectSection(null);
+    }
     try {
-      detections = await detect(image, { mode: 'mock', truth });
+      detections = await detect(image, { mode, truth, model: detSettings.model, prefer: detSettings.prefer });
+      if (mode === 'onnx') onnx = lastOnnxRun;
     } catch (err) {
-      if (!(err instanceof MockMissingError)) throw err;
+      if (err instanceof MockMissingError) {
+        note = `没有找到 mock 检测文件 ${detectionsFileName(image.fileName)}。可以点"框选"在照片上手动框出零件，保存后下次用"载入"读回。`;
+      } else if (mode === 'onnx') {
+        console.error(err);
+        note = `模型推理失败：${err.message}。可以改用 mock，或点"框选"手动框出零件。`;
+        panel.message(note, 'error');
+      } else {
+        throw err;
+      }
       source = 'none';
-      note = `没有找到 mock 检测文件 ${detectionsFileName(image.fileName)}。可以点"框选"在照片上手动框出零件，保存后下次用"载入"读回。`;
     }
     if (store.state.image?.bitmap !== image.bitmap) return; // 等待期间换了照片
-    detResult = { bitmap: image.bitmap, detections, source, note };
+    detResult = { bitmap: image.bitmap, detections, source, note, onnx };
     boxEditor.setBoxes(detections);
+    if (onnx) {
+      const t = onnx;
+      panel.message(`推理完成（${t.info.backend === 'webgpu' ? 'WebGPU' : 'WASM'}）：${t.raw.length} 个框，同类去重后 ${t.dets.length} 个，推理 ${t.inferMs.toFixed(0)} ms`, 'ok');
+    }
   }
   $('#dets-toggle').hidden = false;
   $('#btn-boxedit').disabled = false;
@@ -872,8 +895,10 @@ function renderDetectSection(mapping) {
   const { truth } = store.state;
   const body = panel.setCustom('detect', '检测与映射');
   const dets = detResult.detections;
-  let html = '';
-  if (!mapping) {
+  let html = renderDetControls();
+  if (detResult.pending) {
+    html += '<p class="muted">模型推理中…（第一次要下载模型，约 10 MB）</p>';
+  } else if (!mapping) {
     html += `<p class="summary">${dets.length} 个检测框</p><p class="note info">需要先求出位姿，才能把检测框映射到底板坐标。</p>`;
   } else {
     const { parts, dropped } = mapping;
@@ -911,6 +936,7 @@ function renderDetectSection(mapping) {
     <input type="file" id="det-file" accept=".json,application/json" hidden />
   </div>`;
   body.innerHTML = html;
+  bindDetControls(body);
   body.querySelector('#parallax-toggle')?.addEventListener('change', (e) => setParallax(e.target.checked));
   body.querySelector('#btn-det-edit').addEventListener('click', () => {
     setBoxEditing(!boxEditing);
@@ -923,6 +949,54 @@ function renderDetectSection(mapping) {
     const f = e.target.files?.[0];
     if (f) loadDetectionsFile(f);
   });
+}
+
+/** 检测方式 / 模型 / 后端选择，以及最近一次推理的统计 */
+function renderDetControls() {
+  const mode = detMode();
+  const opt = (v, label, cur) => `<option value="${v}"${v === cur ? ' selected' : ''}>${label}</option>`;
+  let html = '<div class="det-controls">';
+  html += `<label>检测方式 <select class="select" id="det-mode">${opt('onnx', '模型推理（ONNX）', mode)}${opt('mock', 'mock（真值 / 检测文件）', mode)}</select></label>`;
+  if (mode === 'onnx') {
+    html += `<label>模型 <select class="select" id="det-model">${Object.entries(MODELS).map(([k, m]) => opt(k, m.label, detSettings.model)).join('')}</select></label>`;
+    html += `<label>后端 <select class="select" id="det-prefer">${opt('auto', '自动（优先 WebGPU）', detSettings.prefer)}${opt('wasm', '仅 WASM', detSettings.prefer)}</select></label>`;
+  }
+  html += `<button type="button" class="btn btn-small" id="btn-det-rerun"${detResult?.pending ? ' disabled' : ''}>重新检测</button></div>`;
+  const t = detResult?.onnx;
+  if (t && !detResult.pending) {
+    const i = t.info;
+    const backend = i.backend === 'webgpu' ? 'WebGPU' : `WASM（${i.threads > 1 ? `${i.threads} 线程` : '单线程'}）`;
+    html += '<dl class="kv">';
+    html += `<dt>模型</dt><dd>${MODELS[t.model].label} · ${(i.modelBytes / 1e6).toFixed(1)} MB · 输入 ${i.inputSize}</dd>`;
+    html += `<dt>推理后端</dt><dd>${backend}</dd>`;
+    html += `<dt>模型加载</dt><dd>${fmt(i.loadMs, 0)} ms <span class="muted">（下载 ${fmt(i.fetchMs, 0)} + 初始化 ${fmt(i.createMs, 0)}）</span></dd>`;
+    html += `<dt>推理耗时</dt><dd>${fmt(t.prepMs + t.inferMs + t.postMs, 0)} ms <span class="muted">（前处理 ${fmt(t.prepMs, 0)} + 推理 ${fmt(t.inferMs, 0)} + 后处理 ${fmt(t.postMs, 0)}）</span></dd>`;
+    html += `<dt>检测数量</dt><dd>${t.raw.length} 个 → 同类去重后 ${t.dets.length} 个 <span class="muted">（置信度 ≥ ${DETECT.scoreThreshold}，IoU > ${DETECT.dedupIou} 视为重复）</span></dd>`;
+    html += '</dl>';
+    if (t.model !== 'parts') {
+      const names = {};
+      for (const d of t.dets) names[d.name] = (names[d.name] ?? 0) + 1;
+      html += `<p class="note info">COCO 模型的类别不是零件，只在调试视图里显示检测框：${Object.entries(names).map(([k, n]) => `${k} × ${n}`).join('，') || '没有检测到物体'}。</p>`;
+    }
+  }
+  return html;
+}
+
+function bindDetControls(body) {
+  const rerun = () => runDetect({ force: true }).catch((err) => store.fail('detect', `检测出错：${err.message}`));
+  body.querySelector('#det-mode')?.addEventListener('change', (e) => {
+    detSettings.mode = e.target.value;
+    rerun();
+  });
+  body.querySelector('#det-model')?.addEventListener('change', (e) => {
+    detSettings.model = e.target.value;
+    rerun();
+  });
+  body.querySelector('#det-prefer')?.addEventListener('change', (e) => {
+    detSettings.prefer = e.target.value;
+    rerun();
+  });
+  body.querySelector('#btn-det-rerun')?.addEventListener('click', rerun);
 }
 
 function saveDetections() {
@@ -1151,4 +1225,4 @@ sampleSelect.addEventListener('change', async (e) => {
 panel.message('页面已就绪。', 'ok');
 
 // 调试用：在控制台访问
-window.__twin = { store, panel, debugView, world, phone, transition, partsLayer, boxEditor, arm, armGoto, sortPlayer, get sortPlan() { return sortPlan; }, get calib() { return calib; } };
+window.__twin = { store, panel, debugView, world, phone, transition, partsLayer, boxEditor, arm, armGoto, sortPlayer, getOnnxDetector, get detResult() { return detResult; }, get sortPlan() { return sortPlan; }, get calib() { return calib; } };

@@ -14,3 +14,4 @@ training/dumps/
 training/*.pt
 calib_photos/
 __pycache__/
+public/ort/

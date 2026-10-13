@@ -337,3 +337,8 @@ body { background: var(--bg); overflow: hidden; -webkit-font-smoothing: antialia
 .skip-list li { padding: 4px 6px; border-radius: 6px; color: var(--err); background: color-mix(in srgb, var(--err) 8%, transparent); margin-bottom: 4px; }
 .skip-list li span { display: block; font-size: 12px; opacity: 0.85; }
 .summary .bad { color: var(--err); }
+
+/* 检测方式选择 */
+.det-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-bottom: 8px; font-size: 13px; color: var(--text-2); }
+.det-controls label { display: inline-flex; align-items: center; gap: 6px; }
+.det-controls .select { height: 30px; padding: 0 8px; font-size: 13px; }

@@ -54,6 +54,8 @@ def main():
     if not files:
         sys.exit('没有找到图片')
     model = YOLO(args.weights, task='detect')
+    # 零件模型（4 类）用中文名；其他模型（例如官方 COCO）用模型自带的类别名
+    names = NAMES_ZH if len(model.names) == len(NAMES_ZH) else [model.names[i] for i in range(len(model.names))]
     args.out.mkdir(parents=True, exist_ok=True)
     for f in files:
         img = load_bgr(f)
@@ -65,7 +67,7 @@ def main():
             c = int(c)
             dets.append({
                 'cls': c,
-                'name': NAMES_ZH[c] if c < len(NAMES_ZH) else str(c),
+                'name': names[c] if c < len(names) else str(c),
                 'score': round(float(s), 4),
                 'box': [round(float(v), 2) for v in (x1, y1, x2, y2)],
             })

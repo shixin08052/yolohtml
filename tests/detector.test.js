@@ -55,6 +55,5 @@ describe('检测结果文件', () => {
     expect(await detect(image, { truth })).toEqual(detectionsFromTruth(truth));
     // 已删除的类别被跳过
     expect(detectionsFromTruth({ parts: [...truth.parts, { cls: 5, x: 0, y: 0, heightMm: 1, box: [0, 0, 1, 1] }] })).toHaveLength(1);
-    await expect(detect(image, { mode: 'onnx' })).rejects.toThrow(/步骤 14/);
   });
 });

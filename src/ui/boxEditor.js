@@ -31,7 +31,7 @@ export function drawDetections(ctx, boxes, scale, dpr = 1, { selected = -1, draf
       ctx.fillStyle = `${color}22`;
       ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
     }
-    const text = `${CLASSES[d.cls]?.name ?? d.cls}${showScore && d.score < 1 ? ` ${d.score.toFixed(2)}` : ''}`;
+    const text = `${CLASSES[d.cls]?.name ?? d.name ?? d.cls}${showScore && d.score < 1 ? ` ${d.score.toFixed(2)}` : ''}`;
     const tw = ctx.measureText(text).width;
     const pad = 3 * dpr / scale;
     ctx.fillStyle = color;
