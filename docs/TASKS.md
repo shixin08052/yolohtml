@@ -76,7 +76,7 @@ sorting-twin/
 ├─ synth.html                 # 合成测试图生成器（步骤 3）
 ├─ src/
 │  ├─ main.js                 # 流程编排
-│  ├─ timing.js            # 步骤 15：一次运行的分步耗时（纯函数）
+│  ├─ timing.js               # 步骤 15：一次运行的分步耗时（纯函数）
 │  ├─ config.js               # 全部可调参数（第 6 节）
 │  ├─ state.js                # 全局 state + 事件；第 5 节的类型定义写在这里
 │  ├─ math/
