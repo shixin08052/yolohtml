@@ -1,5 +1,5 @@
 // 流程编排。
-import { store, STAGE_LABELS } from './state.js';
+import { store, STAGE_LABELS, STEPS, stageIndex } from './state.js';
 import { createStepper } from './ui/stepper.js';
 import { createTabs } from './ui/tabs.js';
 import { createInfoPanel } from './ui/infoPanel.js';
@@ -40,6 +40,7 @@ import { ikWorld, fkWorld, fkChain, fromBase, pathClear } from './robot/ik.js';
 import { plan } from './robot/planner.js';
 import { buildSequence, GRIP_MAX } from './robot/sequence.js';
 import { createSortPlayer } from './scene/sortPlayer.js';
+import { createRun, recordStep, finishRun, summarizeRun, RUN_KINDS } from './timing.js';
 import * as THREE from 'three';
 import { toThree } from './math/coords.js';
 
@@ -102,6 +103,8 @@ const poseInputs = () => {
 
 function playTransition() {
   if (!store.state.pose) return;
+  // 一键流程到转场开始为止（场景还没建好时不算）
+  if (run?.until === 'transition' && store.state.stage === 'sceneBuilt') endRun();
   transitionPending = false;
   transition.play(poseInputs());
 }
@@ -403,6 +406,49 @@ store.on('change', showStatus);
 store.on('error', ({ reason }) => panel.message(reason, 'error'));
 
 /* ------------------------------------------------------------------ */
+/* 一键流程：分步耗时                                                    */
+/* ------------------------------------------------------------------ */
+
+/** 当前这次运行（选好照片 / 切换内参来源时开始） */
+let run = null;
+const now = () => performance.now();
+
+/** 开始一次运行。新照片一直跑到转场开始；切换内参来源跑到场景建立 */
+function beginRun(kind) {
+  run = createRun(kind, now(), { until: kind === 'intrinsics' ? 'scene' : 'transition' });
+  renderTimingSection();
+}
+
+/** 记一步耗时（运行已结束时忽略） */
+function timeStep(key, ms, opts) {
+  if (recordStep(run, key, ms, opts)) renderTimingSection();
+}
+
+/** 结束当前运行 */
+function endRun(opts) {
+  if (finishRun(run, now(), opts)) renderTimingSection();
+}
+
+function renderTimingSection() {
+  if (!run) return;
+  const s = summarizeRun(run, now());
+  const ms = (x) => `${fmt(x, 0)} ms`;
+  let html = `<p class="summary">${RUN_KINDS[run.kind]}：`;
+  if (!s.done) html += `进行中… 已用 <b>${fmt(s.total / 1000, 1)} s</b>`;
+  else if (run.error) html += `在"${STEPS.find((x) => x.key === run.error)?.label ?? run.error}"一步出错（${fmt(s.total / 1000, 1)} s）`;
+  else html += `${run.until === 'scene' ? '到场景建立' : '到转场开始'}共 <b class="${s.total > 5000 ? 'bad' : 'ok'}">${fmt(s.total / 1000, 2)} s</b>`;
+  html += '</p><dl class="kv timing">';
+  for (const r of s.rows) {
+    html += `<dt>${r.label}</dt><dd>${r.cached ? '<span class="muted">沿用</span>' : ms(r.ms)}${r.parallel ? ' <span class="muted">（与检测同时进行）</span>' : ''}</dd>`;
+  }
+  if (s.done) html += `<dt>其他</dt><dd>${ms(s.other)} <span class="muted">（界面刷新等）</span></dd>`;
+  html += '</dl>';
+  panel.setCustom('timing', '耗时').innerHTML = html;
+}
+
+store.on('error', ({ step }) => endRun({ error: step }));
+
+/* ------------------------------------------------------------------ */
 /* 照片读入后：调试视图、信息面板、真值叠加                                 */
 /* ------------------------------------------------------------------ */
 
@@ -456,7 +502,10 @@ function renderImagePanelNow() {
     calibAvailable: !!calib,
     selfFocal: selfFocalFor(image),
     // 切换来源：重新计算内参，从这一步重跑（后续结果清空）
-    onSourceChange: (source) => setImage(store.state.image, store.state.truth, source),
+    onSourceChange: (source) => {
+      beginRun('intrinsics');
+      setImage(store.state.image, store.state.truth, source);
+    },
   });
 }
 
@@ -613,7 +662,8 @@ function renderCalibSection() {
 async function runCalibration({ force = false } = {}) {
   const { image } = store.state;
   if (!image) return;
-  if (force || markerResult?.bitmap !== image.bitmap) {
+  const cached = !force && markerResult?.bitmap === image.bitmap;
+  if (!cached) {
     const body = panel.setCustom('markers', '标定');
     body.innerHTML = '<p class="muted">识别中…</p>';
     showRectified(null);
@@ -622,6 +672,8 @@ async function runCalibration({ force = false } = {}) {
     const det = detectMarkersInImage(image.bitmap, 1600);
     const { markers } = det;
     const ms = performance.now() - t0;
+    timeStep('markers', ms);
+    const t1 = now();
     let hom = null;
     let calib = null;
     if (markers.length) {
@@ -636,6 +688,10 @@ async function runCalibration({ force = false } = {}) {
     }
     // 缩小图（长边 1600）留着给颜色分割用，不必再读一遍全尺寸照片
     markerResult = { bitmap: image.bitmap, markers, ms, hom, calib, small: { imageData: det.imageData, scale: det.scale } };
+    if (calib) timeStep('homography', now() - t1);
+  } else {
+    timeStep('markers', 0, { cached: true });
+    timeStep('homography', 0, { cached: true });
   }
   $('#markers-toggle').hidden = false;
   updateMarkerOverlay();
@@ -657,7 +713,9 @@ async function runCalibration({ force = false } = {}) {
 store.on('stage:calibrated', (st) => showRectified(st.calib.rectified));
 store.on('stage:calibrated', () => {
   try {
+    const t0 = now();
     updateBoard3D();
+    timeStep('board', now() - t0);
   } catch (err) {
     console.error(err);
   }
@@ -678,6 +736,7 @@ $('#show-pose').addEventListener('change', updatePoseOverlay);
 
 /** 由 H 和 K 反推位姿，写入 state.pose */
 function runPose() {
+  const t0 = now();
   const { calib, intrinsics, truth } = store.state;
   const world = calib.markers.flatMap((m) => markerCornersWorld(m.id));
   const image = calib.markers.flatMap((m) => m.corners);
@@ -688,6 +747,8 @@ function runPose() {
     store.fail('pose', '求出的手机位置在桌面以下，位姿无效。请检查内参或重新拍照。');
     return;
   }
+  // 位姿求出后检测、映射会接着同步开始，所以在这里记耗时
+  timeStep('pose', now() - t0);
   store.advance('posed', { pose });
 
   const rows = [
@@ -733,7 +794,10 @@ function runPose() {
   if (focalAction) html += '<div class="sec-actions"><button type="button" class="btn btn-small" id="btn-use-focal">改用估计的焦距</button></div>';
   const poseBody = panel.setCustom('pose', '位姿');
   poseBody.innerHTML = html;
-  poseBody.querySelector('#btn-use-focal')?.addEventListener('click', () => setImage(store.state.image, store.state.truth, 'self'));
+  poseBody.querySelector('#btn-use-focal')?.addEventListener('click', () => {
+    beginRun('intrinsics');
+    setImage(store.state.image, store.state.truth, 'self');
+  });
   panel.message(`位姿：离桌面 ${fmt(pose.heightMm / 10, 1)} cm，俯角 ${fmt(pose.pitchDeg, 1)}°`, 'ok');
 }
 
@@ -853,7 +917,9 @@ function resetDetections() {
 /** 位姿求出后：检测（同一张照片沿用已有结果，force 时重跑），再映射 */
 async function runDetect({ force = false } = {}) {
   const { image, truth } = store.state;
-  if (force || detResult?.bitmap !== image.bitmap) {
+  if (!force && detResult?.bitmap === image.bitmap) {
+    timeStep('detect', 0, { cached: true });
+  } else {
     const mode = detMode();
     let detections = [];
     let source = mode === 'onnx' ? 'onnx' : truth ? 'truth' : 'mock';
@@ -865,16 +931,32 @@ async function runDetect({ force = false } = {}) {
       renderDetectSection(null);
     }
     try {
-      detections = await detect(image, { mode, truth, model: detSettings.model, prefer: detSettings.prefer });
+      if (mode === 'onnx') {
+        // 模型一般在页面打开后已预先加载好；没加载完时在这里等
+        const t0 = now();
+        await getOnnxDetector(detSettings.model, { prefer: detSettings.prefer }).init();
+        timeStep('model', now() - t0);
+      }
+      // 颜色分割补漏（只对零件模型）：推理在 Worker 里进行，照片交给 Worker 后主线程空着，这段时间做颜色分割
+      const wantColor = mode === 'onnx' && detSettings.colorAssist && detSettings.model === 'parts';
+      let colorDone = null;
+      const color = new Promise((resolve) => {
+        colorDone = resolve;
+      });
+      const onPosted = wantColor ? () => setTimeout(() => colorDone(colorCandidates()), 0) : null;
+      const t1 = now();
+      detections = await detect(image, { mode, truth, model: detSettings.model, prefer: detSettings.prefer, onPosted });
+      timeStep('detect', now() - t1);
       if (mode === 'onnx') {
         onnx = lastOnnxRun;
-        // 颜色分割补漏：YOLO 没框到、颜色分割找到的零件补上（只对零件模型）
-        if (detSettings.colorAssist && detSettings.model === 'parts') {
-          const c = colorCandidates();
+        // YOLO 没框到、颜色分割找到的零件补上
+        if (wantColor) {
+          const c = await color;
           if (c) {
             const fused = fuseDetections(detections, c.parts, { names: (cls) => CLASSES[cls].name });
             detections = fused.dets;
             onnx = { ...onnx, color: { candidates: c.parts.length, added: fused.added, ms: c.ms } };
+            timeStep('color', c.ms, { parallel: true });
           }
         }
       }
@@ -901,6 +983,19 @@ async function runDetect({ force = false } = {}) {
   $('#dets-toggle').hidden = false;
   $('#btn-boxedit').disabled = false;
   updateDetOverlay();
+  if (detResult.source === 'none') {
+    // 检测失败：清掉上一次的零件，回到"位姿已求出"，步骤条"检测"变红；可以点"框选"手动框出零件，框好后接着往下走
+    stopSorting();
+    partsLayer.clear();
+    sortPlan = null;
+    sortPlayer.load([]);
+    panel.remove('sort');
+    if (stageIndex(store.state.stage) > stageIndex('posed')) store.rollback('posed');
+    refreshBoardTexture();
+    renderDetectSection(null);
+    store.fail('detect', detResult.note);
+    return;
+  }
   applyDetections();
 }
 
@@ -911,10 +1006,13 @@ function applyDetections() {
     renderDetectSection(null);
     return;
   }
+  const t0 = now();
   const K = intrinsicsMatrix(intrinsics);
   const mapped = mapDetections(detResult.detections, { Hinv: calib.Hinv, K, R: pose.R, position: pose.position }, { parallax: parallaxOn });
   const { dropped } = mapped;
   const parts = refineYaw(mapped.parts);
+  timeStep('map', now() - t0);
+  const t1 = now();
   stopSorting();
   store.advance('detected', { detections: detResult.detections, parts });
   partsLayer.setParts(parts, parallaxOn);
@@ -922,6 +1020,12 @@ function applyDetections() {
   store.advance('sceneBuilt');
   renderDetectSection({ parts, dropped });
   refreshPlan();
+  timeStep('scene', now() - t1);
+  // 一键流程：新照片建好场景后切到 3D 视图播放转场（playTransition 里结束计时）；切换内参来源到这里结束
+  if (run && run.end == null) {
+    if (run.until === 'scene') endRun();
+    else tabs.select('three');
+  }
 }
 
 /** 估计朝向时检测框向外扩的距离（mm）：把电阻、LED 的一段引脚也纳入 */
@@ -969,6 +1073,8 @@ function renderDetectSection(mapping) {
   let html = renderDetControls();
   if (detResult.pending) {
     html += '<p class="muted">模型推理中…（第一次要下载模型，约 10 MB）</p>';
+  } else if (detResult.source === 'none') {
+    html += `<p class="note error">${detResult.note}</p>`;
   } else if (!mapping) {
     html += `<p class="summary">${dets.length} 个检测框</p><p class="note info">需要先求出位姿，才能把检测框映射到底板坐标。</p>`;
   } else {
@@ -1265,9 +1371,12 @@ $('#file-input').addEventListener('change', async (e) => {
   e.target.value = '';
   if (!file) return;
   panel.message(`正在读取：${file.name}…`, 'info');
+  beginRun('upload');
   try {
+    const t0 = now();
     const image = await loadImageFile(file);
     await calibReady;
+    timeStep('load', now() - t0);
     setImage(image, null);
     panel.message(`已读取照片：${file.name}（${image.width} × ${image.height}）`, 'ok');
   } catch (err) {
@@ -1290,9 +1399,12 @@ sampleSelect.addEventListener('change', async (e) => {
   e.target.value = '';
   if (!entry) return;
   panel.message(`正在加载示例：${entry.label}…`, 'info');
+  beginRun('sample');
   try {
+    const t0 = now();
     const { image, truth } = await loadSample(entry);
     await calibReady;
+    timeStep('load', now() - t0);
     // 合成图：内参默认取真值
     setImage(image, truth);
     panel.message(`已加载示例：${entry.label}`, 'ok');
@@ -1302,6 +1414,11 @@ sampleSelect.addEventListener('change', async (e) => {
 });
 
 panel.message('页面已就绪。', 'ok');
+
+// 页面空闲时预先加载零件模型（Worker 里下载约 10 MB、初始化），上传照片后不必再等模型
+const preloadModel = () => getOnnxDetector('parts', { prefer: detSettings.prefer }).init().catch((err) => console.warn('模型预加载失败：', err));
+if ('requestIdleCallback' in window) requestIdleCallback(preloadModel, { timeout: 3000 });
+else setTimeout(preloadModel, 1000);
 
 // 调试用：在控制台访问
 window.__twin = { store, panel, debugView, world, phone, transition, partsLayer, boxEditor, arm, armGoto, sortPlayer, getOnnxDetector, colorCandidates, get detResult() { return detResult; }, get sortPlan() { return sortPlan; }, get calib() { return calib; } };

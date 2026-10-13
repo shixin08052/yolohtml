@@ -172,6 +172,27 @@ export function rectifyPixels(src, H, { boardW, boardH, pxPerMm = 2 }) {
   return { width: W, height: Hh, data: out };
 }
 
+/** 最近一张照片的像素（同一张照片要做两次正射变换：正射图小窗、底板贴图，只读一次全尺寸像素） */
+let pixelCache = null; // { bitmap, data }
+
+/**
+ * ImageBitmap 的 RGBA 像素（缓存最近一张）
+ * @param {ImageBitmap} bitmap
+ * @returns {ImageData}
+ */
+export function bitmapPixels(bitmap) {
+  if (pixelCache?.bitmap !== bitmap) {
+    pixelCache = null; // 先放掉上一张，避免同时占两份内存
+    const src = document.createElement('canvas');
+    src.width = bitmap.width;
+    src.height = bitmap.height;
+    const sctx = src.getContext('2d', { willReadFrequently: true });
+    sctx.drawImage(bitmap, 0, 0);
+    pixelCache = { bitmap, data: sctx.getImageData(0, 0, src.width, src.height) };
+  }
+  return pixelCache.data;
+}
+
 /**
  * 正射图（需要浏览器环境）：输出 canvas
  * @param {CanvasImageSource & {width:number, height:number}} bitmap 原图
@@ -181,12 +202,7 @@ export function rectifyPixels(src, H, { boardW, boardH, pxPerMm = 2 }) {
  * @returns {HTMLCanvasElement}
  */
 export function rectify(bitmap, H, pxPerMm = 2, { boardW, boardH }) {
-  const src = document.createElement('canvas');
-  src.width = bitmap.width;
-  src.height = bitmap.height;
-  const sctx = src.getContext('2d', { willReadFrequently: true });
-  sctx.drawImage(bitmap, 0, 0);
-  const pix = rectifyPixels(sctx.getImageData(0, 0, src.width, src.height), H, { boardW, boardH, pxPerMm });
+  const pix = rectifyPixels(bitmapPixels(bitmap), H, { boardW, boardH, pxPerMm });
   const out = document.createElement('canvas');
   out.width = pix.width;
   out.height = pix.height;

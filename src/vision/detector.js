@@ -153,18 +153,24 @@ export function createOnnxDetector(modelUrl, { prefer = 'auto', names = null } =
           if (meta?.names) names = Object.values(meta.names);
         }
         return call({ type: 'init', modelUrl, ortBase: new URL('ort/', document.baseURI).href, prefer });
-      })();
+      })().catch((err) => {
+        ready = null; // 失败（例如网络断了）后下次重试
+        throw err;
+      });
       return ready;
     },
     /**
      * 检测一张照片（ImageBitmap 会被复制一份交给 Worker）
      * @param {ImageBitmap} bitmap
+     * @param {{ onPosted?: () => void }} [opts] onPosted：照片交给 Worker 后调用（主线程可以趁推理时做别的）
      * @returns {Promise<{ raw: object[], dets: import('../state.js').Detection[], prepMs: number, inferMs: number, postMs: number, dims: number[] }>}
      */
-    async detect(bitmap, { scoreThreshold = DETECT.scoreThreshold, iouThreshold = DETECT.iouThreshold, dedupIou = DETECT.dedupIou } = {}) {
+    async detect(bitmap, { scoreThreshold = DETECT.scoreThreshold, iouThreshold = DETECT.iouThreshold, dedupIou = DETECT.dedupIou, onPosted = null } = {}) {
       await this.init();
       const copy = await createImageBitmap(bitmap);
-      const r = await call({ type: 'detect', bitmap: copy, scoreThreshold, iouThreshold, dedupIou }, [copy]);
+      const pending = call({ type: 'detect', bitmap: copy, scoreThreshold, iouThreshold, dedupIou }, [copy]);
+      onPosted?.(); // 照片已交给 Worker，主线程可以去做别的
+      const r = await pending;
       // raw 保留模型自己的类别 ID 和类别名（与 predict_dump.py 的输出对照）；
       // dets：零件模型按类别名换成本项目的类别 ID 和中文名，去掉这里没有的类别；其他模型（官方 COCO）保持原样
       const map = names ? modelClassMap(names) : CLASSES.map((c) => c.id);
@@ -202,15 +208,16 @@ export function getOnnxDetector(key = 'parts', { prefer = 'auto' } = {}) {
 /**
  * 检测零件
  * @param {import('../state.js').ImageInput} image
- * @param {{ mode?: 'mock'|'onnx', truth?: import('../state.js').GroundTruth|null, model?: keyof typeof MODELS, prefer?: 'auto'|'wasm' }} [opts]
+ * @param {{ mode?: 'mock'|'onnx', truth?: import('../state.js').GroundTruth|null, model?: keyof typeof MODELS, prefer?: 'auto'|'wasm',
+ *           onPosted?: (() => void)|null }} [opts] onPosted：onnx 模式下照片交给 Worker 后调用
  * @returns {Promise<import('../state.js').Detection[]>}
  * @throws {MockMissingError} mock 模式下既没有真值也没有检测结果文件
  */
-export async function detect(image, { mode = 'mock', truth = null, model = 'parts', prefer = 'auto' } = {}) {
+export async function detect(image, { mode = 'mock', truth = null, model = 'parts', prefer = 'auto', onPosted = null } = {}) {
   if (mode === 'onnx') {
     const d = getOnnxDetector(model, { prefer });
     const info = await d.init();
-    const r = await d.detect(image.bitmap);
+    const r = await d.detect(image.bitmap, { onPosted });
     lastOnnxRun = { model, info, ...r };
     return r.dets;
   }
