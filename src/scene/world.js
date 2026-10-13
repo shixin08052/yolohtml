@@ -227,16 +227,24 @@ export function createWorld(container) {
     };
   }
 
-  /** 按参数摆放相机（k 为视点偏移的保留比例，转场中从 1 过渡到 0） */
+  /**
+   * 按参数摆放相机（k 为视点偏移的保留比例，转场中从 1 过渡到 0）。
+   * 注意 Three.js 的 setViewOffset 会把 camera.aspect 改成 fullWidth / fullHeight：这里按当前画面区域的宽高比
+   * 给出"全画面"尺寸（高度取照片高度），只平移主点、不拉伸画面。转场途中画面区域从照片比例变宽时，
+   * 如果用照片尺寸，整段飞行都会被横向拉伸，飞到终点偏移归零的那一帧突然复原（看起来像缩放了一下）。
+   */
   function applyCamera({ position, quaternion, fov, offset, size }, k = 1) {
     camera.position.copy(position);
     camera.quaternion.copy(quaternion);
     camera.fov = fov;
+    const aspect = frameAspect();
     if (offset && size && k > 0 && (offset[0] || offset[1])) {
-      camera.setViewOffset(size[0], size[1], offset[0] * k, offset[1] * k, size[0], size[1]);
+      const H = size[1];
+      camera.setViewOffset(H * aspect, H, offset[0] * k, offset[1] * k, H * aspect, H);
     } else {
       camera.clearViewOffset();
     }
+    camera.aspect = aspect;
     camera.updateProjectionMatrix();
     requestRender();
   }
@@ -259,6 +267,12 @@ export function createWorld(container) {
   // 画布本身尺寸不变——每帧改画布尺寸会清空绘图缓冲，造成闪烁
   let frame = null;
   let size = { w: 0, h: 0 };
+
+  /** 当前画面区域的宽高比（画面区域未设置时取整个画布） */
+  function frameAspect() {
+    const a = frame ? frame.w / frame.h : size.w / size.h;
+    return Number.isFinite(a) && a > 0 ? a : camera.aspect;
+  }
 
   function updateAspect() {
     const a = frame ? frame.w / frame.h : size.w / size.h;
