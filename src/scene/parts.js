@@ -1,6 +1,6 @@
 // 零件模型：每个类别用基础几何体拼成（步骤 3 合成图使用，步骤 10 的 3D 场景复用）。
 // 模型的局部坐标：原点在零件中心正下方的板面上；底板 X、Y、Z 分别对应 Three.js 的 x、−z、y。
-// 长条形零件（电阻、螺丝）沿局部 X 方向放置，绕 Z 轴旋转 rotDeg 后摆到板上。
+// 长条形零件（电阻、螺丝、LED，都是躺平放的）沿局部 X 方向放置，绕 Z 轴旋转 rotDeg 后摆到板上。
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import { CLASSES } from '../config.js';
@@ -13,7 +13,7 @@ import { toThree } from '../math/coords.js';
 export const PART_SIZE = {
   0: { lx: 22, ly: 3, h: 3 },      // 色环电阻：本体 Φ3×8，两根引脚，总长 22
   1: { lx: 8, ly: 8, h: 12 },      // 电解电容：Φ8×12
-  2: { lx: 5, ly: 5, h: 9 },       // LED：Φ5，柱体 6.5 + 半球
+  2: { lx: 28.5, ly: 5.8, h: 5.8 }, // LED（躺平）：Φ5 灯体 + 半球头 + Φ5.8 底边，两根引脚 20 / 18 mm，灯头朝局部 +X
   3: { lx: 14.5, ly: 4, h: 4 },    // 螺丝（横躺）：杆 Φ2.5×12，圆头 Φ4×2.5
 };
 
@@ -25,6 +25,18 @@ function lyingCylinder(r, len, mat, cx, cy) {
   const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, 24), mat);
   m.rotation.z = Math.PI / 2;
   m.position.set(cx, cy, 0);
+  return m;
+}
+
+/** LED 模型整体沿 X 的平移量，使包围盒居中（灯体中心因此在局部 x = 9.25） */
+const LED_SHIFT = 8.25;
+
+/** 两点之间的细圆柱（引脚） */
+function rod(p0, p1, r, mat) {
+  const d = new THREE.Vector3().subVectors(p1, p0);
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, d.length(), 8), mat);
+  m.position.copy(p0).addScaledVector(d, 0.5);
+  m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.normalize());
   return m;
 }
 
@@ -59,14 +71,23 @@ export function createPartMesh(cls) {
       break;
     }
     case 2: {
-      // LED：圆柱 + 半球
+      // LED（躺平，像实物那样侧放在桌上）：灯体靠底边撑起，轴心高 2.9；两根引脚从底边伸出、斜搭到桌面
+      // 未平移前：底边 x ∈ [−2.5, −1.5]，灯体 [−1.5, 3.5]，半球头到 6.0，引脚到 −22.5；整体平移 +8.25 使包围盒居中
+      const S = LED_SHIFT;
       const mat = material(2, { roughness: 0.25, transparent: true, opacity: 0.92 });
-      const col = new THREE.Mesh(new THREE.CylinderGeometry(2.5, 2.5, 6.5, 32), mat);
-      col.position.y = 3.25;
-      g.add(col);
+      const axisY = 2.9;
+      g.add(lyingCylinder(2.9, 1, mat, -2 + S, axisY)); // 底边
+      g.add(lyingCylinder(2.5, 5, mat, 1 + S, axisY)); // 灯体
       const dome = new THREE.Mesh(new THREE.SphereGeometry(2.5, 32, 16, 0, Math.PI * 2, 0, Math.PI / 2), mat);
-      dome.position.y = 6.5;
+      dome.rotation.z = -Math.PI / 2; // 半球朝 +X
+      dome.position.set(3.5 + S, axisY, 0);
       g.add(dome);
+      const lead = new THREE.MeshStandardMaterial({ color: '#c0c4c8', metalness: 0.6, roughness: 0.35 });
+      for (const [z, len] of [[1.27, 20], [-1.27, 18]]) {
+        const p0 = new THREE.Vector3(-2.5 + S, axisY, z);
+        const p1 = new THREE.Vector3(-2.5 - len + S, 0.25, z);
+        g.add(rod(p0, p1, 0.25, lead));
+      }
       break;
     }
     case 3: {

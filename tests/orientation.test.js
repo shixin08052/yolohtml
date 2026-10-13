@@ -45,6 +45,12 @@ const SCREW = [
   [[140, 145, 150], rect(-4.75, 7.25, 2.5)],
   [[140, 145, 150], rect(-7.25, -4.75, 4)],
 ];
+// 躺平的 LED（与 parts.js 一致，包围盒居中）：灯体在 +X，两根引脚伸向 −X
+const LED = [
+  [[170, 174, 178], (x, y) => x >= -14.25 && x <= 6 && Math.abs(Math.abs(y) - 1.27) <= 0.3],
+  [[200, 60, 60], (x, y) => x >= 5.75 && x <= 14.25 && Math.abs(y) <= 2.6],
+];
+
 /** 零件周围 30×30 mm 的区域（图像像素） */
 const region = () => [[50 - 15, 50 + 15], [50 + 15, 50 + 15], [50 + 15, 50 - 15], [50 - 15, 50 - 15]].map(toPx);
 
@@ -66,6 +72,14 @@ describe('零件朝向估计', () => {
   it('螺丝：主轴方向 + 螺帽在哪头（周期 360°）', () => {
     for (const rot of [0, 20, -35, 100, 170, -120]) {
       const r = estimateYaw(render(SCREW, rot), region(), 3, toBoard);
+      expect(r.reliable).toBe(true);
+      expect(angDiff(r.rotDeg, rot, 360)).toBeLessThan(3);
+    }
+  });
+
+  it('躺平的 LED：主轴方向 + 灯体在哪头（周期 360°）', () => {
+    for (const rot of [0, 30, -70, 160, -120]) {
+      const r = estimateYaw(render(LED, rot), region(), 2, toBoard);
       expect(r.reliable).toBe(true);
       expect(angDiff(r.rotDeg, rot, 360)).toBeLessThan(3);
     }

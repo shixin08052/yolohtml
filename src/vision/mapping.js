@@ -58,7 +58,7 @@ export function inWorkArea(x, y) {
 }
 
 /**
- * 长条零件（电阻、螺丝）的朝向：检测框只有轴对齐的外接矩形，分不出 ±θ，
+ * 长条零件（电阻、螺丝、躺平的 LED）的朝向：检测框只有轴对齐的外接矩形，分不出 ±θ，
  * 这里只按框四角落到板面后的 X、Y 跨度判断大致沿 X（0°）还是沿 Y（90°）。
  * @param {number[][]} Hinv
  * @param {[number,number,number,number]} box
@@ -107,7 +107,7 @@ export function mapDetections(detections, { Hinv, K, R, position }, { parallax =
       yPlane,
       xParallax,
       yParallax,
-      rotDeg: cls.id === 0 || cls.id === 3 ? boxYawDeg(Hinv, det.box) : 0,
+      rotDeg: cls.id === 0 || cls.id === 2 || cls.id === 3 ? boxYawDeg(Hinv, det.box) : 0,
       detIndex: i,
       reachable: true, // 步骤 12 用逆运动学判断
     });

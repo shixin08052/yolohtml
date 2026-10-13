@@ -817,7 +817,7 @@ function applyDetections() {
 }
 
 /**
- * 用照片估计电阻、螺丝的朝向（检测框是轴对齐的，看不出角度）：
+ * 用照片估计电阻、螺丝、LED 的朝向（检测框是轴对齐的，看不出角度）：
  * 在底板正射图上取检测框对应的区域分出零件像素，按形状求角度；估计不可靠时沿用 mapping 的 0° / 90° 粗判
  */
 function refineYaw(parts) {
@@ -860,12 +860,12 @@ function renderDetectSection(mapping) {
   } else {
     const { parts, dropped } = mapping;
     html += `<p class="summary">检测到 <b>${parts.length}</b> 个零件<span class="muted">（来源：${DET_SOURCE_LABELS[detResult.source]}）</span></p>`;
-    const oriented = parts.filter((p) => [0, 3].includes(p.cls));
+    const oriented = parts.filter((p) => [0, 2, 3].includes(p.cls));
     const fromPhoto = oriented.filter((p) => p.yawSource === 'photo').length;
     const counts = CLASSES.map((c) => [c.name, parts.filter((p) => p.cls === c.id).length]).filter(([, n]) => n);
     if (counts.length) html += '<dl class="kv">' + counts.map(([k, n]) => `<dt>${k}</dt><dd>${n}</dd>`).join('') + '</dl>';
     if (oriented.length) {
-      html += `<p class="muted small">朝向：${fromPhoto} / ${oriented.length} 个电阻、螺丝按照片估计${fromPhoto < oriented.length ? '，其余看不清，按检测框粗判 0° / 90°' : ''}。</p>`;
+      html += `<p class="muted small">朝向：${fromPhoto} / ${oriented.length} 个电阻、螺丝、LED 按照片估计${fromPhoto < oriented.length ? '，其余看不清，按检测框粗判 0° / 90°' : ''}。</p>`;
     }
     html += `<label class="check toggle-row"><input type="checkbox" id="parallax-toggle"${parallaxOn ? ' checked' : ''} /> 视差修正</label>`;
     html += '<p class="muted small">零件有高度，斜拍时检测框中心对应零件半高处；修正后按半高求交，不修正则直接落到板面。</p>';

@@ -1,6 +1,6 @@
 // 分拣动作序列（纯函数，不碰 DOM）：把规划好的任务展开成一段段可播放的动作。
-// 每个零件：张开夹爪 → 移到零件正上方 → 竖直下降到零件半高处 → 夹紧 → 挂到夹爪上 → 竖直抬起
-//         → 移到料盒上方 → 竖直下降 → 松开 → 放回场景（落在盒内）→ 竖直抬起
+// 每个零件：张开夹爪 → 移到零件正上方 → 竖直下降到夹取高度 → 夹紧 → 挂到夹爪上 → 竖直抬起
+//         → 移到料盒上方（途中转动夹爪，长条零件转成沿料盒长边）→ 竖直下降 → 松开 → 放回场景（落在盒内）→ 竖直抬起
 // 全部完成后回到初始姿态。
 // 段的类型：
 //   move   关节空间插值（θ₃ 由 θ₁、θ₂ 推出，途中夹爪竖直向下）
@@ -75,12 +75,14 @@ export function buildSequence(tasks, parts, arm, { startAngles, homeAngles, star
     grip(width, i, '夹紧');
     segs.push({ type: 'attach', task: i, phase: '夹起', partId: t.partId, ms: 0 });
     line(t.from, t.hoverFrom, t.gripYaw, i, '抬起');
-    move(solve(t.hoverTo, t.gripYaw), i, '移到料盒上方');
-    line(t.hoverTo, t.to, t.gripYaw, i, '放入料盒');
+    const placeYaw = t.placeYaw === undefined ? t.gripYaw : t.placeYaw;
+    move(solve(t.hoverTo, placeYaw), i, '移到料盒上方');
+    line(t.hoverTo, t.to, placeYaw, i, '放入料盒');
     grip(open, i, '松开');
-    // 零件底面 = 指尖高度 − 半个零件高（指尖夹在零件半高处）
-    segs.push({ type: 'detach', task: i, phase: '放下', partId: t.partId, base: [t.to[0], t.to[1], t.to[2] - part.heightMm / 2], ms: 0 });
-    line(t.to, t.hoverTo, t.gripYaw, i, '离开');
+    // 零件底面 = 指尖高度 − 夹取时指尖离零件底面的高度
+    const graspZ = t.graspZ ?? part.heightMm / 2;
+    segs.push({ type: 'detach', task: i, phase: '放下', partId: t.partId, baseZ: t.to[2] - graspZ, ms: 0 });
+    line(t.to, t.hoverTo, placeYaw, i, '离开');
   });
   move(homeAngles, null, '回到初始姿态');
   return segs;

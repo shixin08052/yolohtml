@@ -1,7 +1,6 @@
 // 分拣动画播放器：按 robot/sequence.js 展开的动作序列驱动机械臂和零件。
 // 用自己的时钟（每帧累加 帧间隔 × 速度），所以暂停、调速在一段动作中途也立即生效。
 import { ARM } from '../config.js';
-import { toThree } from '../math/coords.js';
 import { ikWorld, lerpAngles } from '../robot/ik.js';
 
 const easeInOutCubic = (t) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
@@ -55,7 +54,7 @@ export function createSortPlayer({ arm, partsLayer, requestRender, onProgress = 
       const node = partsLayer.nodeOf(s.partId);
       if (node) {
         partsLayer.group.attach(node);
-        node.position.copy(toThree(...s.base)); // 精确落在盒底（或下层零件）上
+        node.position.y = s.baseZ; // 水平位置随夹爪带过来；高度精确落在盒底（或下层零件）上（Three.js 的 y = 底板 Z）
         partsLayer.setMoved(s.partId, { hideLabel: true });
       }
     }

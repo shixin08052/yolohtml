@@ -20,7 +20,7 @@ export const CAMERA = { expectedFocal35: 26, refWidth: 4032, refHeight: 3024 };
 export const CLASSES = [
   { id: 0, key: 'resistor',  name: '色环电阻', heightMm: 3,  color: '#c8a165' },
   { id: 1, key: 'capacitor', name: '电解电容', heightMm: 12, color: '#3b6fb6' },
-  { id: 2, key: 'led',       name: 'LED',      heightMm: 9,  color: '#d94c4c' },
+  { id: 2, key: 'led',       name: 'LED',      heightMm: 5.8, color: '#d94c4c' }, // 躺平放置
   { id: 3, key: 'screw',     name: '螺丝',     heightMm: 4,  color: '#9aa0a6' },
 ];
 
