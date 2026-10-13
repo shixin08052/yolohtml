@@ -25,7 +25,13 @@ EXTS = {'.jpg', '.jpeg', '.png', '.heic', '.heif', '.tif', '.tiff', '.bmp'}
 
 
 def load_image(path):
-    """读图并按 EXIF 方向转正，返回灰度 numpy 数组。HEIC 需要 pillow-heif。"""
+    """读图并转回传感器方向（与 EXIF 方向 1 相同的横向），返回 (灰度 numpy 数组, 原始 EXIF 方向)。
+
+    手机横拿有两种（方向 1 / 3，差 180°），竖拿也有两种（6 / 8），只看宽高分不出来，必须按 EXIF 方向转：
+    先按 EXIF 转正（显示方向），再按方向值转回传感器方向。HEIC 由 pillow-heif 解码时已经转正，
+    原始方向在 info['original_orientation'] 里。HEIC 需要 pillow-heif。
+    """
+    import cv2
     import numpy as np
     from PIL import Image, ImageOps
 
@@ -36,8 +42,19 @@ def load_image(path):
             sys.exit('读取 HEIC 需要 pillow-heif：pip install pillow-heif（或先把照片导出为 JPG）')
         pillow_heif.register_heif_opener()
     with Image.open(path) as im:
-        im = ImageOps.exif_transpose(im)
-        return np.array(im.convert('L'))
+        orient = im.info.get('original_orientation') or im.getexif().get(0x0112) or None
+        gray = np.array(ImageOps.exif_transpose(im).convert('L'))
+    # 显示方向 → 传感器方向：1 不转；3 转 180°；6（竖拿，Home 键 / 底部在下）逆时针 90°；8 顺时针 90°
+    back = {3: cv2.ROTATE_180, 6: cv2.ROTATE_90_COUNTERCLOCKWISE, 8: cv2.ROTATE_90_CLOCKWISE}
+    if orient in back:
+        gray = cv2.rotate(gray, back[orient])
+    elif orient in (None, 1) and gray.shape[0] > gray.shape[1]:
+        # 没有方向信息的竖图（如截图、导出时丢了 EXIF）：只能假定是方向 6
+        gray = cv2.rotate(gray, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        orient = '6?'
+    elif orient not in (None, 1):
+        sys.exit(f'{path.name}：EXIF 方向 {orient} 是镜像照片，不能用于标定')
+    return gray, orient or 1
 
 
 def main():
@@ -66,10 +83,7 @@ def main():
     size = None
     criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 50, 1e-4)
     for f in files:
-        gray = load_image(f)
-        if gray.shape[0] > gray.shape[1]:
-            # 竖拍：逆时针转 90° 回到传感器横向
-            gray = cv2.rotate(gray, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        gray, orient = load_image(f)
         h, w = gray.shape
         if size is None:
             size = (w, h)
@@ -88,8 +102,8 @@ def main():
         corners = cv2.cornerSubPix(gray, corners.astype(np.float32), (11, 11), (-1, -1), criteria)
         obj_pts.append(objp)
         img_pts.append(corners)
-        used.append(f.name)
-        print(f'  ✓ {f.name}')
+        used.append(f'{f.name}（方向 {orient}）')
+        print(f'  ✓ {f.name}（EXIF 方向 {orient}）')
 
     n = len(used)
     print(f'成功检测 {n} / {len(files)} 张')
