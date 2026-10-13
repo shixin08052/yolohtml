@@ -127,6 +127,7 @@ export function createPartsLayer({ requestRender, onFrame = () => {} }) {
 
   function place() {
     for (const it of items) {
+      if (it.moved) continue; // 已被机械臂拿走的零件不再跟随方法切换
       const [x, y] = posAt(it.part, blend);
       it.node.position.copy(toThree(x, y, 0));
     }
@@ -141,7 +142,7 @@ export function createPartsLayer({ requestRender, onFrame = () => {} }) {
       const sc = k <= 0 ? 0.0001 : easeOutBack(k);
       it.model.scale.setScalar(sc);
       it.model.visible = k > 0;
-      it.label.visible = labelsOn && k >= 1;
+      it.label.visible = labelsOn && k >= 1 && !it.labelHidden;
     });
   }
 
@@ -154,6 +155,7 @@ export function createPartsLayer({ requestRender, onFrame = () => {} }) {
         }
       });
       it.text.remove();
+      it.node.removeFromParent(); // 可能正挂在夹爪上
     }
     group.clear();
     items = [];
@@ -224,6 +226,25 @@ export function createPartsLayer({ requestRender, onFrame = () => {} }) {
     setLabelsVisible(on) {
       labelsOn = on;
       applyGrow();
+      requestRender();
+    },
+    /** 零件的场景节点（分拣时挂到夹爪上） */
+    nodeOf(id) {
+      return items.find((it) => it.part.id === id)?.node ?? null;
+    },
+    /** 标记零件已被机械臂拿走（之后切换方法时不再移动它），可同时隐藏标签 */
+    setMoved(id, { hideLabel = false } = {}) {
+      const it = items.find((x) => x.part.id === id);
+      if (!it) return;
+      it.moved = true;
+      it.labelHidden = hideLabel;
+      applyGrow();
+      requestRender();
+    },
+    /** 不可达零件的标签标红 */
+    markUnreachable(ids) {
+      const set = new Set(ids);
+      for (const it of items) it.text.classList.toggle('bad', set.has(it.part.id));
       requestRender();
     },
     get count() {

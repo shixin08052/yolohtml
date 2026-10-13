@@ -34,6 +34,9 @@ export const ARM = {
   approach: 60,          // 抓取 / 放置前在目标正上方的悬停高度
 };
 
+// 料盒壁厚（mm）：盒底上表面高 BIN_WALL
+export const BIN_WALL = 2;
+
 // 料盒：每类一个，左右各 2 个（size 为 X 宽、Y 长、高，mm）
 export const BINS = [
   { id: 0, cls: 0, center: [-40, 70],  size: [60, 66, 35] },

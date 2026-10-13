@@ -10,6 +10,7 @@ import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeom
 import { ARM, BOARD } from '../config.js';
 import { toThree } from '../math/coords.js';
 import { ikWorld, lerpAngles } from '../robot/ik.js';
+import { GRIP_MAX } from '../robot/sequence.js';
 
 /** 初始姿态：收拢竖起，指尖在底板远边外侧上方（底板坐标），不伸到底板上方 */
 export const ARM_HOME = [148.5, BOARD.height + 10, 200];
@@ -116,11 +117,11 @@ export function createArm({ requestRender }) {
   ring.position.x = 28;
   roll.add(ring);
   roll.add(link(29, 38, 16, 46, dark));
-  // 两根手指沿局部 z 分开，开合时沿 z 平移
+  // 两根手指沿局部 z 分开，开合时沿 z 平移；指尖内侧有一块垫片，开口按两块垫片的间距算
   const fingers = [-1, 1].map((side) => {
     const f = link(38, L3, 9, 4, steel);
     const pad = link(L3 - 10, L3, 9, 1.5, accent);
-    pad.position.z = -side * 2.6;
+    pad.position.z = -side * 2.75; // 垫片内侧面在手指中心往里 3.5 mm
     const g = new THREE.Group();
     g.add(f, pad);
     g.userData.side = side;
@@ -128,15 +129,15 @@ export function createArm({ requestRender }) {
     return g;
   });
 
-  /** 夹爪开口（两指内侧间距，mm） */
-  const GRIP = { min: 2, max: 34 };
-  let grip = 1;
-  function setGrip(open) {
-    grip = Math.min(1, Math.max(0, open));
-    const gap = GRIP.min + (GRIP.max - GRIP.min) * grip;
-    for (const f of fingers) f.position.z = f.userData.side * (gap / 2 + 2);
+  /** 夹爪开口：两块垫片内侧的间距（mm），0 – GRIP_MAX */
+  let gap = GRIP_MAX;
+  function setGap(mm) {
+    gap = Math.min(GRIP_MAX, Math.max(0, mm));
+    for (const f of fingers) f.position.z = f.userData.side * (gap / 2 + 3.5);
     requestRender();
   }
+  /** 夹爪开合程度 0（闭合）– 1（全开） */
+  const setGrip = (open) => setGap(GRIP_MAX * Math.min(1, Math.max(0, open)));
 
   /** 当前关节角 [θ₀, θ₁, θ₂, θ₃, θ₄] */
   let angles = [0, 0, 0, -Math.PI / 2, 0];
@@ -212,9 +213,12 @@ export function createArm({ requestRender }) {
     get angles() {
       return [...angles];
     },
-    get grip() {
-      return grip;
+    setGap,
+    get gap() {
+      return gap;
     },
+    /** 夹住零件时把零件挂到这个节点下（随腕部转动） */
+    gripNode: roll,
     /** 指尖在场景里的位置（由 Three.js 层级算出，用来核对与 fk 是否一致） */
     tipFromScene() {
       group.updateMatrixWorld(true);

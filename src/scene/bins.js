@@ -1,10 +1,7 @@
 // 料盒：按 BINS 摆放的开口盒子（底 + 四壁），两侧（朝 ±X 的壁）贴类别名。
 import * as THREE from 'three';
-import { BINS, CLASSES } from '../config.js';
+import { BINS, BIN_WALL, CLASSES } from '../config.js';
 import { toThree } from '../math/coords.js';
-
-/** 盒壁厚度（mm） */
-export const BIN_WALL = 2;
 
 /** 类别名贴图：类别颜色底、白字 */
 function labelTexture(text, color) {

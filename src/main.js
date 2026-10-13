@@ -36,6 +36,9 @@ import { CLASSES, WORK_AREA, ARM, BINS } from './config.js';
 import { createArm } from './scene/arm.js';
 import { createBins } from './scene/bins.js';
 import { ikWorld, fkWorld, fkChain, fromBase, pathClear } from './robot/ik.js';
+import { plan } from './robot/planner.js';
+import { buildSequence, GRIP_MAX } from './robot/sequence.js';
+import { createSortPlayer } from './scene/sortPlayer.js';
 import * as THREE from 'three';
 import { toThree } from './math/coords.js';
 
@@ -107,6 +110,7 @@ $('#btn-compare').addEventListener('click', () => {
 
 store.on('stage:posed', (st) => {
   phone.setPose({ pose: st.pose, intrinsics: st.intrinsics, orientation: st.image.exif.orientation });
+  stopSorting();
   partsLayer.clear();
   // 全景视角要把手机（光心周围 ±80 mm）也装进画面
   const [X, Y, Z] = st.pose.position;
@@ -223,6 +227,7 @@ function renderArmSection(r) {
 
 /** 点击：机械臂移动到点击位置正上方 approach 高度处 */
 function armGoto(X, Y) {
+  if (sortActive()) return; // 分拣时不响应
   const target = [X, Y, ARM.approach];
   const s = ikWorld(target, ARM);
   armTarget.show(target, s.reachable);
@@ -419,6 +424,8 @@ store.on('stage:imageLoaded', (st) => {
   $('#btn-transition').disabled = true;
   $('#btn-compare').disabled = true;
   panel.remove('pose');
+  stopSorting();
+  panel.remove('sort');
   partsLayer.clear();
   if (detResult?.bitmap !== image.bitmap) resetDetections();
   if (markerResult?.bitmap !== image.bitmap) {
@@ -800,11 +807,13 @@ function applyDetections() {
   const mapped = mapDetections(detResult.detections, { Hinv: calib.Hinv, K, R: pose.R, position: pose.position }, { parallax: parallaxOn });
   const { dropped } = mapped;
   const parts = refineYaw(mapped.parts);
+  stopSorting();
   store.advance('detected', { detections: detResult.detections, parts });
   partsLayer.setParts(parts, parallaxOn);
   refreshBoardTexture();
   store.advance('sceneBuilt');
   renderDetectSection({ parts, dropped });
+  refreshPlan();
 }
 
 /**
@@ -828,9 +837,12 @@ function refineYaw(parts) {
 
 function setParallax(on) {
   parallaxOn = on;
+  // 分拣进行中或已经动过零件：先复原，再切换
+  if (stopSorting()) partsLayer.setParts(store.state.parts, !on);
   if (store.state.parts) store.state.parts = selectMethod(store.state.parts, on);
   partsLayer.animateMethod(on);
   renderDetectSection(lastMapping);
+  if (store.state.parts) refreshPlan();
 }
 
 let lastMapping = null;
@@ -937,6 +949,143 @@ store.on('stage:posed', () => {
 });
 
 /* ------------------------------------------------------------------ */
+/* 模块 6：分拣规划与抓取动画                                            */
+/* ------------------------------------------------------------------ */
+
+const sortPlayer = createSortPlayer({
+  arm,
+  partsLayer,
+  requestRender: world.requestRender,
+  onProgress: ({ task, phase }) => updateSortProgress(task, phase),
+  onState: (state) => onSortState(state),
+});
+/** 当前规划：{ tasks, skipped, segs } */
+let sortPlan = null;
+/** 分拣是否动过场景（零件被拿走、机械臂离开初始姿态） */
+let sortTouched = false;
+
+const sortActive = () => sortPlayer.state === 'running' || sortPlayer.state === 'paused';
+
+/**
+ * 停止分拣并复原机械臂；返回是否动过零件（调用方需要重建零件）
+ * @returns {boolean}
+ */
+function stopSorting() {
+  const touched = sortTouched;
+  sortPlayer.stop();
+  sortTouched = false;
+  if (touched) {
+    arm.setAngles(arm.homeAngles);
+    arm.setGap(GRIP_MAX);
+  }
+  if (store.state.stage === 'sorting' || store.state.stage === 'done') store.rollback('sceneBuilt');
+  return touched;
+}
+
+/** 重新规划（零件变化后），载入动作序列，刷新"分拣"分区 */
+function refreshPlan() {
+  const { parts } = store.state;
+  if (!parts) return;
+  const start = fkWorld(arm.homeAngles, ARM);
+  const { tasks, skipped } = plan(parts, BINS, ARM, { start });
+  const skippedIds = new Set(skipped.map((p) => p.id));
+  store.state.parts = parts.map((p) => ({ ...p, reachable: !skippedIds.has(p.id) }));
+  partsLayer.markUnreachable([...skippedIds]);
+  const segs = buildSequence(tasks, store.state.parts, ARM, { startAngles: arm.homeAngles, homeAngles: arm.homeAngles });
+  sortPlan = { tasks, skipped, segs };
+  sortPlayer.load(segs);
+  renderSortSection();
+}
+
+/** 重置：零件回到原位，机械臂回到初始姿态 */
+function resetSorting() {
+  if (stopSorting()) partsLayer.setParts(store.state.parts, parallaxOn);
+  refreshPlan();
+}
+
+function startSorting() {
+  if (!sortPlan?.tasks.length) return;
+  if (sortPlayer.state === 'done') resetSorting();
+  setArmDebug(false);
+  armTarget.hide();
+  if (store.state.stage === 'sceneBuilt') store.advance('sorting', { tasks: sortPlan.tasks, skipped: sortPlan.skipped });
+  tabs.select('three');
+  sortTouched = true;
+  sortPlayer.start();
+}
+
+const partName = (p) => `${CLASSES[p.cls].name} (${fmt(p.x, 1)}, ${fmt(p.y, 1)})`;
+
+/** 渲染"分拣"分区（规划变化时整体重建；进度变化只改样式） */
+function renderSortSection() {
+  if (!sortPlan) return;
+  const { tasks, skipped } = sortPlan;
+  const byId = new Map(store.state.parts.map((p) => [p.id, p]));
+  const body = panel.setCustom('sort', '分拣');
+  let html = `<p class="summary">共 <b>${tasks.length}</b> 个零件待分拣${skipped.length ? `，<span class="bad">${skipped.length} 个够不到</span>` : ''}</p>`;
+  html += `<div class="sort-controls">
+    <button type="button" class="btn btn-primary btn-small" id="sort-start">开始</button>
+    <button type="button" class="btn btn-small" id="sort-pause" disabled>暂停</button>
+    <button type="button" class="btn btn-small" id="sort-reset">重置</button>
+    <label class="speed">速度 <input type="range" id="sort-speed" min="0.5" max="3" step="0.25" value="${sortPlayer.speed}" /> <span id="sort-speed-val">${sortPlayer.speed.toFixed(2)}×</span></label>
+  </div>
+  <p class="muted small" id="sort-phase">等待开始</p>`;
+  html += '<ol class="task-list">' + tasks.map((t, i) => {
+    const p = byId.get(t.partId);
+    const bin = BINS.find((b) => b.id === t.binId);
+    return `<li data-i="${i}"><span class="dot" style="--c:${CLASSES[p.cls].color}"></span>${partName(p)}<span class="muted"> → ${CLASSES[bin.cls].name}盒</span></li>`;
+  }).join('') + '</ol>';
+  if (skipped.length) {
+    html += '<p class="sub-title">已跳过</p><ul class="skip-list">' + skipped.map((p) => `<li>${partName(p)}<span>${p.skipReason}</span></li>`).join('') + '</ul>';
+  }
+  body.innerHTML = html;
+  body.querySelector('#sort-start').addEventListener('click', startSorting);
+  body.querySelector('#sort-pause').addEventListener('click', () => {
+    if (sortPlayer.state === 'running') sortPlayer.pause();
+    else sortPlayer.resume();
+  });
+  body.querySelector('#sort-reset').addEventListener('click', resetSorting);
+  body.querySelector('#sort-speed').addEventListener('input', (e) => {
+    sortPlayer.setSpeed(Number(e.target.value));
+    body.querySelector('#sort-speed-val').textContent = `${Number(e.target.value).toFixed(2)}×`;
+  });
+  onSortState(sortPlayer.state);
+}
+
+function updateSortProgress(task, phase) {
+  const body = document.querySelector('#info-panel [data-key="sort"]');
+  if (!body || !sortPlan) return;
+  const n = sortPlan.tasks.length;
+  const finished = sortPlayer.state === 'done' || (task == null && sortTouched);
+  body.querySelectorAll('.task-list li').forEach((li) => {
+    const i = Number(li.dataset.i);
+    li.classList.toggle('active', !finished && i === task);
+    li.classList.toggle('done', finished || (task != null && i < task));
+  });
+  const ph = body.querySelector('#sort-phase');
+  if (ph) {
+    ph.textContent = !sortTouched ? '等待开始' : task == null ? (finished ? `全部完成（${n} 个）` : phase) : `第 ${task + 1} / ${n} 个 · ${phase}`;
+  }
+}
+
+function onSortState(state) {
+  const body = document.querySelector('#info-panel [data-key="sort"]');
+  if (body) {
+    const start = body.querySelector('#sort-start');
+    const pause = body.querySelector('#sort-pause');
+    start.disabled = state === 'running' || state === 'paused' || !sortPlan?.tasks.length;
+    start.textContent = state === 'done' ? '重新开始' : '开始';
+    pause.disabled = !(state === 'running' || state === 'paused');
+    pause.textContent = state === 'paused' ? '继续' : '暂停';
+  }
+  if (state === 'done') {
+    updateSortProgress(null, '完成');
+    if (store.state.stage === 'sorting') store.advance('done');
+    panel.message(`分拣完成：${sortPlan.tasks.length} 个零件${sortPlan.skipped.length ? `，跳过 ${sortPlan.skipped.length} 个` : ''}`, 'ok');
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* 上传与示例                                                           */
 /* ------------------------------------------------------------------ */
 
@@ -984,4 +1133,4 @@ sampleSelect.addEventListener('change', async (e) => {
 panel.message('页面已就绪。', 'ok');
 
 // 调试用：在控制台访问
-window.__twin = { store, panel, debugView, world, phone, transition, partsLayer, boxEditor, arm, armGoto, get calib() { return calib; } };
+window.__twin = { store, panel, debugView, world, phone, transition, partsLayer, boxEditor, arm, armGoto, sortPlayer, get sortPlan() { return sortPlan; }, get calib() { return calib; } };
