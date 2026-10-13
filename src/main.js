@@ -1414,7 +1414,8 @@ sampleSelect.addEventListener('change', async (e) => {
   }
 });
 
-panel.message('页面已就绪。', 'ok');
+/* global __BUILD_VERSION__ */
+panel.message(`页面已就绪（版本 ${typeof __BUILD_VERSION__ === 'string' ? __BUILD_VERSION__ : 'dev'}）。`, 'ok');
 
 // 页面空闲时预先加载零件模型（Worker 里下载约 10 MB、初始化），上传照片后不必再等模型
 const preloadModel = () => getOnnxDetector('parts', { prefer: detSettings.prefer }).init().catch((err) => console.warn('模型预加载失败：', err));

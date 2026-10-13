@@ -1,5 +1,18 @@
 import { defineConfig, defaultClientConditions } from 'vite';
 import { resolve } from 'node:path';
+import { execSync } from 'node:child_process';
+
+/** 版本号：git 提交短哈希 + 构建时间（显示在页面上，便于确认浏览器拿到的是不是最新版） */
+function buildVersion() {
+  let sha = 'dev';
+  try {
+    sha = execSync('git rev-parse --short HEAD', { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+  } catch {
+    // 不在 git 仓库里时用 dev
+  }
+  const t = new Date(Date.now() + 8 * 3600e3).toISOString().slice(5, 16).replace('T', ' '); // 北京时间
+  return `${sha} · ${t}`;
+}
 
 /**
  * js-aruco2 的源码用顶层 `this.AR = AR`、`this.CV || require(...)` 导出，
@@ -22,6 +35,7 @@ export default defineConfig({
   // 相对路径，便于部署到 GitHub Pages 的子路径（/yolohtml/）
   base: './',
   plugins: [jsArucoCommonJS()],
+  define: { __BUILD_VERSION__: JSON.stringify(buildVersion()) },
   resolve: {
     // onnxruntime-web 默认入口会把 wasm 文件一起打包进 assets（约 42 MB）；这个条件选用"外部 wasm"版本，
     // 运行时从 public/ort/ 按 env.wasm.wasmPaths 加载（scripts/copy-ort.mjs 复制），避免重复
