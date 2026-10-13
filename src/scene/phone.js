@@ -6,9 +6,6 @@ import { toThree, cameraQuaternionFromR } from '../math/coords.js';
 import { photoFootprint, intrinsicsMatrix } from '../math/pinhole.js';
 
 /** iPhone 13 Pro 外形（mm）与主摄镜头位置（从背面看，镜头中心距左边、上边各约 14 mm） */
-/** 零件射线的不透明度（相对手机整体） */
-const RAY_OPACITY = 0.55;
-
 export const PHONE = { width: 71.5, height: 146.7, depth: 7.65, lensFromEdge: 14, lensRadius: 5.5 };
 
 /**
@@ -73,24 +70,6 @@ export function createPhone() {
   frustum.name = 'frustum';
   group.add(frustum);
 
-  // —— 从光心到每个零件的细射线（步骤 10），颜色按类别
-  const rays = new THREE.Group();
-  rays.name = 'rays';
-  group.add(rays);
-  /** @type {Map<string, THREE.LineBasicMaterial>} */
-  const rayMats = new Map();
-  const rayMat = (color) => {
-    if (!rayMats.has(color)) {
-      const m = new THREE.LineBasicMaterial({ color, transparent: true, opacity: RAY_OPACITY * opacity });
-      m.userData.base = RAY_OPACITY;
-      rayMats.set(color, m);
-      mats.push(m);
-    }
-    return rayMats.get(color);
-  };
-  let opacity = 1;
-  let center = null; // 光心（Three.js 坐标）
-
   const mats = [shellMat, screenMat, lensMat, ringMat, lineMat, missMat, fovMat];
   group.visible = false;
 
@@ -108,7 +87,6 @@ export function createPhone() {
     screen.scale.set(size[0] - 4, size[1] - 4, 1);
     screen.position.set(-lensOff[0], lensOff[1], PHONE.depth + 0.05);
     body.position.copy(toThree(...pose.position));
-    center = toThree(...pose.position);
     body.quaternion.copy(cameraQuaternionFromR(pose.R));
 
     frustum.clear();
@@ -134,37 +112,16 @@ export function createPhone() {
 
   /** 整体透明度（转场时淡入） */
   function setOpacity(a) {
-    opacity = a;
-    for (const m of mats) m.opacity = a * (m.userData.base ?? 1);
+    for (const m of mats) m.opacity = a;
     group.visible = a > 0.001;
-  }
-
-  function clearRays() {
-    for (const l of rays.children) l.geometry.dispose();
-    rays.clear();
-  }
-
-  /**
-   * 从光心到各零件的射线
-   * @param {{ point: number[], color: string }[]} ends 终点（底板坐标）与颜色
-   */
-  function setRays(ends) {
-    clearRays();
-    if (!center) return;
-    for (const { point, color } of ends) {
-      const geo = new THREE.BufferGeometry().setFromPoints([center, toThree(...point)]);
-      rays.add(new THREE.Line(geo, rayMat(color)));
-    }
   }
 
   function clear() {
     frustum.clear();
-    clearRays();
-    center = null;
     group.visible = false;
   }
 
-  return { group, body, setPose, setOpacity, setRays, clear };
+  return { group, body, setPose, setOpacity, clear };
 }
 
 /**

@@ -104,7 +104,7 @@ export const METHOD_MOVE_MS = 500;
  * 3D 场景里的零件层：每个零件一个模型 + 头顶 CSS2D 标签（类别、坐标、置信度）。
  * 位置在方法 1（板面落点）与方法 2（视差修正）之间用 blend ∈ [0, 1] 插值，
  * 切换时 0.5 秒平滑移动；转场时用 setGrow 让零件从板面"长出来"。
- * @param {{ requestRender: () => void, onFrame?: () => void }} deps onFrame：位置变化后（更新射线用）
+ * @param {{ requestRender: () => void, onFrame?: () => void }} deps onFrame：零件位置变化后
  */
 export function createPartsLayer({ requestRender, onFrame = () => {} }) {
   const group = new THREE.Group();
@@ -225,15 +225,6 @@ export function createPartsLayer({ requestRender, onFrame = () => {} }) {
       labelsOn = on;
       applyGrow();
       requestRender();
-    },
-    /** 当前射线终点（底板坐标）：两种方法的落点在同一条视线上，按 blend 插值仍在视线上 */
-    rayEnds() {
-      return items
-        .filter((it) => it.model.visible)
-        .map(({ part: p }) => {
-          const [x, y] = posAt(p, blend);
-          return { point: [x, y, (p.heightMm / 2) * blend], color: CLASSES[p.cls].color };
-        });
     },
     get count() {
       return items.length;

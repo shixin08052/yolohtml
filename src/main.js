@@ -70,11 +70,7 @@ $('#three-reset').addEventListener('click', () => world.setDefaultView());
 
 const phone = createPhone();
 world.scene.add(phone.group);
-// 零件层：位置变化时同步更新手机到零件的射线
-const partsLayer = createPartsLayer({
-  requestRender: world.requestRender,
-  onFrame: () => phone.setRays(partsLayer.rayEnds()),
-});
+const partsLayer = createPartsLayer({ requestRender: world.requestRender });
 world.scene.add(partsLayer.group);
 $('#show-part-labels').addEventListener('change', (e) => partsLayer.setLabelsVisible(e.target.checked));
 let transitionPending = false; // 有新位姿、还没在 3D 视图里播过转场

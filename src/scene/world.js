@@ -73,10 +73,10 @@ export function createWorld(container) {
     requestRender();
   };
 
-  // 灯光：半球光 + 一盏带阴影的平行光（从左后上方照下）
+  // 灯光：半球光 + 一盏带阴影的平行光（从左前上方照下）
   scene.add(new THREE.HemisphereLight('#ffffff', '#5a554d', 1.5));
   const sun = new THREE.DirectionalLight('#ffffff', 1.6);
-  sun.position.copy(toThree(BOARD.width / 2 - 300, BOARD.height / 2 + 250, 700));
+  sun.position.copy(toThree(BOARD.width / 2 - 300, BOARD.height / 2 - 250, 700)); // 从操作者一侧照，机械臂（在远端）的影子落在底板外
   sun.target.position.copy(toThree(...BOARD_CENTER));
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
