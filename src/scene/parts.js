@@ -13,7 +13,7 @@ import { toThree } from '../math/coords.js';
  * 本体包围盒以模型原点为中心。真值 box 由它投影得到，模型尺寸必须与之一致（有单元测试检查）。
  */
 export const PART_SIZE = {
-  0: { lx: 8, ly: 3, h: 3 },       // 色环电阻：本体 Φ3×8（另有两根引脚，各伸出 7 mm）
+  0: { lx: 6.3, ly: 2.4, h: 2.4 }, // 色环电阻（1/4 W 金属膜）：本体长 6.3，两头端帽 Φ2.4、中部 Φ2.0（另有两根 Φ0.5 引脚，各伸出 24 mm）
   1: { lx: 8.5, ly: 5.8, h: 5.8 }, // LED（躺平）：Φ5.8 底边 + Φ5 灯体 + 半球头，灯头朝局部 +X（另有两根引脚 20 / 18 mm 伸向 −X）
 };
 
@@ -70,6 +70,49 @@ export function leadFootprint(cls) {
 /** LED 模型整体沿 X 的平移量，使本体（底边到灯头）居中 */
 const LED_SHIFT = -1.75;
 
+/** 色环电阻的外形（mm）：本体沿局部 X，端帽鼓、中间细；色环按 5 环色码（10 kΩ ±1%：棕黑黑红 + 棕） */
+const RESISTOR = {
+  len: 6.3,       // 本体长
+  capR: 1.2,      // 端帽半径（Φ2.4）
+  midR: 1.0,      // 中部半径（Φ2.0）
+  color: '#2f6e9c', // 本体：实物是偏深的蓝色漆面
+  bandW: 0.42,    // 色环宽
+  bandLift: 0.012, // 色环比本体表面高一点，避免与本体表面闪烁
+  leadR: 0.25,    // 引脚半径（Φ0.5）
+  leadLen: 24,    // 引脚伸出长度
+  bands: [[-2.3, '#7b4a2a'], [-1.25, '#1b1b1b'], [-0.55, '#1b1b1b'], [0.15, '#c8312b'], [2.3, '#7b4a2a']],
+};
+
+/** 电阻本体在 x 处的半径：中部细、端帽鼓，两端收成圆头 */
+function resistorRadius(x) {
+  const R = RESISTOR;
+  const a = Math.abs(x);
+  const half = R.len / 2;
+  const smooth = (t) => t * t * (3 - 2 * t);
+  // 中部 |x| < 1.3 → 端帽 |x| > 1.9，之间平滑过渡
+  let r = R.midR + (R.capR - R.midR) * smooth(Math.min(1, Math.max(0, (a - 1.3) / 0.6)));
+  // 端头 0.55 mm 内按椭圆收圆
+  const e = 0.55;
+  if (a > half - e) r = R.capR * Math.sqrt(Math.max(0, 1 - ((a - (half - e)) / e) ** 2));
+  return r;
+}
+
+/**
+ * 沿局部 X 轴的旋转体：半径由 radius(x) 给出，取 x ∈ [x0, x1]，半径再加 lift
+ * @returns {THREE.Mesh}
+ */
+function lathe(radius, x0, x1, n, lift, mat) {
+  const pts = [];
+  for (let i = 0; i <= n; i++) {
+    const x = x0 + ((x1 - x0) * i) / n;
+    const r = radius(x);
+    pts.push(new THREE.Vector2(r > 0 ? r + lift : 0, x));
+  }
+  const m = new THREE.Mesh(new THREE.LatheGeometry(pts, 48), mat);
+  m.rotation.z = -Math.PI / 2; // 旋转轴 Y → X
+  return m;
+}
+
 /** 两点之间的细圆柱（引脚） */
 function rod(p0, p1, r, mat) {
   const d = new THREE.Vector3().subVectors(p1, p0);
@@ -89,15 +132,24 @@ export function createPartMesh(cls) {
   g.name = `part-${CLASSES[cls].key}`;
   switch (cls) {
     case 0: {
-      // 色环电阻：横躺本体 + 两根引脚 + 几道色环
-      const body = material(0);
-      g.add(lyingCylinder(1.45, 8, body, 0, 1.5));
-      const lead = new THREE.MeshStandardMaterial({ color: '#c0c4c8', metalness: 0.6, roughness: 0.35 });
-      for (const x of [-7.5, 7.5]) g.add(Object.assign(lyingCylinder(0.3, 7, lead, x, 1.5), { userData: { lead: true } }));
-      const bands = ['#7a4a1e', '#111111', '#d43b2a', '#c9a227'];
-      bands.forEach((c, i) => {
-        g.add(lyingCylinder(1.5, 0.7, new THREE.MeshStandardMaterial({ color: c, roughness: 0.6 }), -2.6 + i * 1.6, 1.5));
-      });
+      // 色环电阻（1/4 W 蓝色金属膜）：两头端帽鼓起、中间细的"哑铃"形旋转体 + 5 道色环 + 两根引脚
+      const R = RESISTOR;
+      const axisY = R.capR + R.bandLift; // 横躺在板面上：色环最低点贴着板面
+      const body = lathe(resistorRadius, -R.len / 2, R.len / 2, 96, 0, material(0, { color: R.color, roughness: 0.32 }));
+      body.position.y = axisY;
+      g.add(body);
+      for (const [x, c] of R.bands) {
+        const ring = lathe(resistorRadius, x - R.bandW / 2, x + R.bandW / 2, 6, R.bandLift, new THREE.MeshStandardMaterial({ color: c, roughness: 0.45 }));
+        ring.position.y = axisY;
+        g.add(ring);
+      }
+      // 引脚：从端帽里伸出，略微下垂搭到板面上
+      const lead = new THREE.MeshStandardMaterial({ color: '#c9cdd1', metalness: 0.75, roughness: 0.3 });
+      for (const s of [-1, 1]) {
+        const p0 = new THREE.Vector3(s * (R.len / 2 - 0.3), axisY, 0);
+        const p1 = new THREE.Vector3(s * (R.len / 2 + R.leadLen), R.leadR, 0);
+        g.add(Object.assign(rod(p0, p1, R.leadR, lead), { userData: { lead: true } }));
+      }
       break;
     }
     case 1: {

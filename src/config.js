@@ -18,7 +18,7 @@ export const CAMERA = { expectedFocal35: 26, refWidth: 4032, refHeight: 3024 };
 
 // 类别：只有手头的两种元件（都躺平放置）。key 与模型类别名对应：模型输出的类别 ID 按名字换成这里的 ID
 export const CLASSES = [
-  { id: 0, key: 'resistor', name: '色环电阻', heightMm: 3,   color: '#3f7fd0' }, // 蓝色金属膜电阻（与实物一致）
+  { id: 0, key: 'resistor', name: '色环电阻', heightMm: 2.4, color: '#3f7fd0' }, // 1/4 W 蓝色金属膜电阻：本体 Φ2.4×6.3
   { id: 1, key: 'led',      name: 'LED',      heightMm: 5.8, color: '#d94c4c' },
 ];
 

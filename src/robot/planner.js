@@ -9,8 +9,8 @@
 import { BIN_WALL } from '../config.js';
 import { ikWorld } from './ik.js';
 
-/** 每类零件被夹住处的宽度（mm）：电阻本体 Φ2.9、LED 灯体 Φ5 */
-export const GRIP_WIDTH = { 0: 2.9, 1: 5 };
+/** 每类零件被夹住处的宽度（mm）：电阻本体中部 Φ2.0（两头的端帽 Φ2.4）、LED 灯体 Φ5 */
+export const GRIP_WIDTH = { 0: 2, 1: 5 };
 
 /** 夹取时指尖离零件底面的高度（mm）：指尖略高于板面 */
 export const GRASP_Z = 0.5;

@@ -105,7 +105,7 @@ export function createWorld(container) {
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
   controls.dampingFactor = 0.12;
-  controls.minDistance = 80;
+  controls.minDistance = 20; // 可以凑近看清零件细节（电阻本体只有 6 mm）
   controls.maxDistance = 3000;
   controls.maxPolarAngle = Math.PI / 2 - 0.02; // 不钻到桌面下面
   controls.screenSpacePanning = true;
