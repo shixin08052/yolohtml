@@ -19,12 +19,13 @@
 | 脚本 | 作用 |
 | --- | --- |
 | `training/prepare_images.py` | HEIC / JPG → 按 EXIF 方向转正的 JPG |
+| `training/autolabel.py` | 按颜色预标注：红色 LED、蓝色电阻，只框本体（见第 2 节） |
 | `training/detections_to_yolo.py` | 网页"框选"保存的 `*.detections.json` → YOLO 标注 `*.txt` |
 | `training/split_dataset.py` | 按照片划分训练 / 验证 / 测试 = 8 : 1 : 1（种子 42），生成带绝对路径的 `datasets/parts/parts.yaml` |
 | `training/train.py`（`train.sh`） | 训练，默认 `yolo26n.pt`、imgsz 1024、150 轮、batch 自动 |
 | `training/export.py`（`export.sh`） | 导出 ONNX（默认端到端输出 `[1, 300, 6]`），复制到 `public/models/` 并写说明 json |
 | `training/predict_dump.py` | 推理结果写成网页 `*.detections.json` 格式，供步骤 14 对比 |
-| `tools/make_chessboard.py` | 生成 A4 棋盘格（9 × 6 内角点，方格 25 mm） |
+| `tools/make_chessboard.py` | 生成棋盘格矢量 PDF（默认 A4 横向，9 × 6 内角点，方格 25 mm，带 100 mm 比例尺；`--paper a3/letter`、`--square`）；现成的在 `tools/chessboard_a4.pdf` |
 | `tools/calibrate_camera.py` | 棋盘格标定 → `public/intrinsics.json` |
 
 - 类别（顺序固定，必须与 `training/parts.yaml`、网页 `src/config.js` 一致）：`0 resistor 色环电阻`、`1 capacitor 电解电容`、`2 led LED`、`3 screw 螺丝`。
@@ -44,9 +45,9 @@
 
 ## 2. 标注【需要用户，执行者协助】
 
-**规则**：每个零件一个紧贴**本体**的矩形框，**不框引脚**：电阻只框带色环的本体，LED 只框灯体（底边到灯头），电容、螺丝框整个零件。被遮住一半以上或只露一点的可以不标；码和文字不标。
+**规则**：每个零件一个紧贴的矩形框，**只框本体，不框引脚**（电阻框色环那一段，LED 框红色灯体；夹爪只夹本体，引脚太细、又常弯，框进去反而让框忽大忽小）；被遮住一半以上或只露一点的可以不标；码和文字不标。本项目只用电阻（0）和 LED（2），电容（1）、螺丝（3）不标，但类别顺序保持不变。
 
-为什么不框引脚：引脚细、常常弯，框起来不稳定。网页里各零件的 3D 模型尺寸是已知的（含引脚），只要知道本体中心和朝向就能把整个零件摆出来；朝向由网页在框外扩约 10 mm 的范围里看照片估计（会把一段引脚也算进去判断 LED 灯头朝哪），夹取也只夹本体。
+网页已按"只框本体"修改（2026-10-13）：3D 模型尺寸已知（含引脚），原点在本体中心，知道本体中心和朝向就能摆出整个零件；夹取点就是框中心；朝向在框外扩约 10 mm 的范围里估计（把一段引脚算进去，判断 LED 灯头朝哪）。
 
 先把照片转正（在用户电脑上执行，需要 Python 3.10+，`pip install pillow pillow-heif`）：
 
@@ -54,7 +55,20 @@
 python training/prepare_images.py raw data/images
 ```
 
-然后二选一：
+**预标注（推荐，先跑这个）**：零件放在标定板上、LED 是红色、电阻是蓝色时，可以按颜色自动框出本体（只需要 `pip install opencv-python numpy`，CPU 几秒一张）：
+
+```bash
+cd training
+python autolabel.py --images data/images --labels data/labels --preview data/preview
+```
+
+- 靠 4 个码求标定板位置，只在零件区域（板内缩 12 mm、挖掉码）里找，地面和文字不会误检；找不到码的照片会列出来，需要手工标或删掉。
+- 打印每张照片的电阻、LED 个数，和大多数照片不同的单独列出（两个零件挨在一起会合成一个框），优先检查这些。
+- `data/preview/` 里是画好框的缩略图，翻一遍就能看出问题。
+- 已有的标注默认不覆盖（免得冲掉手工改过的），要重新生成加 `--overwrite`。
+- 修正：在 makesense.ai 里导入照片 → Object Detection → Actions → Import Annotations → 选 YOLO，把 `data/labels/` 里的 `*.txt` 和 `labels.txt` 一起选上 → 改完 Export Annotations（YOLO），用导出的 `*.txt` 覆盖 `data/labels/`。
+
+然后二选一（手工标注，或修正预标注）：
 
 **方式 A：用本项目网页的"框选"工具（坐标约定与网页完全一致）**
 1. 打开网页（GitHub Pages，或在仓库根目录 `npm install && npm run dev`）。
@@ -72,6 +86,8 @@ python training/prepare_images.py raw data/images
 ## 3. Colab：准备环境
 
 新建 Colab 笔记本，**"修改 → 笔记本设置 → 硬件加速器"选 GPU**（免费版一般是 T4），然后依次运行下面的单元格。
+
+> 更省事：直接打开写好的笔记本 `training/colab_train.ipynb`（Colab 里"文件 → 打开笔记本 → GitHub"，或下载后"上传笔记本"），内容与下面第 3–5 节的单元格相同，从上到下运行即可。
 
 ```python
 # 单元格 1：确认 GPU、挂载 Google Drive
@@ -160,10 +176,10 @@ print(picked)
 标定只需要 CPU，在用户电脑的仓库根目录执行（`pip install opencv-python pillow pillow-heif`）：
 
 ```bash
-python tools/make_chessboard.py        # 生成 chessboard_a4.png：10 × 7 个方格（9 × 6 个内角点），方格 25 mm
+python tools/make_chessboard.py        # 生成 chessboard_a4.pdf：10 × 7 个方格（9 × 6 个内角点），方格 25 mm；也可直接用仓库里的 tools/chessboard_a4.pdf
 ```
 
-1. **【需要用户】** A4 打印 `chessboard_a4.png`，选"实际大小 / 100%"。用尺子量 5 个方格总长除以 5，得到实际方格边长（例如 24.9 mm）。贴平在硬板上。
+1. **【需要用户】** 用 Edge / Acrobat 等 PDF 阅读器打开 `chessboard_a4.pdf`，A4 打印，缩放选"实际大小 / 100%"（不要选"适合页面"；Windows"照片"的打印窗口会缩放，不要用）。先量页面下方的 100 mm 比例尺确认没被缩放，再量 5 个方格总长除以 5，得到实际方格边长（例如 24.9 mm）。贴平在硬板上。
 2. **【需要用户】** 用**同一台 iPhone、主摄 1×** 拍 15–25 张：棋盘格占画面 1/3 以上，正面、左右上下倾斜 20°–45° 都拍，让棋盘格出现在画面中间和四个角附近，清晰、无反光。照片放进 `calib_photos/`。
 3. 运行：
 
