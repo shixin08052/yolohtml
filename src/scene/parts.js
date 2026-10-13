@@ -67,6 +67,32 @@ export function leadFootprint(cls) {
   return leadCache.get(cls);
 }
 
+const footprintCache = new Map();
+/**
+ * 零件俯视的占地（模型局部坐标，含引脚）：本体、引脚各一个矩形 { minX, maxX, halfW }，以及本体高度。
+ * 料盒里摆放零件时用来判断是否重叠（robot/drop.js）。
+ * @param {number} cls
+ * @returns {{ rects: {minX:number, maxX:number, halfW:number}[], height: number }}
+ */
+export function partFootprint(cls) {
+  if (!footprintCache.has(cls)) {
+    const m = createPartMesh(cls);
+    m.updateMatrixWorld(true);
+    const body = bodyBox(m);
+    const leads = new THREE.Box3();
+    m.traverse((o) => {
+      if (o.isMesh && o.userData.lead) leads.expandByObject(o);
+      if (o.isMesh) o.geometry.dispose();
+    });
+    // Three.js 的 z = −局部 y
+    const rect = (b) => ({ minX: b.min.x, maxX: b.max.x, halfW: Math.max(-b.min.z, b.max.z) });
+    const rects = [rect(body)];
+    if (!leads.isEmpty()) rects.push(rect(leads));
+    footprintCache.set(cls, { rects, height: body.max.y - body.min.y });
+  }
+  return footprintCache.get(cls);
+}
+
 /** LED 模型整体沿 X 的平移量，使本体（底边到灯头）居中 */
 const LED_SHIFT = -1.75;
 
@@ -184,6 +210,7 @@ export function createPartMesh(cls) {
   return g;
 }
 
+const Y_AXIS = new THREE.Vector3(0, 1, 0);
 const clamp01 = (x) => Math.min(1, Math.max(0, x));
 /** 先冲过头一点再回落，"长出来"更有弹性 */
 const easeOutBack = (t) => {
@@ -335,6 +362,17 @@ export function createPartsLayer({ requestRender, onFrame = () => {} }) {
       it.moved = true;
       it.labelHidden = hideLabel;
       applyGrow();
+      requestRender();
+    },
+    /**
+     * 直接摆放零件（底板坐标；yawDeg 为零件模型的朝向，与 Part.rotDeg 同一约定），用于落进料盒的动画。
+     * 零件应已挂在 group 下（不在夹爪上）。
+     */
+    setPose(id, [x, y, z, yawDeg]) {
+      const it = items.find((q) => q.part.id === id);
+      if (!it) return;
+      it.node.position.copy(toThree(x, y, z));
+      it.node.quaternion.setFromAxisAngle(Y_AXIS, (yawDeg * Math.PI) / 180 - it.model.rotation.y);
       requestRender();
     },
     /** 不可达零件的标签标红 */

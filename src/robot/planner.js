@@ -3,11 +3,12 @@
 //    长条零件（电阻、LED）两指连线垂直于长轴；夹在本体中心（检测框只框本体，框中心就是本体中心）；
 //    圆形零件夹爪不转。
 //    抓取点和正上方 approach 高度处都要可达（含碰撞检查），否则跳过
-// 2. 放进对应类别的料盒：长条零件搬运途中转动夹爪，放下时沿料盒长边（Y）摆放，每层 2 个；
-//    圆形零件每层 2 × 2 个；放满一层往上叠一层。放置点和盒口上方悬停点都要可达
+// 2. 放进对应类别的料盒：长条零件搬运途中转动夹爪，转成沿料盒长边（Y）；夹爪在盒底上方松开（左右交替），
+//    零件落下后按 drop.js 散开到不与盒里已有零件重叠的位置。松开点和盒口上方悬停点都要可达
 // 3. 顺序：贪心最近邻——从当前夹爪位置出发，每次选水平距离最近的零件；放下后从料盒上方继续
 import { BIN_WALL } from '../config.js';
 import { ikWorld } from './ik.js';
+import { DROP, settle } from './drop.js';
 
 /** 每类零件被夹住处的宽度（mm）：电阻本体中部 Φ2.0（两头的端帽 Φ2.4）、LED 灯体 Φ5 */
 export const GRIP_WIDTH = { 0: 2, 1: 5 };
@@ -18,9 +19,11 @@ export const GRASP_Z = 0.5;
 /** 有长轴的类别（夹爪两指连线要垂直于长轴） */
 const LONG = new Set([0, 1]);
 
-/** 料盒内的放置位置（相对盒中心，mm）：圆形零件 2 × 2；长条零件沿 Y 摆放、左右两个 */
-export const BIN_SLOTS = [[-12, -14], [12, -14], [-12, 14], [12, 14]];
-export const BIN_SLOTS_LONG = [[-10, 0], [10, 0]];
+/** 松开点（相对盒中心，mm）：左右交替 */
+export const RELEASE_OFFSETS = [[-8, 0], [8, 0]];
+
+/** 没给占地时的默认占地（8 × 4 mm 的块） */
+const DEFAULT_FOOTPRINT = { rects: [{ minX: -4, maxX: 4, halfW: 2 }], height: 4 };
 
 /** 料盒上方悬停高度：盒口再往上 approach */
 export const binHoverZ = (bin, arm) => bin.size[2] + arm.approach;
@@ -45,22 +48,7 @@ export function graspPoint(part) {
 }
 
 /**
- * 第 k 个放进某料盒的零件放在哪：盒内位置与底面高度（叠放时往上一层）
- * @param {{center:number[], size:number[]}} bin
- * @param {number} k 该料盒里已有的零件数
- * @param {number} layerH 每层高度（取该类零件高度）
- * @param {boolean} [long=false] 是否长条零件
- * @returns {{ x: number, y: number, floor: number }}
- */
-export function binSlot(bin, k, layerH, long = false) {
-  const slots = long ? BIN_SLOTS_LONG : BIN_SLOTS;
-  const [ox, oy] = slots[k % slots.length];
-  const layer = Math.floor(k / slots.length);
-  return { x: bin.center[0] + ox, y: bin.center[1] + oy, floor: BIN_WALL + layer * layerH };
-}
-
-/**
- * 放置点：夹在本体中心，所以指尖落在 slot 上，零件中心就在 slot 上。
+ * 松开点：夹在本体中心，所以指尖在 slot 正上方时，零件中心就在 slot 上。
  * 零件挂在夹爪上随夹爪转动，搬运途中转过的角度 Δ = (θ₀ + θ₄)放 − (θ₀ + θ₄)取（θ₀ 走最短方向，与 lerpAngles 一致）；
  * 长条零件放下时要沿料盒长边（Y），所以放下时的夹爪方向比抓取时多转 (90° − 朝向)。
  * @returns {{ to: number[], placeYaw: number|null, partYawDeg: number } | { error: string }}
@@ -80,12 +68,14 @@ function placeFor(part, pickAngles, slot, z, arm) {
  * @param {import('../state.js').Part[]} parts
  * @param {{id:number, cls:number, center:number[], size:number[]}[]} bins
  * @param {import('./ik.js').ArmDims & { base: number[], approach: number }} arm
- * @param {{ start?: number[] }} [opts] start：夹爪当前位置（底板坐标），默认机械臂底座正上方
+ * @param {{ start?: number[], footprints?: Record<number, { rects: object[], height: number }> }} [opts]
+ *   start：夹爪当前位置（底板坐标），默认机械臂底座正上方；footprints：各类零件的占地（scene/parts.js 的 partFootprint）
  * @returns {{ tasks: (import('../state.js').PickTask & { gripYaw: number|null, placeYaw: number|null, graspZ: number,
- *                     hoverFrom: number[], hoverTo: number[], partYawDeg: number })[],
+ *                     hoverFrom: number[], hoverTo: number[], partYawDeg: number,
+ *                     drop: { from: number[], to: number[] } })[],
  *             skipped: (import('../state.js').Part & { skipReason: string })[] }}
  */
-export function plan(parts, bins, arm, { start = [arm.base[0], arm.base[1], 0] } = {}) {
+export function plan(parts, bins, arm, { start = [arm.base[0], arm.base[1], 0], footprints = {} } = {}) {
   const skipped = [];
   const candidates = [];
   for (const p of parts) {
@@ -108,7 +98,7 @@ export function plan(parts, bins, arm, { start = [arm.base[0], arm.base[1], 0] }
 
   // 贪心最近邻；距离相同按零件 id 排
   const tasks = [];
-  const fill = new Map(); // binId → 已放入的零件数
+  const fill = new Map(); // binId → 已落在盒里的零件 [{ fp, x, y, yaw, z, height }]
   let cur = start;
   const left = [...candidates].sort((a, b) => a.part.id - b.part.id);
   while (left.length) {
@@ -122,9 +112,12 @@ export function plan(parts, bins, arm, { start = [arm.base[0], arm.base[1], 0] }
       }
     });
     const c = left.splice(best, 1)[0];
-    const k = fill.get(c.bin.id) ?? 0;
-    const slot = binSlot(c.bin, k, c.part.heightMm, LONG.has(c.part.cls));
-    const pl = placeFor(c.part, c.pickAngles, slot, slot.floor + GRASP_Z, arm);
+    const placed = fill.get(c.bin.id) ?? [];
+    const [ox, oy] = RELEASE_OFFSETS[placed.length % RELEASE_OFFSETS.length];
+    const slot = { x: c.bin.center[0] + ox, y: c.bin.center[1] + oy };
+    // 松开时零件底面在盒里最高的零件上方 DROP.height
+    const releaseZ = Math.max(BIN_WALL, ...placed.map((o) => o.z + o.height)) + DROP.height;
+    const pl = placeFor(c.part, c.pickAngles, slot, releaseZ + GRASP_Z, arm);
     let reason = pl.error;
     let hoverTo = null;
     if (!reason) {
@@ -136,7 +129,10 @@ export function plan(parts, bins, arm, { start = [arm.base[0], arm.base[1], 0] }
       skipped.push({ ...c.part, reachable: false, skipReason: `料盒里够不到：${reason}` });
       continue;
     }
-    fill.set(c.bin.id, k + 1);
+    // 落下后散开到哪（随机偏移按零件 id 取种子，结果可复现）
+    const fp = footprints[c.part.cls] ?? DEFAULT_FOOTPRINT;
+    const rest = settle(c.bin, placed, fp, { x: slot.x, y: slot.y, yaw: pl.partYawDeg }, { seed: c.part.id * 7919 + c.bin.id * 104729 + 1 });
+    fill.set(c.bin.id, [...placed, { fp, x: rest.x, y: rest.y, yaw: rest.yaw, z: rest.z, height: fp.height }]);
     tasks.push({
       partId: c.part.id,
       binId: c.bin.id,
@@ -148,6 +144,7 @@ export function plan(parts, bins, arm, { start = [arm.base[0], arm.base[1], 0] }
       hoverFrom: c.hoverFrom,
       hoverTo,
       partYawDeg: pl.partYawDeg,
+      drop: { from: [slot.x, slot.y, releaseZ, pl.partYawDeg], to: [rest.x, rest.y, rest.z, rest.yaw] },
     });
     cur = hoverTo;
   }

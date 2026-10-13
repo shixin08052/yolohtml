@@ -29,7 +29,7 @@ import { markerCornersWorld, markerRectOnPage, paperFrame, designFrame, frameMat
 import { BOARD, MARKERS } from './config.js';
 import { drawMarkers } from './ui/markerOverlay.js';
 import { createBoxEditor } from './ui/boxEditor.js';
-import { createPartsLayer, leadFootprint } from './scene/parts.js';
+import { createPartsLayer, leadFootprint, partFootprint } from './scene/parts.js';
 import { detect, MockMissingError, detectionsFileName, serializeDetections, parseDetections, lastOnnxRun, getOnnxDetector } from './vision/detector.js';
 import { mapDetections, selectMethod } from './vision/mapping.js';
 import { partsTruthError } from './vision/evaluate.js';
@@ -1264,7 +1264,8 @@ function refreshPlan() {
   const { parts } = store.state;
   if (!parts) return;
   const start = fkWorld(arm.homeAngles, ARM);
-  const { tasks, skipped } = plan(parts, BINS, ARM, { start });
+  const footprints = Object.fromEntries(CLASSES.map((c) => [c.id, partFootprint(c.id)]));
+  const { tasks, skipped } = plan(parts, BINS, ARM, { start, footprints });
   const skippedIds = new Set(skipped.map((p) => p.id));
   store.state.parts = parts.map((p) => ({ ...p, reachable: !skippedIds.has(p.id) }));
   partsLayer.markUnreachable([...skippedIds]);

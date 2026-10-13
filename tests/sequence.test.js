@@ -54,8 +54,10 @@ describe('分拣动作序列', () => {
       expect(segs[d - 1].type).toBe('grip');
       expect(segs[d - 1].to).toBeGreaterThan(GRIP_WIDTH[parts[t.partId].cls]);
       expect(segs[d - 1].to).toBeLessThanOrEqual(GRIP_MAX);
-      // 放下时零件底面落在盒底或下层零件上
-      expect(segs[d].baseZ).toBeCloseTo(t.to[2] - t.graspZ, 9);
+      // 松开后零件从夹爪下（零件底面 = 指尖高度 − 夹取高度）落到规划的位置
+      const f = segs[d + 1];
+      expect(f).toMatchObject({ type: 'drop', partId: t.partId, from: t.drop.from, to: t.drop.to });
+      expect(f.from[2]).toBeCloseTo(t.to[2] - t.graspZ, 9);
     });
     for (const s of segs.filter((q) => q.type === 'line')) {
       expect(s.from[0]).toBeCloseTo(s.to[0], 9);

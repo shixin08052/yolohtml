@@ -2,6 +2,7 @@
 // 用自己的时钟（每帧累加 帧间隔 × 速度），所以暂停、调速在一段动作中途也立即生效。
 import { ARM } from '../config.js';
 import { ikWorld, lerpAngles } from '../robot/ik.js';
+import { dropPose } from '../robot/drop.js';
 
 const easeInOutCubic = (t) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
 
@@ -38,6 +39,8 @@ export function createSortPlayer({ arm, partsLayer, requestRender, onProgress = 
       arm.setAngles(ikWorld(P, ARM, { gripYaw: s.gripYaw, check: false }).angles);
     } else if (s.type === 'grip') {
       arm.setGap(s.from + (s.to - s.from) * k);
+    } else if (s.type === 'drop') {
+      partsLayer.setPose(s.partId, dropPose(s, k));
     }
   }
 
@@ -53,8 +56,7 @@ export function createSortPlayer({ arm, partsLayer, requestRender, onProgress = 
     } else if (s.type === 'detach') {
       const node = partsLayer.nodeOf(s.partId);
       if (node) {
-        partsLayer.group.attach(node);
-        node.position.y = s.baseZ; // 水平位置随夹爪带过来；高度精确落在盒底（或下层零件）上（Three.js 的 y = 底板 Z）
+        partsLayer.group.attach(node); // 保持世界位置不变，接下来的 drop 段让它落下
         partsLayer.setMoved(s.partId, { hideLabel: true });
       }
     }

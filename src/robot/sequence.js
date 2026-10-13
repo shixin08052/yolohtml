@@ -1,14 +1,16 @@
 // 分拣动作序列（纯函数，不碰 DOM）：把规划好的任务展开成一段段可播放的动作。
 // 每个零件：张开夹爪 → 移到零件正上方 → 竖直下降到夹取高度 → 夹紧 → 挂到夹爪上 → 竖直抬起
-//         → 移到料盒上方（途中转动夹爪，长条零件转成沿料盒长边）→ 竖直下降 → 松开 → 放回场景（落在盒内）→ 竖直抬起
+//         → 移到料盒上方（途中转动夹爪，长条零件转成沿料盒长边）→ 竖直下降 → 松开 → 零件落下、散开 → 竖直抬起
 // 全部完成后回到初始姿态。
 // 段的类型：
 //   move   关节空间插值（θ₃ 由 θ₁、θ₂ 推出，途中夹爪竖直向下）
 //   line   指尖走直线（每帧解一次逆运动学），用于竖直下降 / 抬起
 //   grip   夹爪开口变化（两指内侧间距，mm）
 //   attach / detach  零件挂到夹爪上 / 放回场景（瞬间完成）
+//   drop   零件从松开处落到盒里（robot/drop.js 的 dropPose）
 import { ikWorld, pathClear } from './ik.js';
 import { GRIP_WIDTH } from './planner.js';
+import { DROP } from './drop.js';
 
 /** 夹爪最大开口（mm），与 scene/arm.js 一致 */
 export const GRIP_MAX = 34;
@@ -79,9 +81,8 @@ export function buildSequence(tasks, parts, arm, { startAngles, homeAngles, star
     move(solve(t.hoverTo, placeYaw), i, '移到料盒上方');
     line(t.hoverTo, t.to, placeYaw, i, '放入料盒');
     grip(open, i, '松开');
-    // 零件底面 = 指尖高度 − 夹取时指尖离零件底面的高度
-    const graspZ = t.graspZ ?? part.heightMm / 2;
-    segs.push({ type: 'detach', task: i, phase: '放下', partId: t.partId, baseZ: t.to[2] - graspZ, ms: 0 });
+    segs.push({ type: 'detach', task: i, phase: '放下', partId: t.partId, ms: 0 });
+    if (t.drop) segs.push({ type: 'drop', task: i, phase: '落下', partId: t.partId, from: t.drop.from, to: t.drop.to, ms: DROP.ms });
     line(t.to, t.hoverTo, placeYaw, i, '离开');
   });
   move(homeAngles, null, '回到初始姿态');

@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
-import { plan, binSlot, gripYawFor, graspPoint, BIN_SLOTS, BIN_SLOTS_LONG, GRASP_Z } from '../src/robot/planner.js';
+import { plan, gripYawFor, graspPoint, GRASP_Z } from '../src/robot/planner.js';
+import { footprintPolys, polysOverlap, insideBin, DROP } from '../src/robot/drop.js';
 import { ikWorld } from '../src/robot/ik.js';
-import { PART_SIZE, createPartMesh } from '../src/scene/parts.js';
+import { createPartMesh, partFootprint } from '../src/scene/parts.js';
 import { ARM, BINS, BIN_WALL, CLASSES } from '../src/config.js';
 import layout from '../src/synth/layout.json';
 
@@ -62,31 +63,45 @@ describe('分拣规划', () => {
     }
   });
 
-  it('同一料盒内的零件依次错开，放满 4 个后叠到上一层', () => {
-    const bin = BINS[0];
-    const s = [0, 1, 2, 3, 4].map((k) => binSlot(bin, k, 3));
-    expect(new Set(s.slice(0, 4).map((q) => `${q.x},${q.y}`)).size).toBe(4);
-    expect(s.slice(0, 4).every((q) => q.floor === BIN_WALL)).toBe(true);
-    expect(s[4].floor).toBe(BIN_WALL + 3);
-    expect([s[4].x, s[4].y]).toEqual([s[0].x, s[0].y]);
-    // 圆形零件（按 Φ8 算，目前没有这类零件）放在盒内；长条零件每层 2 个
-    for (const [ox, oy] of BIN_SLOTS) {
-      expect(Math.abs(ox) + 4).toBeLessThan(bin.size[0] / 2 - BIN_WALL);
-      expect(Math.abs(oy) + 4).toBeLessThan(bin.size[1] / 2 - BIN_WALL);
+  const footprints = Object.fromEntries(CLASSES.map((c) => [c.id, partFootprint(c.id)]));
+
+  /** 每个料盒里落定的零件：全部在盒内、互不重叠（占地矩形） */
+  const checkBins = (list, tasks) => {
+    for (const bin of BINS) {
+      const inBin = tasks.filter((t) => t.binId === bin.id);
+      const polys = inBin.map((t) => {
+        const [x, y, , yaw] = t.drop.to;
+        return footprintPolys(footprints[list[t.partId].cls], { x, y, yaw });
+      });
+      polys.forEach((p) => expect(insideBin(p, bin)).toBe(true));
+      for (let a = 0; a < polys.length; a++) {
+        for (let b = a + 1; b < polys.length; b++) {
+          const same = Math.abs(inBin[a].drop.to[2] - inBin[b].drop.to[2]) < 1e-9;
+          if (same) expect(polys[a].some((P) => polys[b].some((Q) => polysOverlap(P, Q)))).toBe(false);
+        }
+      }
     }
-    expect(binSlot(bin, 2, 5.8, true).floor).toBe(BIN_WALL + 5.8);
-    expect(BIN_SLOTS_LONG).toHaveLength(2);
+  };
+
+  it('同类多个零件放进同一料盒：落下后散开，全部躺在盒底、在盒内、互不重叠', () => {
+    const many = makeParts([0, 1, 2, 3, 4, 5].map((i) => ({ cls: 1, x: 50 + i * 35, y: 100, rotDeg: i * 20 })));
+    const { tasks } = plan(many, BINS, ARM, { footprints });
+    expect(tasks).toHaveLength(6);
+    checkBins(many, tasks);
+    expect(tasks.every((t) => t.drop.to[2] === BIN_WALL)).toBe(true);
+    const res = makeParts([0, 1, 2, 3, 4, 5].map((i) => ({ cls: 0, x: 50 + i * 35, y: 100, rotDeg: -i * 25 })));
+    const r = plan(res, BINS, ARM, { footprints });
+    checkBins(res, r.tasks);
+    expect(r.tasks.every((t) => t.drop.to[2] === BIN_WALL)).toBe(true);
   });
 
-  it('同类多个零件放进同一料盒的不同位置；放置时指尖在盒底上方 GRASP_Z，满一层往上叠', () => {
-    const many = makeParts([0, 1, 2, 3, 4].map((i) => ({ cls: 1, x: 60 + i * 40, y: 100 })));
-    const { tasks } = plan(many, BINS, ARM);
-    expect(tasks).toHaveLength(5);
-    const keys = tasks.map((t) => t.to.join(','));
-    expect(new Set(keys).size).toBe(5);
-    // LED 高 5.8，长条零件每层 2 个：2 + 2 + 1
-    const at = (layer) => tasks.filter((t) => Math.abs(t.to[2] - (BIN_WALL + layer * 5.8 + GRASP_Z)) < 1e-9).length;
-    expect([at(0), at(1), at(2)]).toEqual([2, 2, 1]);
+  it('松开点在盒底上方 DROP.height（盒里最高零件之上），左右交替；落点结果可复现', () => {
+    const many = makeParts([0, 1, 2].map((i) => ({ cls: 1, x: 80 + i * 40, y: 100 })));
+    const { tasks } = plan(many, BINS, ARM, { footprints });
+    expect(tasks[0].drop.from[2]).toBeCloseTo(BIN_WALL + DROP.height, 9);
+    expect(tasks[1].drop.from[2]).toBeCloseTo(BIN_WALL + footprints[1].height + DROP.height, 9);
+    expect(tasks[0].drop.from[0]).not.toBeCloseTo(tasks[1].drop.from[0], 3);
+    expect(plan(many, BINS, ARM, { footprints }).tasks.map((t) => t.drop)).toEqual(tasks.map((t) => t.drop));
   });
 
   it('夹在本体中心（检测框中心），LED 也不再偏移', () => {
@@ -94,36 +109,30 @@ describe('分拣规划', () => {
     expect(graspPoint(led)).toEqual([150, 100, GRASP_Z]);
   });
 
-  it('放下后零件中心正好落在盒内位置上；长条零件沿料盒长边（Y）摆放，整体在盒内', () => {
+  it('松开时零件中心正好在松开点上、沿料盒长边（Y）', () => {
     const list = makeParts([
       { cls: 1, x: 212, y: 82, rotDeg: 30 }, { cls: 1, x: 60, y: 100, rotDeg: -70 }, { cls: 1, x: 150, y: 150, rotDeg: 160 },
       { cls: 0, x: 72, y: 122, rotDeg: -35 }, { cls: 0, x: 188, y: 176, rotDeg: 80 },
     ]);
-    const { tasks } = plan(list, BINS, ARM);
+    const { tasks } = plan(list, BINS, ARM, { footprints });
     expect(tasks).toHaveLength(5);
-    const fill = new Map();
     for (const t of tasks) {
       const p = list[t.partId];
-      const bin = BINS.find((b) => b.id === t.binId);
-      const k = fill.get(bin.id) ?? 0;
-      fill.set(bin.id, k + 1);
-      const slot = binSlot(bin, k, p.heightMm, true);
       // 模拟搬运：零件随夹爪转过 Δ = (θ₀ + θ₄)放 − (θ₀ + θ₄)取
       const a = ikWorld(t.from, ARM, { gripYaw: t.gripYaw }).angles;
       const b = ikWorld(t.to, ARM, { gripYaw: t.placeYaw }).angles;
       const d = Math.atan2(Math.sin(b[0] - a[0]), Math.cos(b[0] - a[0])) + (b[4] - a[4]);
       const yaw = (p.rotDeg * Math.PI) / 180 + d;
-      const center = [t.to[0], t.to[1]];
-      expect(center[0]).toBeCloseTo(slot.x, 6);
-      expect(center[1]).toBeCloseTo(slot.y, 6);
-      // 沿 Y 摆放
       expect(Math.abs(Math.cos(yaw))).toBeLessThan(1e-6);
-      // 整个模型（含引脚）在盒内（盒壁内侧）：沿 Y 摆放时，长轴两端离中心最远的距离
+      expect(t.drop.from[0]).toBeCloseTo(t.to[0], 9);
+      expect(t.drop.from[1]).toBeCloseTo(t.to[1], 9);
+      expect(t.drop.from[3]).toBeCloseTo((yaw * 180) / Math.PI, 6);
+      // 松开时整个模型（含引脚）在盒内
       const full = new THREE.Box3().setFromObject(createPartMesh(p.cls));
-      const half = Math.max(-full.min.x, full.max.x);
-      expect(Math.abs(center[1] - bin.center[1]) + half).toBeLessThan(bin.size[1] / 2 - BIN_WALL);
-      expect(Math.abs(center[0] - bin.center[0]) + PART_SIZE[p.cls].ly / 2).toBeLessThan(bin.size[0] / 2 - BIN_WALL);
+      const bin = BINS.find((q) => q.id === t.binId);
+      expect(Math.abs(t.to[1] - bin.center[1]) + Math.max(-full.min.x, full.max.x)).toBeLessThan(bin.size[1] / 2 - BIN_WALL);
     }
+    checkBins(list, tasks);
   });
 
   it('不可达零件放进"已跳过"并给出原因', () => {
