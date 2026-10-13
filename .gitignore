@@ -2,3 +2,15 @@ node_modules/
 dist/
 .DS_Store
 *.log
+
+# 步骤 13：本地训练产生的数据与结果（体积大，不进仓库；导出的 public/models/best.onnx 要提交）
+.venv/
+training/.venv/
+training/raw/
+training/data/
+training/datasets/
+training/runs/
+training/dumps/
+training/*.pt
+calib_photos/
+__pycache__/

@@ -1,0 +1,11 @@
+# 零件检测数据集配置模板。类别 ID 与名称必须与 src/config.js 的 CLASSES（key）一致。
+# 训练时不直接用这个文件：split_dataset.py 会以它为模板，在 datasets/parts/parts.yaml 生成带绝对路径的版本。
+path: datasets/parts
+train: images/train
+val: images/val
+test: images/test
+names:
+  0: resistor
+  1: capacitor
+  2: led
+  3: screw

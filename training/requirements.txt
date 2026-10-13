@@ -1,0 +1,8 @@
+# 步骤 13 训练 / 导出 / 标定所需（torch 另装，见 README 第 2 节，要按显卡的 CUDA 版本选）
+ultralytics>=8.4.0,<8.5   # 8.4.0 起支持 YOLO26
+onnx
+onnxruntime
+onnxslim
+opencv-python
+pillow
+pillow-heif               # 读 iPhone 的 HEIC 照片
