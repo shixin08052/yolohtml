@@ -1,3 +1,25 @@
 {
-  "说明": "尚未标定。步骤 13 的 tools/calibrate_camera.py 会用棋盘格标定结果覆盖本文件，格式为 { fx, fy, cx, cy, width, height, dist, rms }，其中 width / height 为参考分辨率（4032 × 3024，横向）。本文件没有 fx 等字段时，网页把\"标定文件\"选项视为不可用。"
+  "说明": "棋盘格标定结果（tools/calibrate_camera.py 生成）。width / height 为参考分辨率（传感器横向）；cx、cy 已换成网页的像素中心约定（OpenCV 结果 + 0.5）。",
+  "fx": 3060.356,
+  "fy": 3063.542,
+  "cx": 2002.641,
+  "cy": 1514.248,
+  "width": 4032,
+  "height": 3024,
+  "dist": [
+    0.261732,
+    -1.555779,
+    0.000339,
+    0.000783,
+    2.898393
+  ],
+  "rms": 1.3194,
+  "images": 26,
+  "squareMm": 25.0,
+  "pattern": [
+    9,
+    6
+  ],
+  "equivFocal35": 26.27,
+  "date": "2026-10-13 18:47"
 }
