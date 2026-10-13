@@ -5,7 +5,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import { cssVar, onThemeChange } from '../ui/theme.js';
 import { BOARD } from '../config.js';
-import { toThree, cameraQuaternionFromR } from '../math/coords.js';
+import { toThree, fromThree, cameraQuaternionFromR } from '../math/coords.js';
 
 /** 桌面尺寸（mm），中心与底板中心对齐 */
 export const TABLE = { width: 1200, depth: 900 };
@@ -110,6 +110,8 @@ export function createWorld(container) {
   controls.maxPolarAngle = Math.PI / 2 - 0.02; // 不钻到桌面下面
   controls.screenSpacePanning = true;
 
+  /** 默认视角始终要装进画面的点（底板坐标）：底板四角，加上料盒、机械臂等固定物体 */
+  let basePoints = [[0, 0, 0], [BOARD.width, 0, 0], [BOARD.width, BOARD.height, 0], [0, BOARD.height, 0]];
   /** 默认视角需要额外装进画面的点（底板坐标），例如手机；null 表示只看底板 */
   let focusPoints = null;
   /** 有额外点时的视线方位角（度，0 = 从操作者一侧看，正值往 +X 一侧转） */
@@ -117,19 +119,16 @@ export function createWorld(container) {
 
   /**
    * 默认视角的相机位置与目标点（不应用）。
-   * - 只有底板时：从操作者一侧（−Y）、仰角 50° 看向底板中心
+   * - 没有手机时：从右侧偏前（方位 62°、仰角 48°）看：机械臂立在底板前方，从正面或右前方看会挡住底板
    * - 有手机时（全景）：从右前方斜看（方位 40°、仰角 28°），让底板和手机都在画面里
    * 相机距离按画面宽高比计算，保证所有要看的点都在视场内并留出边距。
    * @param {number} [aspect] 画面宽高比（默认取当前相机）
    * @returns {{position: THREE.Vector3, target: THREE.Vector3, fov: number}}
    */
   function getDefaultView(aspect = camera.aspect) {
-    const pts = [
-      [0, 0, 0], [BOARD.width, 0, 0], [BOARD.width, BOARD.height, 0], [0, BOARD.height, 0],
-      ...(focusPoints ?? []),
-    ];
-    const az = ((focusPoints ? focusAzimuth : 0) * Math.PI) / 180;
-    const el = ((focusPoints ? 28 : 50) * Math.PI) / 180;
+    const pts = [...basePoints, ...(focusPoints ?? [])];
+    const az = ((focusPoints ? focusAzimuth : 62) * Math.PI) / 180;
+    const el = ((focusPoints ? 28 : 48) * Math.PI) / 180;
     // 目标点：所有点包围盒的中心
     const lo = [0, 1, 2].map((i) => Math.min(...pts.map((p) => p[i])));
     const hi = [0, 1, 2].map((i) => Math.max(...pts.map((p) => p[i])));
@@ -166,6 +165,31 @@ export function createWorld(container) {
   function setFocusPoints(points, azimuthDeg = 40) {
     focusPoints = points && points.length ? points : null;
     focusAzimuth = azimuthDeg;
+  }
+
+  /**
+   * 设置默认视角始终要装进画面的点（底板坐标）
+   * @param {number[][]} points
+   */
+  function setBasePoints(points) {
+    basePoints = points;
+  }
+
+  const raycaster = new THREE.Raycaster();
+  /**
+   * 屏幕上的点与水平面 Z = z 的交点（底板坐标）；转场 / 对比时（画面区域不是全画布）不处理
+   * @param {number} clientX
+   * @param {number} clientY
+   * @param {number} [z=0]
+   * @returns {number[]|null}
+   */
+  function pickPlane(clientX, clientY, z = 0) {
+    if (frame) return null;
+    const r = renderer.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
+    raycaster.setFromCamera(ndc, camera);
+    const hit = raycaster.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -z), new THREE.Vector3());
+    return hit ? fromThree(hit) : null;
   }
 
   /** 应用默认视角 */
@@ -327,6 +351,8 @@ export function createWorld(container) {
     setDefaultView,
     getDefaultView,
     setFocusPoints,
+    setBasePoints,
+    pickPlane,
     photoCameraParams,
     applyCamera,
     setControlsActive,

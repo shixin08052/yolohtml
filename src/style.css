@@ -266,6 +266,7 @@ body { background: var(--bg); overflow: hidden; -webkit-font-smoothing: antialia
 .note { margin: 8px 0 0; padding: 6px 8px; border-radius: 6px; line-height: 1.5; font-size: 13px; }
 .note.warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); }
 .note.info { color: var(--text-2); background: var(--hover); }
+.note.error { color: var(--err); background: color-mix(in srgb, var(--err) 12%, transparent); }
 .sec-actions { margin-top: 10px; display: flex; gap: 8px; }
 .summary { margin: 0 0 8px; line-height: 1.6; }
 .summary b { font-weight: 600; font-variant-numeric: tabular-nums; }

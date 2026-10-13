@@ -32,7 +32,12 @@ import { createPartsLayer } from './scene/parts.js';
 import { detect, MockMissingError, detectionsFileName, serializeDetections, parseDetections } from './vision/detector.js';
 import { mapDetections, selectMethod } from './vision/mapping.js';
 import { partsTruthError } from './vision/evaluate.js';
-import { CLASSES, WORK_AREA } from './config.js';
+import { CLASSES, WORK_AREA, ARM, BINS } from './config.js';
+import { createArm } from './scene/arm.js';
+import { createBins } from './scene/bins.js';
+import { ikWorld, fkWorld, fkChain, fromBase } from './robot/ik.js';
+import * as THREE from 'three';
+import { toThree } from './math/coords.js';
 
 const $ = (sel) => document.querySelector(sel);
 const fmt = (x, d = 1) => (x == null || Number.isNaN(x) ? '—' : Number(x).toFixed(d));
@@ -119,6 +124,138 @@ store.on('stage:posed', (st) => {
   // 正在看 3D 视图时直接播放；否则等切换到 3D 视图时播放
   if ($('#view-three').classList.contains('active')) playTransition();
 });
+
+/* ------------------------------------------------------------------ */
+/* 3D 场景：机械臂、料盒，机械臂调试（点击移动）                           */
+/* ------------------------------------------------------------------ */
+
+const arm = createArm({ requestRender: world.requestRender });
+world.scene.add(arm.group);
+const bins = createBins();
+world.scene.add(bins.group);
+
+// 默认视角要装进画面的固定物体：底板四角、料盒外角（含高度）、机械臂底座和初始姿态的关节
+{
+  const pts = [[0, 0, 0], [BOARD.width, 0, 0], [BOARD.width, BOARD.height, 0], [0, BOARD.height, 0]];
+  for (const b of BINS) {
+    const [cx, cy] = b.center;
+    const [sx, sy, h] = b.size;
+    for (const dx of [-1, 1]) for (const dy of [-1, 1]) pts.push([cx + (dx * sx) / 2, cy + (dy * sy) / 2, h]);
+  }
+  const [bx, by] = ARM.base;
+  pts.push([bx - 50, by - 50, 0], [bx + 50, by - 50, 0]);
+  const chain = fkChain(arm.homeAngles, ARM);
+  for (const k of ['shoulder', 'elbow', 'wrist']) pts.push(fromBase(chain[k], ARM));
+  world.setBasePoints(pts);
+  world.setDefaultView();
+}
+
+/** 调试模式的目标标记：板面上的圆环 + 竖线 + 目标点 */
+const armTarget = (() => {
+  const g = new THREE.Group();
+  g.name = 'arm-target';
+  g.visible = false;
+  const mat = new THREE.MeshBasicMaterial({ color: '#c96442', depthTest: false, transparent: true });
+  const ring = new THREE.Mesh(new THREE.RingGeometry(5, 7, 40), mat);
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.y = 0.4;
+  const dot = new THREE.Mesh(new THREE.SphereGeometry(2.5, 20, 12), mat);
+  dot.position.y = ARM.approach;
+  const lineMat = new THREE.LineDashedMaterial({ color: '#c96442', dashSize: 4, gapSize: 3, depthTest: false, transparent: true });
+  const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, ARM.approach, 0)]), lineMat);
+  line.computeLineDistances();
+  for (const o of [ring, dot, line]) o.renderOrder = 20;
+  g.add(ring, dot, line);
+  world.scene.add(g);
+  return {
+    show(P, ok) {
+      const c = ok ? '#c96442' : '#e5484d';
+      mat.color.set(c);
+      lineMat.color.set(c);
+      g.position.copy(toThree(P[0], P[1], 0));
+      g.visible = true;
+      world.requestRender();
+    },
+    hide() {
+      g.visible = false;
+      world.requestRender();
+    },
+  };
+})();
+
+let armDebug = false;
+
+function setArmDebug(on) {
+  armDebug = on;
+  $('#btn-arm-debug').setAttribute('aria-pressed', String(on));
+  if (on) {
+    renderArmSection(null);
+  } else {
+    armTarget.hide();
+    panel.remove('arm');
+  }
+}
+$('#btn-arm-debug').addEventListener('click', () => setArmDebug(!armDebug));
+
+/** 渲染"机械臂"分区；r 为最近一次点击的结果 */
+function renderArmSection(r) {
+  const body = panel.setCustom('arm', '机械臂调试');
+  const d = (x) => `${fmt((x * 180) / Math.PI, 1)}°`;
+  let html = '';
+  if (!r) {
+    html += '<p class="muted small">在 3D 视图里点击底板或桌面，机械臂移动到该点正上方 ' + ARM.approach + ' mm 处。</p>';
+  } else if (!r.reachable) {
+    html += `<p class="note error">目标 (${fmt(r.target[0])}, ${fmt(r.target[1])}, ${fmt(r.target[2])}) 够不到：${r.reason}</p>`;
+  } else {
+    const e = r.err;
+    html += '<dl class="kv">';
+    html += `<dt>目标</dt><dd>${r.target.map((x) => fmt(x, 1)).join(', ')} mm</dd>`;
+    html += `<dt>指尖（fk）</dt><dd>${r.tip.map((x) => fmt(x, 3)).join(', ')} mm</dd>`;
+    html += `<dt>误差</dt><dd><span class="${e < 0.1 ? 'ok' : 'bad'}">${e < 0.001 ? e.toExponential(1) : fmt(e, 3)} mm</span></dd>`;
+    html += `<dt>关节角 θ₀ θ₁ θ₂ θ₃</dt><dd>${r.angles.map(d).join(' · ')}</dd>`;
+    html += `<dt>夹爪俯仰</dt><dd>${d(r.angles[1] + r.angles[2] + r.angles[3])}（−90° 为竖直向下）</dd>`;
+    html += '</dl>';
+  }
+  html += '<div class="sec-actions"><button type="button" class="btn btn-small" id="btn-arm-home">回到初始姿态</button></div>';
+  body.innerHTML = html;
+  body.querySelector('#btn-arm-home').addEventListener('click', () => {
+    armTarget.hide();
+    arm.animateTo(arm.homeAngles).catch(() => {});
+  });
+}
+
+/** 点击：机械臂移动到点击位置正上方 approach 高度处 */
+function armGoto(X, Y) {
+  const target = [X, Y, ARM.approach];
+  const s = ikWorld(target, ARM);
+  armTarget.show(target, s.reachable);
+  if (!s.reachable) {
+    renderArmSection({ reachable: false, target, reason: s.reason });
+    return;
+  }
+  const tip = fkWorld(s.angles, ARM);
+  const err = Math.hypot(tip[0] - X, tip[1] - Y, tip[2] - target[2]);
+  renderArmSection({ reachable: true, target, tip, err, angles: s.angles });
+  arm.animateTo(s.angles).catch(() => {});
+}
+
+// 区分点击与拖动（拖动是在转视角）
+{
+  const el = world.renderer.domElement;
+  let down = null;
+  el.addEventListener('pointerdown', (e) => {
+    down = e.isPrimary ? { x: e.clientX, y: e.clientY, t: performance.now() } : null;
+  });
+  el.addEventListener('pointerup', (e) => {
+    if (!armDebug || !down || transition.mode !== 'idle') return;
+    const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y);
+    const quick = performance.now() - down.t < 500;
+    down = null;
+    if (moved > 6 || !quick) return;
+    const P = world.pickPlane(e.clientX, e.clientY, 0);
+    if (P) armGoto(P[0], P[1]);
+  });
+}
 
 /** 3D 底板贴图的分辨率（px/mm），比调试小窗的正射图更清晰 */
 const BOARD_TEX_PX_PER_MM = 4;
@@ -842,4 +979,4 @@ sampleSelect.addEventListener('change', async (e) => {
 panel.message('页面已就绪。', 'ok');
 
 // 调试用：在控制台访问
-window.__twin = { store, panel, debugView, world, phone, transition, partsLayer, boxEditor, get calib() { return calib; } };
+window.__twin = { store, panel, debugView, world, phone, transition, partsLayer, boxEditor, arm, armGoto, get calib() { return calib; } };
