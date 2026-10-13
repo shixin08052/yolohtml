@@ -3,7 +3,7 @@
 > 本文档交给 Claude Code 执行。请先完整阅读第 0–6 节，再从第 7 节的步骤 1 开始。
 >
 > **变更记录：**
-> - 2026-10-13 步骤 13：训练改在用户本地电脑（NVIDIA 显卡）上进行，不用云 GPU；README 写成给用户本地 Claude Code 执行的说明。
+> - 2026-10-13 步骤 13：训练改在 Google Colab 上进行（原为 AutoDL）；`training/README.md` 写成交给另一个对话执行的任务文档，拍照、标注、相机标定在用户本地完成。
 > - 2026-10-13 步骤 12：LED 改为躺平放置（像实物那样侧放，两根引脚），高度 9 → 5.8 mm，按长条零件估计朝向、夹在灯体上；合成图重新生成。夹取高度由"零件半高"改为指尖离板面 0.5 mm（指尖垫片包住躺平零件的中部）。
 > - 2026-10-13 步骤 11：删除螺母、垫片两类（太难夹），类别 6 → 4，料盒改为左右各 2 个；合成图重新生成。机械臂底座移到底板远端（远离拍摄者一侧，不挡拍照视线）；增加腕部转动关节 θ₄，夹爪可对准零件朝向；增加关节限位与自身碰撞检查，太靠近底座的点判为不可达。
 > - 2026-10-12 底板厚度 3 mm → 0.1 mm（底板就是一张普通 A4 纸）。
@@ -555,7 +555,7 @@ export const DETECT = { imgsz: 1024, scoreThreshold: 0.4, iouThreshold: 0.5 };
 
 **实现要点：**
 - `training/`：
-  - `README.md`：在用户本地电脑（NVIDIA 显卡）上从装环境到导出 ONNX 的完整步骤，命令可以直接复制，写给用户本地的 Claude Code 执行（原为 AutoDL 云 GPU，按用户要求改为本地）
+  - `README.md`：在 Google Colab 上从装环境到导出 ONNX 的完整步骤，单元格可以直接复制运行；写成交给另一个对话执行的任务文档（原为 AutoDL，按用户要求改为 Colab）
   - `parts.yaml`：4 个类别，名称与 `CLASSES` 的 key 一致
   - `split_dataset.py`：按照片划分训练 / 验证 / 测试 = 8 : 1 : 1，随机种子固定
   - `train.sh`：`yolo detect train model=yolo26n.pt data=parts.yaml imgsz=1024 epochs=150`
@@ -567,7 +567,7 @@ export const DETECT = { imgsz: 1024, scoreThreshold: 0.4, iouThreshold: 0.5 };
 - （实现补充）
   - 另加 `prepare_images.py`（HEIC / JPG → 按 EXIF 转正的 JPG，所有环节看到同一张图）、`detections_to_yolo.py`（网页"框选"保存的 `*.detections.json` → YOLO 标注，网页可直接当标注工具用）、`train.py` / `export.py`（Windows 上直接用，`train.sh` / `export.sh` 是它们的 bash 版）、`tools/make_chessboard.py`（生成 A4 棋盘格）、`requirements.txt`。
   - `split_dataset.py` 生成带绝对路径的 `datasets/parts/parts.yaml`：ultralytics 把相对的 `path` 解析到它自己的数据集目录，而不是 yaml 所在目录。
-  - `export.py` 同时写 `public/models/best.json`（类别名、输入尺寸、输出形状与格式），步骤 14 的网页推理按它解码。
+  - `export.py` 同时写 `public/models/best.json`（类别名、输入尺寸、输出形状与格式），步骤 14 的网页推理按它解码。默认传 `nms=False` 导出 YOLO26 的端到端输出 `[1, 300, 6]`（ultralytics 8.4.176 实测：不传时导出的是需要 NMS 的原始输出 `[1, 84, 21504]`），详见 `training/README.md` 第 8 节。
   - `predict_dump.py` 输出与网页"保存检测结果"相同的 `*.detections.json`，可在网页里直接载入对比。
   - `calibrate_camera.py`：竖拍照片先转回传感器横向再标定；输出的 cx、cy 比 OpenCV 结果各加 0.5（OpenCV 像素中心在整数坐标，网页约定在 +0.5）。
 

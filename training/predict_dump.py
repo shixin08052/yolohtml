@@ -58,7 +58,8 @@ def main():
     for f in files:
         img = load_bgr(f)
         h, w = img.shape[:2]
-        r = model.predict(img, imgsz=args.imgsz, conf=args.conf, iou=args.iou, device=args.device, verbose=False)[0]
+        # rect=False：.pt 也按正方形 imgsz × imgsz 填充（predict 默认 rect=True 会缩成最小矩形），与 ONNX、网页的输入一致
+        r = model.predict(img, imgsz=args.imgsz, conf=args.conf, iou=args.iou, rect=False, device=args.device, verbose=False)[0]
         dets = []
         for (x1, y1, x2, y2), c, s in zip(r.boxes.xyxy.tolist(), r.boxes.cls.tolist(), r.boxes.conf.tolist()):
             c = int(c)

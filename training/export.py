@@ -3,6 +3,11 @@
 
 同时写一份 public/models/best.json（类别名、输入尺寸、输出形状、导出参数），步骤 14 的网页推理按它解码。
 
+YOLO26 是端到端（NMS-free）模型，但 ultralytics 8.4 导出 ONNX 时只有显式传 nms=False 才走端到端分支
+（exporter 里 model.end2end = (nms is False)）。默认的 nms=None 导出的是原始输出 [1, 4 + 类别数, 8400·(imgsz/640)²]，
+需要自己做 NMS。本脚本默认导出端到端输出 [1, 300, 6]，每行 [x1, y1, x2, y2, 置信度, 类别]，坐标在 1024 × 1024
+的输入图上，网页只需按置信度过滤、去掉填充、缩放回原图。--raw 导出原始输出（2026-10-13 用 ultralytics 8.4.176 实测）。
+
 用法示例：
     python export.py
     python export.py --weights runs/detect/parts/weights/best.pt --copy-to ../public/models/best.onnx
@@ -37,6 +42,7 @@ def main():
     ap.add_argument('--opset', type=int, default=None, help='ONNX opset（默认由 ultralytics 决定）')
     ap.add_argument('--copy-to', type=Path, default=HERE.parent / 'public' / 'models' / 'best.onnx', help='复制到哪里（默认 public/models/best.onnx）')
     ap.add_argument('--no-copy', action='store_true', help='只导出，不复制')
+    ap.add_argument('--raw', action='store_true', help='导出原始输出（需要网页做 NMS），默认导出端到端输出 [1, 300, 6]')
     args = ap.parse_args()
 
     import ultralytics
@@ -46,6 +52,8 @@ def main():
         raise SystemExit(f'找不到权重 {args.weights}')
     model = YOLO(str(args.weights))
     kw = {'format': 'onnx', 'imgsz': args.imgsz, 'simplify': True, 'dynamic': False}
+    if not args.raw:
+        kw['nms'] = False  # 走 YOLO26 的端到端（NMS-free）分支
     if args.opset:
         kw['opset'] = args.opset
     onnx_path = Path(model.export(**kw))
@@ -79,6 +87,8 @@ def main():
         'imgsz': args.imgsz,
         'names': {int(k): v for k, v in model.names.items()},
         'layout': layout,
+        'preprocess': '等比缩放到 imgsz × imgsz、居中填灰 (114, 114, 114)、RGB、除以 255、NCHW float32',
+        'outputFormat': '[1, N, 6]：x1, y1, x2, y2（输入图像素）, 置信度, 类别' if layout == 'end2end' else '[1, 4 + nc, N]：cx, cy, w, h, 各类得分（需要 NMS）',
         **io,
         'metadata': meta,
         'ultralytics': ultralytics.__version__,

@@ -1,4 +1,4 @@
-# 步骤 13 训练 / 导出 / 标定所需（torch 另装，见 README 第 2 节，要按显卡的 CUDA 版本选）
+# 步骤 13 训练 / 导出 / 标定所需。torch 不在这里：Colab 自带 CUDA 版；本地训练时到 pytorch.org 按 CUDA 版本装
 ultralytics>=8.4.0,<8.5   # 8.4.0 起支持 YOLO26
 onnx
 onnxruntime

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""训练 YOLO26n 零件检测模型（本地 GPU）。等价于 train.sh 里的 yolo 命令，Windows 上直接用这个。
+"""训练 YOLO26n 零件检测模型（Colab 或本地 GPU）。等价于 train.sh 里的 yolo 命令。
 
 用法示例：
     python train.py
     python train.py --epochs 150 --batch 8 --device 0
     python train.py --resume            # 中断后从上次的 last.pt 接着训练
 
-训练结果在 runs/detect/<name>/，最好的权重是 runs/detect/<name>/weights/best.pt。
+训练结果在 <project>/<name>/（默认 training/runs/detect/parts/），最好的权重是其中的 weights/best.pt。
 """
 import argparse
 import platform
@@ -24,16 +24,17 @@ def main():
     ap.add_argument('--batch', type=float, default=-1, help='批大小；-1 = 按显存自动选（默认）；0–1 之间的小数 = 占用显存比例')
     ap.add_argument('--workers', type=int, default=2 if platform.system() == 'Windows' else 8, help='数据加载进程数（Windows 默认 2）')
     ap.add_argument('--device', default='0', help='GPU 编号（默认 0）；没有 GPU 时填 cpu')
-    ap.add_argument('--name', default='parts', help='本次训练的名字（结果在 runs/detect/<name>）')
+    ap.add_argument('--name', default='parts', help="本次训练的名字（结果在 <project>/<name>）")
     ap.add_argument('--patience', type=int, default=50, help='验证集指标这么多轮没有提升就提前停止（默认 50）')
     ap.add_argument('--seed', type=int, default=0, help='随机种子（默认 0）')
-    ap.add_argument('--resume', action='store_true', help='从 runs/detect/<name>/weights/last.pt 继续训练')
+    ap.add_argument('--project', type=Path, default=HERE / 'runs' / 'detect', help='结果保存目录（默认 training/runs/detect；Colab 上建议指到 Google Drive，断线不丢）')
+    ap.add_argument('--resume', action='store_true', help='从 <project>/<name>/weights/last.pt 继续训练')
     args = ap.parse_args()
 
     from ultralytics import YOLO
 
     if args.resume:
-        last = HERE / 'runs' / 'detect' / args.name / 'weights' / 'last.pt'
+        last = args.project / args.name / 'weights' / 'last.pt'
         YOLO(str(last)).train(resume=True)
         return
 
@@ -48,14 +49,14 @@ def main():
         batch=batch,
         workers=args.workers,
         device=args.device,
-        project=str(HERE / 'runs' / 'detect'),
+        project=str(args.project),
         name=args.name,
         exist_ok=True,
         patience=args.patience,
         seed=args.seed,
         plots=True,
     )
-    best = HERE / 'runs' / 'detect' / args.name / 'weights' / 'best.pt'
+    best = args.project / args.name / 'weights' / 'best.pt'
     print(f'训练完成，最好的权重：{best}')
     print('下一步：python export.py 导出 ONNX')
 
