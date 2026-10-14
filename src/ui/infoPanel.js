@@ -17,7 +17,7 @@ export function createInfoPanel(el) {
   const msgBox = msgSection.querySelector('.msgs');
   el.appendChild(msgSection);
 
-  function getSection(key, title) {
+  function getSection(key, title, { last = false } = {}) {
     let sec = sections.get(key);
     if (!sec) {
       sec = document.createElement('section');
@@ -25,6 +25,8 @@ export function createInfoPanel(el) {
       sec.dataset.key = key;
       el.insertBefore(sec, msgSection);
       sections.set(key, sec);
+    } else if (last && sec.nextElementSibling !== msgSection) {
+      el.insertBefore(sec, msgSection); // 放回到最后（消息区之前）
     }
     sec.innerHTML = `<h3>${esc(title)}</h3><div class="body"></div>`;
     return sec.querySelector('.body');
@@ -49,10 +51,11 @@ export function createInfoPanel(el) {
      * 设置一个自定义内容分区，返回内容容器
      * @param {string} key
      * @param {string} title
+     * @param {{ last?: boolean }} [opts] last：始终放在最后（消息区之前）
      * @returns {HTMLElement}
      */
-    setCustom(key, title) {
-      return getSection(key, title);
+    setCustom(key, title, opts) {
+      return getSection(key, title, opts);
     },
 
     /** 删除分区 */

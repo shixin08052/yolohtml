@@ -41,6 +41,7 @@ import { plan } from './robot/planner.js';
 import { buildSequence, GRIP_MAX } from './robot/sequence.js';
 import { createSortPlayer } from './scene/sortPlayer.js';
 import { createRun, recordStep, finishRun, summarizeRun, RUN_KINDS } from './timing.js';
+import { createExperimentPanel } from './ui/experimentPanel.js';
 import * as THREE from 'three';
 import { toThree } from './math/coords.js';
 
@@ -424,9 +425,18 @@ function timeStep(key, ms, opts) {
   if (recordStep(run, key, ms, opts)) renderTimingSection();
 }
 
+/** 最近一次一键流程（新照片，到转场开始）的分步耗时，记录实验时一并记下：{ bitmap, rows, total } */
+let lastTiming = null;
+
 /** 结束当前运行 */
 function endRun(opts) {
-  if (finishRun(run, now(), opts)) renderTimingSection();
+  if (!finishRun(run, now(), opts)) return;
+  renderTimingSection();
+  if (run.until === 'transition' && !run.error && store.state.image) {
+    const s = summarizeRun(run, now());
+    lastTiming = { bitmap: store.state.image.bitmap, rows: s.rows, total: s.total };
+    experiment?.render();
+  }
 }
 
 function renderTimingSection() {
@@ -1413,6 +1423,31 @@ sampleSelect.addEventListener('change', async (e) => {
     store.fail('image', `加载示例失败：${err.message}`);
   }
 });
+
+/* ------------------------------------------------------------------ */
+/* 实验记录（步骤 16）                                                   */
+/* ------------------------------------------------------------------ */
+
+const experiment = createExperimentPanel({
+  panel,
+  message: (text, level) => panel.message(text, level),
+  getContext: () => {
+    const { image, intrinsics, pose, parts, truth, stage } = store.state;
+    if (!image) return null;
+    const built = stageIndex(stage) >= stageIndex('sceneBuilt');
+    return {
+      image,
+      intrinsics,
+      pose,
+      parts: built ? parts : null,
+      truth,
+      method: parallaxOn ? 2 : 1,
+      timing: lastTiming?.bitmap === image.bitmap ? lastTiming : null,
+    };
+  },
+});
+store.on('stage:sceneBuilt', () => experiment.render());
+store.on('stage:imageLoaded', () => experiment.render());
 
 /* global __BUILD_VERSION__ */
 panel.message(`页面已就绪（版本 ${typeof __BUILD_VERSION__ === 'string' ? __BUILD_VERSION__ : 'dev'}）。`, 'ok');

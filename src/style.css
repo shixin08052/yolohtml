@@ -343,3 +343,24 @@ body { background: var(--bg); overflow: hidden; -webkit-font-smoothing: antialia
 .det-controls label { display: inline-flex; align-items: center; gap: 6px; }
 .det-controls .select { height: 30px; padding: 0 8px; font-size: 13px; }
 .view-tools .select-small { height: 26px; padding: 0 6px; font-size: 12px; }
+
+/* 实验分区（步骤 16） */
+.exp-parts { display: grid; gap: 8px; margin: 8px 0 10px; }
+.exp-part { border-left: 3px solid var(--c); padding: 4px 0 4px 8px; }
+.exp-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 8px; font-size: 13px; }
+.exp-head .muted { font-size: 12px; font-variant-numeric: tabular-nums; }
+.exp-inputs { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 4px; font-size: 13px; }
+.exp-inputs label { display: inline-flex; align-items: center; gap: 4px; color: var(--text-2); }
+.exp-num {
+  width: 72px; height: 28px; padding: 0 6px; border-radius: 6px; border: 1px solid var(--line-strong);
+  background: var(--card); color: var(--text); font: inherit; font-size: 13px; font-variant-numeric: tabular-nums;
+}
+.exp-num:focus { outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent); outline-offset: 0; border-color: var(--accent); }
+.exp-err { font-size: 12px; font-variant-numeric: tabular-nums; }
+.exp-height { margin-top: 10px; }
+.exp-saved { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--line); }
+.exp-saved h4 { margin: 0 0 6px; font-size: 13px; font-weight: 600; }
+.exp-records { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; font-size: 12px; line-height: 1.5; }
+.exp-records li { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+.sec-actions.wrap { flex-wrap: wrap; }
+@media (pointer: coarse) { .exp-num { height: 36px; width: 84px; font-size: 16px; } }
