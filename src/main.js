@@ -42,6 +42,7 @@ import { buildSequence, GRIP_MAX } from './robot/sequence.js';
 import { createSortPlayer } from './scene/sortPlayer.js';
 import { createRun, recordStep, finishRun, summarizeRun, RUN_KINDS } from './timing.js';
 import { createExperimentPanel } from './ui/experimentPanel.js';
+import { flowStatuses, flowSvg, currentNode } from './ui/flowchart.js';
 import * as THREE from 'three';
 import { toThree } from './math/coords.js';
 
@@ -94,6 +95,7 @@ const transition = createTransition({
     $('#btn-compare').setAttribute('aria-pressed', String(mode === 'compare'));
     $('#btn-transition').disabled = mode === 'playing' || !store.state.pose;
     $('#three-reset').disabled = mode !== 'idle';
+    renderStatus();
   },
 });
 
@@ -107,6 +109,7 @@ function playTransition() {
   // 一键流程到转场开始为止（场景还没建好时不算）
   if (run?.until === 'transition' && store.state.stage === 'sceneBuilt') endRun();
   transitionPending = false;
+  transitionShown = true;
   transition.play(poseInputs());
 }
 
@@ -129,6 +132,7 @@ store.on('stage:posed', (st) => {
   $('#btn-transition').disabled = false;
   $('#btn-compare').disabled = false;
   transitionPending = true;
+  transitionShown = false;
   // 正在看 3D 视图时直接播放；否则等切换到 3D 视图时播放
   if ($('#view-three').classList.contains('active')) playTransition();
 });
@@ -401,9 +405,37 @@ const tabs = createTabs($('.main'), (view) => {
   }
 });
 
-const showStatus = () => panel.setRows('status', '状态', [['流程', STAGE_LABELS[store.state.stage]]]);
-showStatus();
-store.on('change', showStatus);
+/* ------------------------------------------------------------------ */
+/* 状态：流程图（含出错分支），每一步变化时切换高亮                          */
+/* ------------------------------------------------------------------ */
+
+/** 正在读取照片（选好照片、还没进入 imageLoaded） */
+let loadingPhoto = false;
+/** 当前位姿的转场是否已播放（或正在播放） */
+let transitionShown = false;
+const escHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+
+function renderStatus() {
+  const { stage, error } = store.state;
+  const st = flowStatuses({
+    stage: loadingPhoto ? 'idle' : stage,
+    error: loadingPhoto ? null : error,
+    loading: loadingPhoto,
+    transitionDone: transitionShown,
+    transitionPlaying: transition.mode === 'playing',
+    skipped: sortPlan?.skipped.length ?? 0,
+    manual: detResult?.source === 'manual',
+  });
+  const cur = currentNode(st);
+  let html = `<dl class="kv"><dt>流程</dt><dd>${loadingPhoto ? '读取照片中' : STAGE_LABELS[stage]}</dd></dl>`;
+  html += flowSvg(st);
+  if (error && !loadingPhoto) html += `<p class="note error">${escHtml(error.reason)}</p>`;
+  else if (cur) html += `<p class="fc-hint"><b>${escHtml(cur.label)}</b>：${escHtml(cur.hint)}</p>`;
+  html += '<p class="fc-legend"><i class="fc-dot done"></i>已完成 <i class="fc-dot active"></i>进行中 / 等待 <i class="fc-dot error"></i>出错 <i class="fc-dot todo"></i>未开始</p>';
+  panel.setCustom('status', '状态').innerHTML = html;
+}
+store.on('change', () => renderStatus());
+store.on('error', () => renderStatus());
 store.on('error', ({ reason }) => panel.message(reason, 'error'));
 
 /* ------------------------------------------------------------------ */
@@ -1283,6 +1315,7 @@ function refreshPlan() {
   sortPlan = { tasks, skipped, segs };
   sortPlayer.load(segs);
   renderSortSection();
+  renderStatus();
 }
 
 /** 重置：零件回到原位，机械臂回到初始姿态 */
@@ -1357,6 +1390,7 @@ function updateSortProgress(task, phase) {
 }
 
 function onSortState(state) {
+  renderStatus();
   const body = document.querySelector('#info-panel [data-key="sort"]');
   if (body) {
     const start = body.querySelector('#sort-start');
@@ -1383,15 +1417,19 @@ $('#file-input').addEventListener('change', async (e) => {
   if (!file) return;
   panel.message(`正在读取：${file.name}…`, 'info');
   beginRun('upload');
+  loadingPhoto = true;
+  renderStatus();
   try {
     const t0 = now();
     const image = await loadImageFile(file);
     await calibReady;
     timeStep('load', now() - t0);
+    loadingPhoto = false;
     setImage(image, null);
     panel.message(`已读取照片：${file.name}（${image.width} × ${image.height}）`, 'ok');
   } catch (err) {
     if (!(err instanceof ImageFormatError)) console.error(err);
+    loadingPhoto = false;
     store.fail('image', err.message);
   }
 });
@@ -1411,15 +1449,19 @@ sampleSelect.addEventListener('change', async (e) => {
   if (!entry) return;
   panel.message(`正在加载示例：${entry.label}…`, 'info');
   beginRun('sample');
+  loadingPhoto = true;
+  renderStatus();
   try {
     const t0 = now();
     const { image, truth } = await loadSample(entry);
     await calibReady;
     timeStep('load', now() - t0);
+    loadingPhoto = false;
     // 合成图：内参默认取真值
     setImage(image, truth);
     panel.message(`已加载示例：${entry.label}`, 'ok');
   } catch (err) {
+    loadingPhoto = false;
     store.fail('image', `加载示例失败：${err.message}`);
   }
 });
@@ -1448,6 +1490,8 @@ const experiment = createExperimentPanel({
 });
 store.on('stage:sceneBuilt', () => experiment.render());
 store.on('stage:imageLoaded', () => experiment.render());
+
+renderStatus();
 
 /* global __BUILD_VERSION__ */
 panel.message(`页面已就绪（版本 ${typeof __BUILD_VERSION__ === 'string' ? __BUILD_VERSION__ : 'dev'}）。`, 'ok');

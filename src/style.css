@@ -364,3 +364,41 @@ body { background: var(--bg); overflow: hidden; -webkit-font-smoothing: antialia
 .exp-records li { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
 .sec-actions.wrap { flex-wrap: wrap; }
 @media (pointer: coarse) { .exp-num { height: 36px; width: 84px; font-size: 16px; } }
+
+/* 状态分区的流程图：进行中用蓝色，与出错的红色、主题的橙色区分开 */
+:root { --flow-active: #2f74d0; }
+@media (prefers-color-scheme: dark) { :root { --flow-active: #6aa6f2; } }
+.flowchart { display: block; width: 100%; height: auto; margin: 8px 0 4px; font-family: inherit; }
+.flowchart .fc-node rect { fill: var(--card); stroke: var(--line-strong); stroke-width: 1.2; transition: fill .25s, stroke .25s; }
+.flowchart .fc-label { font-size: 11.5px; fill: var(--text-2); text-anchor: middle; dominant-baseline: central; }
+.flowchart .fc-side .fc-label { font-size: 11px; font-weight: 600; }
+.flowchart .fc-sub { font-size: 9.5px; fill: var(--text-3, var(--text-2)); text-anchor: middle; dominant-baseline: central; }
+.flowchart .fc-done rect { fill: color-mix(in srgb, var(--ok) 14%, var(--card)); stroke: color-mix(in srgb, var(--ok) 60%, transparent); }
+.flowchart .fc-done .fc-label { fill: var(--text); }
+.flowchart .fc-active rect { fill: color-mix(in srgb, var(--flow-active) 14%, var(--card)); stroke: var(--flow-active); stroke-width: 2; animation: fc-pulse 1.4s ease-in-out infinite; }
+.flowchart .fc-active .fc-label { fill: var(--text); font-weight: 600; }
+.flowchart .fc-error rect { fill: color-mix(in srgb, var(--err) 18%, var(--card)); stroke: var(--err); stroke-width: 2; }
+.flowchart .fc-error .fc-label, .flowchart .fc-error .fc-sub { fill: var(--err); }
+.flowchart .fc-warn rect { fill: color-mix(in srgb, var(--warn) 16%, var(--card)); stroke: var(--warn); stroke-width: 1.6; }
+.flowchart .fc-warn .fc-label { fill: var(--warn); }
+.flowchart .fc-idle rect { fill: none; stroke-dasharray: 4 3; }
+.flowchart .fc-idle .fc-label, .flowchart .fc-idle .fc-sub, .flowchart .fc-todo .fc-label { opacity: .65; }
+.flowchart .fc-edge { fill: none; stroke-width: 1.4; }
+.flowchart .fc-edge.off { stroke: var(--line-strong); }
+.flowchart .fc-edge.on { stroke: var(--ok); stroke-width: 2; }
+.flowchart .fc-edge.err { stroke: var(--err); stroke-width: 2; }
+.flowchart .fc-edge.warn { stroke: var(--warn); stroke-width: 1.8; }
+.flowchart .fc-edge.dash { stroke-dasharray: 4 3; }
+.flowchart .fc-head.off { fill: var(--line-strong); }
+.flowchart .fc-head.on { fill: var(--ok); }
+.flowchart .fc-head.err { fill: var(--err); }
+.flowchart .fc-head.warn { fill: var(--warn); }
+@keyframes fc-pulse { 50% { stroke-opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .flowchart .fc-active rect { animation: none; } }
+.fc-hint { margin: 4px 0 0; font-size: 12.5px; line-height: 1.5; color: var(--text-2); }
+.fc-legend { margin: 6px 0 0; font-size: 11.5px; color: var(--text-2); display: flex; flex-wrap: wrap; gap: 2px 10px; align-items: center; }
+.fc-dot { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 3px; vertical-align: -1px; border: 1.5px solid; }
+.fc-dot.done { background: color-mix(in srgb, var(--ok) 14%, var(--card)); border-color: var(--ok); }
+.fc-dot.active { background: color-mix(in srgb, var(--flow-active) 14%, var(--card)); border-color: var(--flow-active); }
+.fc-dot.error { background: color-mix(in srgb, var(--err) 18%, var(--card)); border-color: var(--err); }
+.fc-dot.todo { border-color: var(--line-strong); }
