@@ -108,8 +108,10 @@ function playTransition() {
   if (!store.state.pose) return;
   // 一键流程到转场开始为止（场景还没建好时不算）
   if (run?.until === 'transition' && store.state.stage === 'sceneBuilt') endRun();
-  transitionPending = false;
-  transitionShown = true;
+  // 场景还没建好（检测还在跑）时先播一遍，建好后切到 3D 视图时再播一次（那次才结束一键流程的计时）
+  const built = stageIndex(store.state.stage) >= stageIndex('sceneBuilt');
+  transitionPending = !built;
+  transitionShown = built;
   transition.play(poseInputs());
 }
 
@@ -320,7 +322,7 @@ function updateBoard3D() {
   const canvas = rectify(image.bitmap, Hpaper, BOARD_TEX_PX_PER_MM, { boardW: frame.w, boardH: frame.h });
   // 贴图像素 → 纸张局部坐标（贴图顶部 = 纸张远端）→ 底板坐标
   const texToLocal = [[1 / BOARD_TEX_PX_PER_MM, 0, 0], [0, -1 / BOARD_TEX_PX_PER_MM, frame.h], [0, 0, 1]];
-  boardTex = { bitmap: image.bitmap, canvas, frame, toLocal: invert3(Hpaper), toBoard: mul3(frameMatrix(frame), texToLocal), pixels: null };
+  boardTex = { bitmap: image.bitmap, calib, canvas, frame, toLocal: invert3(Hpaper), toBoard: mul3(frameMatrix(frame), texToLocal), pixels: null };
   refreshBoardTexture();
 }
 
@@ -336,11 +338,13 @@ function refreshBoardTexture() {
   const token = ++skinToken;
   if (skin === 'plain') {
     // 纯色：干净的打印版面（白纸 + 码），按实测纸张位置摆放；照片里的阴影、污渍都不要
-    designRaster.then((design) => {
-      if (token !== skinToken || boardTex?.frame !== frame) return;
-      board.setPaper(plainTexture(design, boardTex), frame);
-      world.requestRender();
-    });
+    designRaster
+      .then((design) => {
+        if (token !== skinToken || boardTex?.frame !== frame) return;
+        board.setPaper(plainTexture(design, boardTex), frame);
+        world.requestRender();
+      })
+      .catch((err) => console.error('纯色板面生成失败：', err));
     return;
   }
   const dets = detResult?.bitmap === boardTex.bitmap ? detResult.detections : [];
@@ -411,6 +415,8 @@ const tabs = createTabs($('.main'), (view) => {
 
 /** 正在读取照片（选好照片、还没进入 imageLoaded） */
 let loadingPhoto = false;
+/** 读取照片的代号：读取期间又选了别的照片时，先选的那张作废 */
+let loadSeq = 0;
 /** 当前位姿的转场是否已播放（或正在播放） */
 let transitionShown = false;
 const escHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -710,6 +716,7 @@ async function runCalibration({ force = false } = {}) {
     body.innerHTML = '<p class="muted">识别中…</p>';
     showRectified(null);
     await nextFrame();
+    if (store.state.image?.bitmap !== image.bitmap) return; // 等这一帧期间换了照片
     const t0 = performance.now();
     const det = detectMarkersInImage(image.bitmap, 1600);
     const { markers } = det;
@@ -722,8 +729,8 @@ async function runCalibration({ force = false } = {}) {
       hom = boardHomography(markers, markerCornersWorld);
       const rectified = rectify(image.bitmap, hom.H, RECT_PX_PER_MM, { boardW: BOARD.width, boardH: BOARD.height });
       // 在缩小图上测纸边：H 换到缩小图像素
-      const k = det.scale;
-      const Hs = [hom.H[0].map((x) => x * k), hom.H[1].map((x) => x * k), hom.H[2]];
+      // 缩小图横竖各自取整，缩放比分开算
+      const Hs = [hom.H[0].map((x) => (x * det.imageData.width) / image.width), hom.H[1].map((x) => (x * det.imageData.height) / image.height), hom.H[2]];
       const m = measurePaper(det.imageData, Hs);
       const paper = { corners: m.corners, edges: m.edges, reasons: m.reasons, widthMm: m.widthMm, heightMm: m.heightMm, scaleX: m.scaleX, scaleY: m.scaleY };
       calib = { markers, H: hom.H, Hinv: hom.Hinv, reprojErrPx: hom.reprojErrPx, rectified, paper };
@@ -753,7 +760,12 @@ async function runCalibration({ force = false } = {}) {
 }
 
 store.on('stage:calibrated', (st) => showRectified(st.calib.rectified));
-store.on('stage:calibrated', () => {
+store.on('stage:calibrated', (st) => {
+  // 切换内参来源时标定结果沿用（同一个对象），底板贴图与内参无关，不必重做
+  if (boardTex?.calib === st.calib) {
+    timeStep('board', 0, { cached: true });
+    return;
+  }
   try {
     const t0 = now();
     updateBoard3D();
@@ -874,8 +886,10 @@ function colorCandidates() {
   const small = markerResult?.bitmap === image?.bitmap ? markerResult.small : null;
   if (!calib || !small) return null;
   const t0 = performance.now();
-  const k = small.scale;
-  const Hs = [calib.H[0].map((x) => x * k), calib.H[1].map((x) => x * k), calib.H[2]];
+  // 缩小图横竖各自取整，缩放比分开算
+  const kx = small.imageData.width / image.width;
+  const ky = small.imageData.height / image.height;
+  const Hs = [calib.H[0].map((x) => x * kx), calib.H[1].map((x) => x * ky), calib.H[2]];
   // 板中心附近 1 mm 对应的像素数
   const p = (X, Y) => {
     const w = Hs[2][0] * X + Hs[2][1] * Y + Hs[2][2];
@@ -884,7 +898,7 @@ function colorCandidates() {
   const a = p(BOARD.width / 2 - 5, BOARD.height / 2);
   const b = p(BOARD.width / 2 + 5, BOARD.height / 2);
   const pxPerMm = Math.hypot(b[0] - a[0], b[1] - a[1]) / 10;
-  const parts = segmentParts(small.imageData, invert3(Hs), pxPerMm).map((c) => ({ ...c, box: c.box.map((v) => v / k) }));
+  const parts = segmentParts(small.imageData, invert3(Hs), pxPerMm).map((c) => ({ ...c, box: c.box.map((v, i) => v / (i % 2 ? ky : kx)) }));
   return { parts, ms: performance.now() - t0 };
 }
 const detMode = () => detSettings.mode ?? (store.state.truth ? 'mock' : 'onnx');
@@ -900,7 +914,8 @@ const boxEditor = createBoxEditor({
   imageSize: () => store.state.image,
   onChange: (boxes) => {
     if (!detResult) return;
-    detResult = { ...detResult, detections: boxes, source: 'manual', note: null };
+    detSeq++; // 正在进行的检测作废，以手动框选为准
+    detResult = { ...detResult, detections: boxes, source: 'manual', note: null, pending: false, debugOnly: false };
     applyDetections();
   },
   onSelect: (i) => {
@@ -956,12 +971,20 @@ function resetDetections() {
   updateDetOverlay();
 }
 
+/** 检测的代号：每次开始检测（或手动改框、载入检测文件）加一，等待期间被更新的检测作废 */
+let detSeq = 0;
+
 /** 位姿求出后：检测（同一张照片沿用已有结果，force 时重跑），再映射 */
 async function runDetect({ force = false } = {}) {
   const { image, truth } = store.state;
   if (!force && detResult?.bitmap === image.bitmap) {
+    // 推理还在进行（例如推理期间切换了内参来源）：等它完成后自己接着映射，这里不用空结果建场景
+    if (detResult.pending) return;
     timeStep('detect', 0, { cached: true });
   } else {
+    const seq = ++detSeq;
+    // 等待期间换了照片、重新检测、改了检测方式，或手动改了框：这次的结果作废
+    const stale = () => seq !== detSeq || store.state.image?.bitmap !== image.bitmap;
     const mode = detMode();
     let detections = [];
     let source = mode === 'onnx' ? 'onnx' : truth ? 'truth' : 'mock';
@@ -977,6 +1000,7 @@ async function runDetect({ force = false } = {}) {
         // 模型一般在页面打开后已预先加载好；没加载完时在这里等
         const t0 = now();
         await getOnnxDetector(detSettings.model, { prefer: detSettings.prefer }).init();
+        if (stale()) return;
         timeStep('model', now() - t0);
       }
       // 颜色分割补漏（只对零件模型）：推理在 Worker 里进行，照片交给 Worker 后主线程空着，这段时间做颜色分割
@@ -985,15 +1009,27 @@ async function runDetect({ force = false } = {}) {
       const color = new Promise((resolve) => {
         colorDone = resolve;
       });
-      const onPosted = wantColor ? () => setTimeout(() => colorDone(colorCandidates()), 0) : null;
+      const onPosted = wantColor
+        ? () =>
+            setTimeout(() => {
+              try {
+                colorDone(colorCandidates());
+              } catch (err) {
+                console.error(err); // 颜色分割出错不影响 YOLO 的结果
+                colorDone(null);
+              }
+            }, 0)
+        : null;
       const t1 = now();
       detections = await detect(image, { mode, truth, model: detSettings.model, prefer: detSettings.prefer, onPosted });
+      if (stale()) return;
       timeStep('detect', now() - t1);
       if (mode === 'onnx') {
         onnx = lastOnnxRun;
         // YOLO 没框到、颜色分割找到的零件补上
         if (wantColor) {
           const c = await color;
+          if (stale()) return;
           if (c) {
             const fused = fuseDetections(detections, c.parts, { names: (cls) => CLASSES[cls].name });
             detections = fused.dets;
@@ -1003,6 +1039,7 @@ async function runDetect({ force = false } = {}) {
         }
       }
     } catch (err) {
+      if (stale()) return;
       if (err instanceof MockMissingError) {
         note = `没有找到 mock 检测文件 ${detectionsFileName(image.fileName)}。可以点"框选"在照片上手动框出零件，保存后下次用"载入"读回。`;
       } else if (mode === 'onnx') {
@@ -1014,8 +1051,9 @@ async function runDetect({ force = false } = {}) {
       }
       source = 'none';
     }
-    if (store.state.image?.bitmap !== image.bitmap) return; // 等待期间换了照片
-    detResult = { bitmap: image.bitmap, detections, source, note, onnx };
+    if (stale()) return;
+    // 官方 COCO 模型（调试用）的类别不是零件：框只在调试视图里显示，不映射成零件
+    detResult = { bitmap: image.bitmap, detections, source, note, onnx, debugOnly: mode === 'onnx' && detSettings.model !== 'parts' };
     boxEditor.setBoxes(detections);
     if (onnx) {
       const t = onnx;
@@ -1033,6 +1071,7 @@ async function runDetect({ force = false } = {}) {
     sortPlayer.load([]);
     panel.remove('sort');
     if (stageIndex(store.state.stage) > stageIndex('posed')) store.rollback('posed');
+    experiment.render(); // 零件已清掉
     refreshBoardTexture();
     renderDetectSection(null);
     store.fail('detect', detResult.note);
@@ -1050,7 +1089,7 @@ function applyDetections() {
   }
   const t0 = now();
   const K = intrinsicsMatrix(intrinsics);
-  const mapped = mapDetections(detResult.detections, { Hinv: calib.Hinv, K, R: pose.R, position: pose.position }, { parallax: parallaxOn });
+  const mapped = mapDetections(detResult.debugOnly ? [] : detResult.detections, { Hinv: calib.Hinv, K, R: pose.R, position: pose.position }, { parallax: parallaxOn });
   const { dropped } = mapped;
   const parts = refineYaw(mapped.parts);
   timeStep('map', now() - t0);
@@ -1101,6 +1140,7 @@ function setParallax(on) {
   partsLayer.animateMethod(on);
   renderDetectSection(lastMapping);
   if (store.state.parts) refreshPlan();
+  experiment.render(); // "当前采用的方法"随之改变
 }
 
 let lastMapping = null;
@@ -1116,7 +1156,7 @@ function renderDetectSection(mapping) {
   if (detResult.pending) {
     html += '<p class="muted">模型推理中…（第一次要下载模型，约 10 MB）</p>';
   } else if (detResult.source === 'none') {
-    html += `<p class="note error">${detResult.note}</p>`;
+    html += `<p class="note error">${escHtml(detResult.note)}</p>`;
   } else if (!mapping) {
     html += `<p class="summary">${dets.length} 个检测框</p><p class="note info">需要先求出位姿，才能把检测框映射到底板坐标。</p>`;
   } else {
@@ -1147,7 +1187,7 @@ function renderDetectSection(mapping) {
       html += `<p class="note warn">${dropped.length} 个检测框映射后落在工作区外（板边 ${WORK_AREA.margin} mm 以内或码附近），已丢弃。</p>`;
     }
   }
-  if (detResult.note) html += `<p class="note info">${detResult.note}</p>`;
+  if (detResult.note && detResult.source !== 'none') html += `<p class="note info">${escHtml(detResult.note)}</p>`;
   html += `<div class="sec-actions">
     <button type="button" class="btn btn-small" id="btn-det-edit">${boxEditing ? '结束框选' : '框选'}</button>
     <button type="button" class="btn btn-small" id="btn-det-save"${dets.length ? '' : ' disabled'}>保存检测结果</button>
@@ -1250,7 +1290,8 @@ async function loadDetectionsFile(file) {
       panel.message(`注意：检测文件记录的照片是 ${json.image}，当前照片是 ${image.fileName}`, 'warn');
     }
     const detections = parseDetections(json, image);
-    detResult = { ...detResult, detections, source: 'file', note: null };
+    detSeq++; // 正在进行的检测作废，以载入的文件为准
+    detResult = { ...detResult, detections, source: 'file', note: null, pending: false, debugOnly: false };
     boxEditor.setBoxes(detections);
     updateDetOverlay();
     applyDetections();
@@ -1416,6 +1457,7 @@ $('#file-input').addEventListener('change', async (e) => {
   e.target.value = '';
   if (!file) return;
   panel.message(`正在读取：${file.name}…`, 'info');
+  const tok = ++loadSeq;
   beginRun('upload');
   loadingPhoto = true;
   renderStatus();
@@ -1423,11 +1465,16 @@ $('#file-input').addEventListener('change', async (e) => {
     const t0 = now();
     const image = await loadImageFile(file);
     await calibReady;
+    if (tok !== loadSeq) {
+      image.bitmap.close?.(); // 读取期间又选了别的照片：这张作废
+      return;
+    }
     timeStep('load', now() - t0);
     loadingPhoto = false;
     setImage(image, null);
     panel.message(`已读取照片：${file.name}（${image.width} × ${image.height}）`, 'ok');
   } catch (err) {
+    if (tok !== loadSeq) return;
     if (!(err instanceof ImageFormatError)) console.error(err);
     loadingPhoto = false;
     store.fail('image', err.message);
@@ -1448,6 +1495,7 @@ sampleSelect.addEventListener('change', async (e) => {
   e.target.value = '';
   if (!entry) return;
   panel.message(`正在加载示例：${entry.label}…`, 'info');
+  const tok = ++loadSeq;
   beginRun('sample');
   loadingPhoto = true;
   renderStatus();
@@ -1455,12 +1503,17 @@ sampleSelect.addEventListener('change', async (e) => {
     const t0 = now();
     const { image, truth } = await loadSample(entry);
     await calibReady;
+    if (tok !== loadSeq) {
+      image.bitmap.close?.(); // 加载期间又选了别的照片：这张作废
+      return;
+    }
     timeStep('load', now() - t0);
     loadingPhoto = false;
     // 合成图：内参默认取真值
     setImage(image, truth);
     panel.message(`已加载示例：${entry.label}`, 'ok');
   } catch (err) {
+    if (tok !== loadSeq) return;
     loadingPhoto = false;
     store.fail('image', `加载示例失败：${err.message}`);
   }

@@ -99,8 +99,10 @@ export function settle(bin, placed, fp, release, { seed = 1 } = {}) {
     const grown = footprintPolys(fp, pose, DROP.margin);
     return !others.some((o) => anyOverlap(grown, footprintPolys(o.fp, o)));
   };
-  let floor = BIN_WALL;
-  for (let layer = 0; layer < 4; layer++) {
+  // 从盒里已有零件的最高一层开始找：不能钻到上层零件下面去（随机偏移可能在下层空出一点地方）
+  let floor = Math.max(BIN_WALL, ...placed.map((o) => o.z));
+  const firstLayer = new Set(placed.filter((o) => o.z < floor - 1e-6).map((o) => o.z.toFixed(3))).size;
+  for (let layer = firstLayer; layer < firstLayer + 4; layer++) {
     const others = placed.filter((o) => Math.abs(o.z - floor) < 1e-6);
     for (let r = 0; r <= 45; r += 1.5) {
       const n = r === 0 ? 1 : Math.max(8, Math.round((2 * Math.PI * r) / 1.5));
@@ -115,7 +117,7 @@ export function settle(bin, placed, fp, release, { seed = 1 } = {}) {
     // 这一层放不下：叠到上一层（取这一层零件中最高的）
     floor += Math.max(fp.height, ...others.map((o) => o.height));
   }
-  return { ...start, z: floor, layer: 4 };
+  return { ...start, z: floor, layer: firstLayer + 4 };
 }
 
 const smooth = (t) => (t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t));

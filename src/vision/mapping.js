@@ -107,7 +107,7 @@ export function mapDetections(detections, { Hinv, K, R, position }, { parallax =
       yPlane,
       xParallax,
       yParallax,
-      rotDeg: cls.id === 0 || cls.id === 2 || cls.id === 3 ? boxYawDeg(Hinv, det.box) : 0,
+      rotDeg: cls.id === 0 || cls.id === 1 ? boxYawDeg(Hinv, det.box) : 0,
       detIndex: i,
       reachable: true, // 步骤 12 用逆运动学判断
     });

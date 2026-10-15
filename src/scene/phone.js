@@ -89,7 +89,7 @@ export function createPhone() {
     body.position.copy(toThree(...pose.position));
     body.quaternion.copy(cameraQuaternionFromR(pose.R));
 
-    frustum.clear();
+    clearFrustum();
     const K = intrinsicsMatrix(intrinsics);
     const C = toThree(...pose.position);
     const fp = photoFootprint(K, pose.R, pose.t, W, H, 600);
@@ -116,8 +116,14 @@ export function createPhone() {
     group.visible = a > 0.001;
   }
 
-  function clear() {
+  /** 清掉视锥线（线的几何体要释放，否则每张照片都留下一组 GPU 缓冲） */
+  function clearFrustum() {
+    for (const o of frustum.children) o.geometry?.dispose();
     frustum.clear();
+  }
+
+  function clear() {
+    clearFrustum();
     group.visible = false;
   }
 

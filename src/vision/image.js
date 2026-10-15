@@ -56,8 +56,9 @@ export async function loadImageFile(file) {
   if (await isHeic(file)) throw new ImageFormatError(HEIC_MESSAGE);
   let bitmap;
   try {
-    // 按 EXIF 方向转正（竖拍照片的像素是横着存的）
-    bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
+    // 按 EXIF 方向转正（竖拍照片的像素是横着存的）；不做色彩空间转换：训练时（PIL）读的就是原始像素值，
+    // iPhone 的 Display P3 照片若转成 sRGB，红、蓝会更饱和，与训练和颜色分割阈值不一致
+    bitmap = await createImageBitmap(file, { imageOrientation: 'from-image', colorSpaceConversion: 'none' });
   } catch {
     throw new ImageFormatError('无法读取这张图片，请上传 JPEG 或 PNG。');
   }

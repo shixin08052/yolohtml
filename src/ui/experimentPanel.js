@@ -2,7 +2,7 @@
 // 输入卷尺量的手机高度与系统结果对比；记录本次实验（内参来源、俯角、各步耗时一并记下），导出 CSV。
 // 记录与还没记录的输入（按照片保存的草稿）存在 localStorage，刷新页面不丢。
 import { CLASSES } from '../config.js';
-import { partErrors, heightError, buildRecord, experimentsCsv, partsCsv, loadStore, saveStore, photoKey, SOURCE_LABELS } from '../experiment.js';
+import { partErrors, heightError, buildRecord, resolveMeasured, measuredByPart, experimentsCsv, partsCsv, loadStore, saveStore, photoKey, SOURCE_LABELS } from '../experiment.js';
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const fmt = (x, d = 1) => (x == null || !Number.isFinite(x) ? '—' : x.toFixed(d).replace(/^-(0\.?0*)$/, '$1')); // 不显示 -0.0
@@ -58,10 +58,24 @@ export function createExperimentPanel({ panel, getContext, message }) {
     return store.drafts[k];
   }
 
+  /**
+   * 写入某个零件的实测值。条目记下零件的类别和位置，检测结果变了（删框、重新检测、零件编号变了）也能对回原来的零件
+   */
+  function setMeasured(d, parts, id, patch) {
+    const p = parts.find((q) => q.id === id);
+    if (!p) return;
+    const k = resolveMeasured(parts, d.measured)[id];
+    const old = (k && d.measured[k]) || {};
+    // 旧格式（键就是零件编号、没记位置）的条目换成带位置的新条目
+    const key = k && old.px != null ? k : `m${Date.now().toString(36)}_${id}`;
+    if (k && key !== k) delete d.measured[k];
+    d.measured[key] = { x: old.x ?? null, y: old.y ?? null, ...patch, cls: p.cls, px: p.xParallax, py: p.yParallax };
+  }
+
   /** 只更新算出来的数（输入框不重建，保持光标） */
   function updateComputed(body, ctx) {
     const d = draftOf(ctx.image);
-    const { rows, summary } = partErrors(ctx.parts, d.measured);
+    const { rows, summary } = partErrors(ctx.parts, measuredByPart(ctx.parts, d.measured));
     for (const r of rows) {
       const el = body.querySelector(`[data-err="${r.id}"]`);
       if (el) el.innerHTML = r.e1 == null ? '<span class="muted">误差 —</span>' : `误差 ① <b>${fmt(r.e1, 2)}</b> · ② <b>${fmt(r.e2, 2)}</b> mm`;
@@ -115,11 +129,12 @@ export function createExperimentPanel({ panel, getContext, message }) {
       html += '<p class="muted">建好场景后，可以在这里为每个零件填入尺子量的真实坐标，计算误差并记录。</p>';
     } else {
       const d = draftOf(ctx.image);
+      const links = resolveMeasured(ctx.parts, d.measured);
       html += '<p class="muted small">填入用尺子量的零件中心坐标（底板坐标，mm：原点在左下角，X 向右，Y 向上）。</p>';
       if (ctx.truth) html += '<div class="sec-actions"><button type="button" class="btn btn-small" data-act="fill-truth">用真值填入</button></div>';
       html += '<div class="exp-parts">';
       for (const p of ctx.parts) {
-        const m = d.measured[p.id] ?? {};
+        const m = d.measured[links[p.id]] ?? {};
         const v = (k) => (m[k] == null ? '' : String(m[k]));
         html += `<div class="exp-part" style="--c: ${CLASSES[p.cls]?.color ?? '#888'}"><div class="exp-head"><b>#${p.id} ${esc(p.name)}</b>` +
           `<span class="muted">① (${fmt(p.xPlane)}, ${fmt(p.yPlane)}) · ② (${fmt(p.xParallax)}, ${fmt(p.yParallax)})</span></div>` +
@@ -153,8 +168,7 @@ export function createExperimentPanel({ panel, getContext, message }) {
       if (t.dataset.k === 'heightCm') {
         d.heightCm = parseNum(t.value);
       } else {
-        const id = Number(t.dataset.id);
-        d.measured[id] = { ...(d.measured[id] ?? {}), [t.dataset.k]: parseNum(t.value) };
+        setMeasured(d, ctx.parts, Number(t.dataset.id), { [t.dataset.k]: parseNum(t.value) });
       }
       save();
       updateComputed(body, ctx);
@@ -167,14 +181,20 @@ export function createExperimentPanel({ panel, getContext, message }) {
         store.records = store.records.filter((r) => r.id !== b.dataset.del);
         save();
         render();
-      } else if (act === 'fill-truth') {
-        fillTruth(ctx);
-      } else if (act === 'clear-draft') {
-        delete store.drafts[photoKey(ctx.image)];
-        save();
-        render();
-      } else if (act === 'record') {
-        record(ctx);
+      } else if (act === 'fill-truth' || act === 'clear-draft' || act === 'record') {
+        // 按当前状态操作（这一分区渲染之后可能切换过方法、重新检测过）
+        const cur = getContext();
+        if (!cur?.parts || !cur.pose || cur.image.bitmap !== ctx?.image.bitmap) {
+          render();
+          return;
+        }
+        if (act === 'fill-truth') fillTruth(cur);
+        else if (act === 'record') record(cur);
+        else {
+          delete store.drafts[photoKey(cur.image)];
+          save();
+          render();
+        }
       } else if (act === 'csv-exp' || act === 'csv-parts') {
         const t = stamp().replace(/[-: ]/g, '').slice(0, 12);
         if (act === 'csv-exp') download(experimentsCsv(store.records), `实验记录_每次实验_${t}.csv`);
@@ -206,7 +226,7 @@ export function createExperimentPanel({ panel, getContext, message }) {
       if (best >= 0) {
         used.add(best);
         const t = ctx.truth.parts[best];
-        d.measured[p.id] = { x: +t.x.toFixed(2), y: +t.y.toFixed(2) };
+        setMeasured(d, ctx.parts, p.id, { x: +t.x.toFixed(2), y: +t.y.toFixed(2) });
       }
     }
     if (d.heightCm == null) d.heightCm = +(ctx.truth.position[2] / 10).toFixed(1);
@@ -223,7 +243,7 @@ export function createExperimentPanel({ panel, getContext, message }) {
       intrinsics: ctx.intrinsics,
       pose: ctx.pose,
       parts: ctx.parts,
-      measured: d.measured,
+      measured: measuredByPart(ctx.parts, d.measured),
       measuredHeightMm: d.heightCm == null ? null : d.heightCm * 10,
       method: ctx.method,
       timing: ctx.timing,
@@ -235,6 +255,16 @@ export function createExperimentPanel({ panel, getContext, message }) {
     message(`已记录第 ${store.records.length} 次实验：${r.photo}（${r.summary.n} 个零件有实测坐标）`, 'ok');
   }
 
-  render();
-  return { render };
+  /** 渲染出错（例如本地存的数据结构不对）时不影响页面其他部分 */
+  function safeRender() {
+    try {
+      render();
+    } catch (err) {
+      console.error(err);
+      panel.setCustom('experiment', '实验', { last: true }).innerHTML = `<p class="note error">实验分区出错：${esc(err.message)}</p>`;
+    }
+  }
+
+  safeRender();
+  return { render: safeRender };
 }

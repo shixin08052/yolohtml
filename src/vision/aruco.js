@@ -275,7 +275,17 @@ export function detectMarkers(image, { passes = DETECT_PASSES, refine = true } =
   }
   return [...found.values()]
     .sort((a, b) => a.id - b.id)
-    .map(({ id, corners }) => ({ id, corners: refine ? refineCorners(grey, refineCorners(grey, corners)) : corners }));
+    .map(({ id, corners }) => ({ id, corners: refine ? refineTwice(grey, corners) : corners }));
+}
+
+/**
+ * 精修两遍。第一遍就失败（码太模糊、边被遮住）时用原始角点，但 js-aruco2 的角点是像素序号（像素左上角），
+ * 与精修结果的约定（像素中心为 +0.5）差半个像素，这里补上
+ */
+function refineTwice(grey, corners) {
+  const r = refineCorners(grey, corners);
+  if (r === corners) return corners.map(([x, y]) => [x + 0.5, y + 0.5]);
+  return refineCorners(grey, r);
 }
 
 /**

@@ -106,7 +106,7 @@ function renderPhotoResult(out, file, bitmap, det, r) {
   html += '</ul>';
 
   html += '<h4>照片</h4><table>';
-  html += `<tr><td>文件</td><td>${file.name}</td></tr>`;
+  html += `<tr><td>文件</td><td>${file.name.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)}</td></tr>`; // 文件名转义后再放进 HTML
   html += `<tr><td>尺寸</td><td>${bitmap.width} × ${bitmap.height}</td></tr>`;
   html += `<tr><td>识别到</td><td>${r.found.length ? 'ID ' + r.found.join('、') : '无'}</td></tr>`;
   if (r.reprojErrPx != null && r.found.length >= 2) {
@@ -205,11 +205,13 @@ async function photoCheck(file) {
     const r = checkBoardPhoto(det.small, det.imageData);
     renderPhotoResult(out, file, bitmap, det, r);
     drawPhotoPreview(bitmap, det, r);
+    bitmap.close(); // 预览已画好，原图（约 48 MB）不再需要
     panel.hidden = false;
     panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
   } catch (e) {
     out.classList.remove('muted');
-    out.innerHTML = `<span class="bad">${e.message ?? e}</span>`;
+    out.innerHTML = '<span class="bad"></span>';
+    out.firstChild.textContent = e.message ?? String(e);
     out.dataset.level = 'error';
     panel.hidden = true;
     if (!(e instanceof ImageFormatError)) console.error(e);

@@ -13,7 +13,7 @@ permissions:
 
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false # 不要中途取消正在进行的部署（GitHub 官方 Pages 模板也是 false）
 
 jobs:
   build:

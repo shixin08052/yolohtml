@@ -140,6 +140,11 @@ export function computeIntrinsics(source, { image, calib = null, truth = null, s
     const lw = lensWarning(focal35);
     if (lw) notes.push({ level: 'warn', text: lw });
   }
+  // 等效焦距按画面对角线换算，只对传感器原始比例（4:3）准确；16:9、1:1 等是裁剪过的，焦距会偏小 8–15%
+  const ratio = Math.max(width, height) / Math.min(width, height);
+  if (Math.abs(ratio - 4 / 3) > 0.02) {
+    notes.push({ level: 'warn', text: `照片比例 ${width}:${height} 不是 4:3（可能是裁剪过的画幅），按 EXIF 等效焦距估算的内参会偏差，手机高度和位置随之偏差。建议用 4:3 拍摄，或改用"照片估计"。` });
+  }
   return { intrinsics: fromExif(focal35, width, height), notes };
 }
 

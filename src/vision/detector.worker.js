@@ -63,15 +63,19 @@ function configure(ortBase) {
 }
 
 async function detect({ bitmap, scoreThreshold, iouThreshold, dedupIou }) {
-  if (!session) throw new Error('模型还没加载');
   const W = bitmap.width;
   const H = bitmap.height;
   const t0 = performance.now();
-  const canvas = new OffscreenCanvas(W, H);
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  ctx.drawImage(bitmap, 0, 0);
-  bitmap.close();
-  const img = ctx.getImageData(0, 0, W, H);
+  let img;
+  try {
+    if (!session) throw new Error('模型还没加载');
+    const canvas = new OffscreenCanvas(W, H);
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(bitmap, 0, 0);
+    img = ctx.getImageData(0, 0, W, H);
+  } finally {
+    bitmap.close(); // 1200 万像素的照片约 48 MB，出错时也立即释放
+  }
   const { tensor, params } = preprocess(img, inputSize);
   const t1 = performance.now();
   const feeds = { [session.inputNames[0]]: new ort.Tensor('float32', tensor, [1, 3, inputSize, inputSize]) };
@@ -84,7 +88,7 @@ async function detect({ bitmap, scoreThreshold, iouThreshold, dedupIou }) {
   return { raw, dets, dims: out.dims, width: W, height: H, prepMs: t1 - t0, inferMs: t2 - t1, postMs: t3 - t2 };
 }
 
-self.onmessage = async (e) => {
+async function handle(e) {
   const { id, type } = e.data;
   try {
     const result = type === 'init' ? await init(e.data) : type === 'detect' ? await detect(e.data) : null;
@@ -93,4 +97,10 @@ self.onmessage = async (e) => {
   } catch (err) {
     self.postMessage({ id, error: err?.message ?? String(err) });
   }
+}
+
+// 消息逐条处理：同一个推理会话不能同时跑两次（WebGPU 下 session.run 会让出执行，两次交错会互相破坏）
+let queue = Promise.resolve();
+self.onmessage = (e) => {
+  queue = queue.then(() => handle(e));
 };

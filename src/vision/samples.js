@@ -23,7 +23,7 @@ export async function loadSample(entry) {
     entry.truth ? fetch(samplesURL(entry.truth)) : Promise.resolve(null),
   ]);
   if (!imgRes.ok) throw new Error(`读取示例图片失败（${imgRes.status}）`);
-  const bitmap = await createImageBitmap(await imgRes.blob(), { imageOrientation: 'from-image' });
+  const bitmap = await createImageBitmap(await imgRes.blob(), { imageOrientation: 'from-image', colorSpaceConversion: 'none' });
   const truth = truthRes ? await truthRes.json() : null;
   return {
     image: {

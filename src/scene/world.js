@@ -70,6 +70,7 @@ export function createWorld(container) {
     const bg = new THREE.Color(cssVar('--canvas-bg'));
     renderer.setClearColor(bg);
     scene.background = bg;
+    letterbox.set(cssVar('--surface')); // 转场 / 对比时画面区域外的底色（每帧读样式会触发重新计算样式）
     requestRender();
   };
 
@@ -327,7 +328,7 @@ export function createWorld(container) {
       // 区域外填视图底色，区域内照常渲染场景
       const bg = renderer.getClearColor(new THREE.Color());
       renderer.setScissorTest(false);
-      renderer.setClearColor(letterbox.set(cssVar('--surface')));
+      renderer.setClearColor(letterbox);
       renderer.clear();
       renderer.setClearColor(bg);
       const y = size.h - frame.y - frame.h; // WebGL 视口原点在左下角

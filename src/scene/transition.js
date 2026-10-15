@@ -64,9 +64,16 @@ export function createTransition({ world, container, overlay, phone, onGrow = ()
     overlay.getContext('2d').drawImage(bitmap, 0, 0, overlay.width, overlay.height);
   }
 
+  /** 正在播放的转场的 resolve（被中断时也要结束 play() 返回的 Promise） */
+  let playDone = null;
+  /** 对比模式的输入（画面尺寸变化时重新摆放） */
+  let compareInputs = null;
+
   function stop() {
     cancelAnimationFrame(raf);
     raf = 0;
+    playDone?.();
+    playDone = null;
   }
 
   /** 回到全景：容器铺满、相机默认视角、照片隐藏、手机显示、控制器启用 */
@@ -137,15 +144,19 @@ export function createTransition({ world, container, overlay, phone, onGrow = ()
     }
 
     return new Promise((resolve) => {
+      playDone = resolve;
       const frame = (now) => {
         if (mode !== 'playing') return resolve();
         const t = now - t0;
-        if (t < hold) {
-          // 停在照片上
-        } else if (t < hold + fade) {
-          const k = (t - hold) / fade;
-          overlay.style.opacity = String(1 - k);
-          onGrow(easeInOutCubic(k));
+        if (t < hold + fade) {
+          // 停在照片上，然后照片淡出。画面尺寸可能变了（转手机、改窗口）：每帧按当前尺寸摆放
+          setRect(fitRect(aspect));
+          world.applyCamera(from);
+          if (t >= hold) {
+            const k = (t - hold) / fade;
+            overlay.style.opacity = String(1 - k);
+            onGrow(easeInOutCubic(k));
+          }
         } else {
           // 飞行，以及之后的停顿。某一帧来得晚（主线程忙、手机掉帧）跳过了飞行终点时，这里也会先摆到终点，
           // 不会停在半路、等交给控制器时再跳一下
@@ -153,9 +164,9 @@ export function createTransition({ world, container, overlay, phone, onGrow = ()
           onGrow(1);
           flyTo(easeInOutCubic(Math.min(1, (t - hold - fade) / fly)));
           if (t >= hold + fade + fly + settle) {
-            finish();
+            finish(); // 里面的 stop() 会结束 Promise
             world.render();
-            return resolve();
+            return;
           }
         }
         world.render(); // 同一帧里更新完立即渲染，不等下一轮渲染循环
@@ -177,15 +188,26 @@ export function createTransition({ world, container, overlay, phone, onGrow = ()
     }
     setMode('compare');
     world.setControlsActive(false);
-    const r = fitRect(intrinsics.width / intrinsics.height);
-    setRect(r);
-    drawOverlay(bitmap, r);
+    compareInputs = { bitmap, pose, intrinsics };
+    layoutCompare();
     overlay.hidden = false;
     overlay.style.opacity = '0.5';
     phone.setOpacity(0);
     onGrow(1);
+  }
+
+  /** 对比模式：按当前画面尺寸摆放照片和相机 */
+  function layoutCompare() {
+    const { bitmap, pose, intrinsics } = compareInputs;
+    const r = fitRect(intrinsics.width / intrinsics.height);
+    setRect(r);
+    drawOverlay(bitmap, r);
     world.applyCamera(world.photoCameraParams({ pose, intrinsics }));
   }
+  // 对比模式下画面尺寸变化（转手机、改窗口大小）：重新摆放，不然照片和 3D 画面会错开
+  new ResizeObserver(() => {
+    if (mode === 'compare' && container.clientWidth > 0) layoutCompare();
+  }).observe(container);
 
   /** 停止转场 / 对比，回到全景 */
   function cancel() {

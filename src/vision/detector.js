@@ -121,40 +121,63 @@ export function detectionsFromTruth(truth) {
  * @param {{ prefer?: 'auto'|'wasm', names?: string[] }} [opts] prefer = 'wasm' 时不尝试 WebGPU；names 为模型类别名
  */
 export function createOnnxDetector(modelUrl, { prefer = 'auto', names = null } = {}) {
-  const worker = new Worker(new URL('./detector.worker.js', import.meta.url), { type: 'module' });
+  let worker = null;
   let seq = 0;
   const pending = new Map();
-  worker.onmessage = (e) => {
-    const { id, result, error } = e.data;
-    const p = pending.get(id);
-    if (!p) return;
-    pending.delete(id);
-    if (error) p.reject(new Error(error));
-    else p.resolve(result);
-  };
-  worker.onerror = (e) => {
-    for (const p of pending.values()) p.reject(new Error(e.message || 'Worker 出错'));
+  let ready = null;
+
+  /** 丢掉当前 Worker（出错后 onnxruntime 不能再初始化，只能换一个新的 Worker 重来），等待中的请求都以出错结束 */
+  function reset(err) {
+    worker?.terminate();
+    worker = null;
+    ready = null;
+    for (const p of pending.values()) p.reject(err);
     pending.clear();
-  };
+  }
+
+  function ensureWorker() {
+    if (worker) return worker;
+    worker = new Worker(new URL('./detector.worker.js', import.meta.url), { type: 'module' });
+    worker.onmessage = (e) => {
+      const { id, result, error } = e.data;
+      const p = pending.get(id);
+      if (!p) return;
+      pending.delete(id);
+      if (error) p.reject(new Error(error));
+      else p.resolve(result);
+    };
+    // Worker 脚本加载失败、Worker 内未捕获的错误：换一个新的 Worker，不让等待中的请求永远挂着
+    worker.onerror = (e) => reset(new Error(e.message || 'Worker 出错'));
+    return worker;
+  }
+
   const call = (msg, transfer = []) =>
     new Promise((resolve, reject) => {
       const id = ++seq;
       pending.set(id, { resolve, reject });
-      worker.postMessage({ id, ...msg }, transfer);
+      try {
+        ensureWorker().postMessage({ id, ...msg }, transfer);
+      } catch (err) {
+        pending.delete(id);
+        reject(err);
+      }
     });
 
-  let ready = null;
   return {
     /** 加载模型（只加载一次），返回后端、耗时、输入输出形状；类别名从模型旁边的 .json（export.py 生成）读 */
     init() {
       ready ??= (async () => {
         if (!names) {
-          const meta = await fetch(modelUrl.replace(/\.onnx$/, '.json')).then((r) => (r.ok ? r.json() : null)).catch(() => null);
-          if (meta?.names) names = Object.values(meta.names);
+          // 类别名是必需的：没有它就不知道模型的类别 ID 对应哪个零件（不能按顺序猜）
+          const res = await fetch(modelUrl.replace(/\.onnx$/, '.json'));
+          const meta = res.ok ? await res.json().catch(() => null) : null;
+          if (!meta?.names) throw new Error(`读取模型的类别名失败（${res.status}）`);
+          names = Object.values(meta.names);
         }
         return call({ type: 'init', modelUrl, ortBase: new URL('ort/', document.baseURI).href, prefer });
       })().catch((err) => {
-        ready = null; // 失败（例如网络断了）后下次重试
+        // 失败（例如网络断了）：onnxruntime 在同一个 Worker 里不能再初始化，换新 Worker，下次重试
+        reset(err);
         throw err;
       });
       return ready;
@@ -173,7 +196,7 @@ export function createOnnxDetector(modelUrl, { prefer = 'auto', names = null } =
       const r = await pending;
       // raw 保留模型自己的类别 ID 和类别名（与 predict_dump.py 的输出对照）；
       // dets：零件模型按类别名换成本项目的类别 ID 和中文名，去掉这里没有的类别；其他模型（官方 COCO）保持原样
-      const map = names ? modelClassMap(names) : CLASSES.map((c) => c.id);
+      const map = modelClassMap(names);
       const own = (d) => ({ cls: d.cls, name: names?.[d.cls] ?? String(d.cls), score: d.score, box: d.box });
       const dets = map
         ? r.dets.filter((d) => map[d.cls] >= 0).map((d) => ({ ...own(d), cls: map[d.cls], name: CLASSES[map[d.cls]].name }))
@@ -181,7 +204,7 @@ export function createOnnxDetector(modelUrl, { prefer = 'auto', names = null } =
       return { ...r, raw: r.raw.map(own), dets };
     },
     terminate() {
-      worker.terminate();
+      reset(new Error('检测器已关闭'));
     },
   };
 }
@@ -199,6 +222,9 @@ export let lastOnnxRun = null;
 export function getOnnxDetector(key = 'parts', { prefer = 'auto' } = {}) {
   const k = `${key}:${prefer}`;
   if (!detectors.has(k)) {
+    // 只保留一个检测器：每个 Worker 都有自己的一份 onnxruntime 和模型（几十 MB），换模型 / 后端时关掉旧的
+    for (const d of detectors.values()) d.detector.terminate();
+    detectors.clear();
     const url = new URL(MODELS[key].file, document.baseURI).href;
     detectors.set(k, { key, prefer, detector: createOnnxDetector(url, { prefer }) });
   }
@@ -222,7 +248,9 @@ export async function detect(image, { mode = 'mock', truth = null, model = 'part
     return r.dets;
   }
   if (truth) return detectionsFromTruth(truth);
-  const url = new URL(`samples/${detectionsFileName(image.fileName)}`, document.baseURI);
+  // 文件名里可能有 #、? 等字符：逐段编码（示例的 real/xxx 保留斜杠）
+  const path = detectionsFileName(image.fileName).split('/').map(encodeURIComponent).join('/');
+  const url = new URL(`samples/${path}`, document.baseURI);
   const res = await fetch(url).catch(() => null);
   // 开发服务器找不到文件时会返回 index.html，所以还要确认是 JSON
   const json = res?.ok ? await res.json().catch(() => null) : null;

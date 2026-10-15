@@ -31,21 +31,25 @@ export function rgbToHsv(r, g, b) {
   return [h / 2, s, v];
 }
 
-/** 一维的滑动最大 / 最小（窗口 2r+1），用来做方形核的膨胀 / 腐蚀 */
+/**
+ * 一维的滑动最大 / 最小（窗口 2r+1，超出图像的部分不计），用来做方形核的膨胀 / 腐蚀。
+ * 用滑动计数：窗口里 1 的个数随窗口移动增减，每个像素 O(1)，与逐个扫描窗口的结果完全相同
+ */
 function slide(src, w, h, r, horizontal, isMax) {
   const out = new Uint8Array(src.length);
   const [n, m] = horizontal ? [h, w] : [w, h];
+  const step = horizontal ? 1 : w;
   for (let a = 0; a < n; a++) {
+    const base = horizontal ? a * w : a;
+    let ones = 0; // 窗口 [b − r, b + r]（裁到 0..m−1）里 1 的个数
+    for (let k = 0; k <= Math.min(m - 1, r); k++) ones += src[base + k * step];
     for (let b = 0; b < m; b++) {
-      let v = isMax ? 0 : 1;
-      for (let k = Math.max(0, b - r); k <= Math.min(m - 1, b + r); k++) {
-        const s = horizontal ? src[a * w + k] : src[k * w + a];
-        if (isMax ? s : !s) {
-          v = isMax ? 1 : 0;
-          break;
-        }
-      }
-      out[horizontal ? a * w + b : b * w + a] = v;
+      const lo = Math.max(0, b - r);
+      const hi = Math.min(m - 1, b + r);
+      out[base + b * step] = isMax ? (ones > 0 ? 1 : 0) : ones === hi - lo + 1 ? 1 : 0;
+      // 窗口右移一格
+      if (b + r + 1 <= m - 1) ones += src[base + (b + r + 1) * step];
+      if (b - r >= 0) ones -= src[base + (b - r) * step];
     }
   }
   return out;

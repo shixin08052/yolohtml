@@ -134,7 +134,7 @@ function lathe(radius, x0, x1, n, lift, mat) {
     const r = radius(x);
     pts.push(new THREE.Vector2(r > 0 ? r + lift : 0, x));
   }
-  const m = new THREE.Mesh(new THREE.LatheGeometry(pts, 48), mat);
+  const m = new THREE.Mesh(new THREE.LatheGeometry(pts, 24), mat); // 本体只有 Φ2.4，圆周 24 段足够
   m.rotation.z = -Math.PI / 2; // 旋转轴 Y → X
   return m;
 }
@@ -161,11 +161,12 @@ export function createPartMesh(cls) {
       // 色环电阻（1/4 W 蓝色金属膜）：两头端帽鼓起、中间细的"哑铃"形旋转体 + 5 道色环 + 两根引脚
       const R = RESISTOR;
       const axisY = R.capR + R.bandLift; // 横躺在板面上：色环最低点贴着板面
-      const body = lathe(resistorRadius, -R.len / 2, R.len / 2, 96, 0, material(0, { color: R.color, roughness: 0.32 }));
+      const body = lathe(resistorRadius, -R.len / 2, R.len / 2, 48, 0, material(0, { color: R.color, roughness: 0.32 }));
       body.position.y = axisY;
       g.add(body);
       for (const [x, c] of R.bands) {
-        const ring = lathe(resistorRadius, x - R.bandW / 2, x + R.bandW / 2, 6, R.bandLift, new THREE.MeshStandardMaterial({ color: c, roughness: 0.45 }));
+        // 色环只比本体高 0.012 mm：远看时深度精度不够会闪，用多边形偏移让色环总画在本体前面
+        const ring = lathe(resistorRadius, x - R.bandW / 2, x + R.bandW / 2, 6, R.bandLift, new THREE.MeshStandardMaterial({ color: c, roughness: 0.45, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }));
         ring.position.y = axisY;
         g.add(ring);
       }
@@ -235,6 +236,7 @@ export function createPartsLayer({ requestRender, onFrame = () => {} }) {
   /** @type {{ part: import('../state.js').Part, node: THREE.Group, model: THREE.Group, label: CSS2DObject, text: HTMLElement }[]} */
   let items = [];
   let blend = 1; // 1 = 视差修正
+  let blendTarget = 1; // 方法切换动画的终点
   let grow = 1;
   let labelsOn = true;
   let anim = 0;
@@ -295,6 +297,7 @@ export function createPartsLayer({ requestRender, onFrame = () => {} }) {
       cancelAnimationFrame(anim);
       dispose();
       blend = parallax ? 1 : 0;
+      blendTarget = blend;
       for (const part of parts) {
         const node = new THREE.Group();
         node.name = `part-${part.id}`;
@@ -334,6 +337,7 @@ export function createPartsLayer({ requestRender, onFrame = () => {} }) {
       cancelAnimationFrame(anim);
       const from = blend;
       const to = parallax ? 1 : 0;
+      blendTarget = to;
       for (const it of items) it.text.innerHTML = labelText(it.part, parallax);
       const t0 = performance.now();
       const step = (now) => {
@@ -345,6 +349,16 @@ export function createPartsLayer({ requestRender, onFrame = () => {} }) {
         if (k < 1) anim = requestAnimationFrame(step);
       };
       anim = requestAnimationFrame(step);
+    },
+    /** 立即结束方法切换的动画（零件摆到目标位置）：分拣夹起零件前调用，免得零件从半路被夹走 */
+    finishMethodAnimation() {
+      if (!anim) return;
+      cancelAnimationFrame(anim);
+      anim = 0;
+      blend = blendTarget;
+      place();
+      onFrame();
+      requestRender();
     },
     setLabelsVisible(on) {
       labelsOn = on;

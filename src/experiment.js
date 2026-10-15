@@ -32,6 +32,46 @@ export function partErrors(parts, measured) {
 }
 
 /**
+ * 草稿里的实测值对应到当前的零件。零件编号就是检测框的顺序，删框、重新检测后会变，所以每条实测值都记下了
+ * 录入时零件的类别和位置（px, py：方法 2 的坐标）；按同类、距离最近（maxDist 以内）重新对应。
+ * 没有记位置的旧草稿（键就是零件编号）按编号对应。
+ * @param {import('./state.js').Part[]} parts
+ * @param {Record<string, { x?: number|null, y?: number|null, cls?: number, px?: number, py?: number }>} measured 实测值，键为条目名
+ * @param {number} [maxDist=15]
+ * @returns {Record<number, string>} 零件 id → 条目名
+ */
+export function resolveMeasured(parts, measured, maxDist = 15) {
+  const map = {};
+  const pairs = [];
+  for (const [k, m] of Object.entries(measured)) {
+    if (!m || !finite(m.px) || !finite(m.py)) continue;
+    for (const p of parts) {
+      if (p.cls !== m.cls) continue;
+      const d = Math.hypot(p.xParallax - m.px, p.yParallax - m.py);
+      if (d <= maxDist) pairs.push({ k, id: p.id, d });
+    }
+  }
+  pairs.sort((a, b) => a.d - b.d);
+  const usedK = new Set();
+  for (const { k, id } of pairs) {
+    if (usedK.has(k) || id in map) continue;
+    usedK.add(k);
+    map[id] = k;
+  }
+  for (const p of parts) {
+    const m = measured[String(p.id)];
+    if (!(p.id in map) && m && !finite(m.px) && !usedK.has(String(p.id))) map[p.id] = String(p.id);
+  }
+  return map;
+}
+
+/** 按 resolveMeasured 的对应关系取出每个零件的实测值（零件 id → 实测值），给 partErrors 用 */
+export function measuredByPart(parts, measured) {
+  const map = resolveMeasured(parts, measured);
+  return Object.fromEntries(Object.entries(map).map(([id, k]) => [id, measured[k]]));
+}
+
+/**
  * 手机高度：系统结果与卷尺实测之差
  * @param {number} systemMm
  * @param {number|null} measuredMm
@@ -78,9 +118,13 @@ export function buildRecord(p) {
 /** 数字转 CSV 文本（保留 d 位小数；空值为空串） */
 const num = (v, d = 2) => (finite(v) ? v.toFixed(d) : '');
 
-/** CSV 单元格转义：含逗号、引号、换行时加引号，引号写两遍 */
+/**
+ * CSV 单元格转义：含逗号、引号、换行时加引号，引号写两遍。
+ * 以 = + - @ 开头的文字（不是数字）前面加单引号，免得 Excel 当成公式执行（例如照片名叫 "=HYPERLINK(…)"）
+ */
 export function csvCell(v) {
-  const s = v == null ? '' : String(v);
+  let s = v == null ? '' : String(v);
+  if (/^[=+\-@\t\r]/.test(s) && !/^-?\d+(\.\d+)?$/.test(s)) s = `'${s}`;
   return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
@@ -166,7 +210,11 @@ export const photoKey = ({ fileName, width, height }) => `${fileName}|${width}×
 export function loadStore(storage) {
   try {
     const j = JSON.parse(storage?.getItem(STORAGE_KEY) ?? 'null');
-    if (j && Array.isArray(j.records) && j.drafts && typeof j.drafts === 'object') return j;
+    if (j && Array.isArray(j.records) && j.drafts && typeof j.drafts === 'object') {
+      // 结构不对的记录（例如旧版本存的）丢掉，免得界面读字段时出错
+      const ok = (r) => r && typeof r.id === 'string' && typeof r.time === 'string' && r.summary && typeof r.summary === 'object' && Array.isArray(r.parts);
+      return { records: j.records.filter(ok), drafts: j.drafts };
+    }
   } catch {
     // 损坏或无法读取（隐私模式等）：当作没有
   }

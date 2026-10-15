@@ -109,3 +109,44 @@ describe('实验记录：本地保存', () => {
     expect(saveStore(full, { records: [], drafts: {} })).toBe(false);
   });
 });
+
+describe('实验记录：检测结果变了时实测值跟着零件走', () => {
+  const P = (id, cls, x, y) => ({ id, cls, name: '', score: 1, rotDeg: 0, xPlane: x, yPlane: y, xParallax: x, yParallax: y });
+
+  it('删掉一个框、零件编号变了：按同类最近的位置对回原来的零件', async () => {
+    const { resolveMeasured, measuredByPart } = await import('../src/experiment.js');
+    const measured = {
+      a: { x: 100.5, y: 50, cls: 0, px: 100, py: 50 },
+      b: { x: 150, y: 80.5, cls: 1, px: 150, py: 80 },
+      c: { x: 200, y: 20, cls: 0, px: 201, py: 21 },
+    };
+    // 原来的 #0 被删掉：#1 → #0，#2 → #1
+    const parts = [P(0, 1, 150.4, 80.2), P(1, 0, 200.2, 20.5)];
+    expect(resolveMeasured(parts, measured)).toEqual({ 0: 'b', 1: 'c' });
+    expect(measuredByPart(parts, measured)[0]).toBe(measured.b);
+    // 类别不同或离得太远的不对应
+    expect(resolveMeasured([P(0, 0, 150, 80)], measured)).toEqual({});
+    expect(resolveMeasured([P(0, 1, 180, 80)], measured)).toEqual({});
+  });
+
+  it('两个零件抢同一条实测值时给最近的那个；旧格式（按编号、没记位置）按编号对应', async () => {
+    const { resolveMeasured } = await import('../src/experiment.js');
+    const measured = { a: { x: 1, y: 1, cls: 0, px: 100, py: 50 }, 3: { x: 5, y: 5 } };
+    expect(resolveMeasured([P(0, 0, 104, 50), P(1, 0, 101, 50), P(3, 1, 0, 0)], measured)).toEqual({ 1: 'a', 3: '3' });
+  });
+});
+
+describe('实验记录：CSV 防公式注入', () => {
+  it('以 = + - @ 开头的文字前加单引号，负数不受影响', () => {
+    expect(csvCell('=HYPERLINK("x")')).toBe(`"'=HYPERLINK(""x"")"`);
+    expect(csvCell('+1 2')).toBe("'+1 2");
+    expect(csvCell('@a')).toBe("'@a");
+    expect(csvCell('-12.80')).toBe('-12.80');
+    expect(csvCell('-x')).toBe("'-x");
+  });
+
+  it('结构不对的旧记录读的时候丢掉', () => {
+    const s = { getItem: () => JSON.stringify({ records: [{ id: 'a' }, null, { id: 'b', time: 't', summary: {}, parts: [] }], drafts: {} }) };
+    expect(loadStore(s).records.map((r) => r.id)).toEqual(['b']);
+  });
+});

@@ -49,6 +49,7 @@ export function createSortPlayer({ arm, partsLayer, requestRender, onProgress = 
     if (s.type === 'attach') {
       const node = partsLayer.nodeOf(s.partId);
       if (node) {
+        partsLayer.finishMethodAnimation(); // 刚切换过定位方法、零件还在移动时：先摆到位再夹起
         arm.group.updateMatrixWorld(true);
         arm.gripNode.attach(node); // 保持世界位置不变
         partsLayer.setMoved(s.partId);

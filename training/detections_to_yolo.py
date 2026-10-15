@@ -15,7 +15,24 @@ import json
 import sys
 from pathlib import Path
 
-NUM_CLASSES = 4  # 与 src/config.js 的 CLASSES、parts.yaml 一致
+NAMES = ['resistor', 'capacitor', 'led', 'screw']  # 训练的类别表，与 parts.yaml 一致（4 类，顺序固定）
+NUM_CLASSES = len(NAMES)
+# 网页（src/config.js）只保留电阻、LED 两类，ID 是 0、1，与这里的 ID 不同（LED 在这里是 2）。
+# 所以有类别名时按名字认类别；只有没写类别名的旧文件才直接用 cls
+NAME_TO_ID = {'resistor': 0, '色环电阻': 0, 'capacitor': 1, '电解电容': 1, 'led': 2, 'screw': 3, '螺丝': 3}
+
+
+def class_id(d, src):
+    name = d.get('name')
+    if name is not None:
+        c = NAME_TO_ID.get(str(name).strip().lower())
+        if c is None:
+            sys.exit(f'{src}：不认识的类别名 {name!r}')
+        return c
+    c = int(d['cls'])
+    if not 0 <= c < NUM_CLASSES:
+        sys.exit(f'{src}：类别 {c} 无效（只有 0–{NUM_CLASSES - 1}）')
+    return c
 
 
 def main():
@@ -52,9 +69,7 @@ def main():
             sys.exit(f'{js.name} 记录的尺寸 {W} × {H} 与照片 {img.name}（{iw} × {ih}）方向或比例不同')
         lines = []
         for d in dets:
-            c = int(d['cls'])
-            if not 0 <= c < NUM_CLASSES:
-                sys.exit(f'{js.name}：类别 {c} 无效（只有 0–{NUM_CLASSES - 1}）')
+            c = class_id(d, js.name)
             x1, y1, x2, y2 = d['box']
             x1, x2 = sorted((max(0.0, x1), min(W, x2)))
             y1, y2 = sorted((max(0.0, y1), min(H, y2)))
@@ -63,8 +78,7 @@ def main():
             lines.append(f'{c} {(x1 + x2) / 2 / W:.6f} {(y1 + y2) / 2 / H:.6f} {(x2 - x1) / W:.6f} {(y2 - y1) / H:.6f}')
             counts[c] += 1
         out.write_text('\n'.join(lines) + ('\n' if lines else ''), encoding='utf-8')
-    names = ['resistor', 'capacitor', 'led', 'screw']
-    print('各类别框数：' + '，'.join(f'{n} {k}' for n, k in zip(names, counts)))
+    print('各类别框数：' + '，'.join(f'{n} {k}' for n, k in zip(NAMES, counts)))
     if missing:
         msg = f'{len(missing)} 张照片没有 *.detections.json：{", ".join(missing[:10])}{" …" if len(missing) > 10 else ""}'
         if not args.allow_missing:

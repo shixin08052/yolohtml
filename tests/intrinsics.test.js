@@ -132,3 +132,13 @@ describe('按来源计算内参', async () => {
     expect(defaultSource({ image: img(4032, 2268), calib })).toBe('exif');
   });
 });
+
+describe('EXIF 内参：非 4:3 的照片给出提醒', () => {
+  it('16:9 照片有提醒，4:3 没有', async () => {
+    const { computeIntrinsics } = await import('../src/vision/intrinsics.js');
+    const img = (w, h) => ({ width: w, height: h, exif: { focal35: 26, orientation: 1 } });
+    expect(computeIntrinsics('exif', { image: img(4032, 2268) }).notes.some((n) => /不是 4:3/.test(n.text))).toBe(true);
+    expect(computeIntrinsics('exif', { image: img(4032, 3024) }).notes.some((n) => /不是 4:3/.test(n.text))).toBe(false);
+    expect(computeIntrinsics('exif', { image: img(3024, 4032) }).notes.some((n) => /不是 4:3/.test(n.text))).toBe(false);
+  });
+});
