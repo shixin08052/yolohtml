@@ -51,11 +51,14 @@ describe('分拣动作序列', () => {
       expect(g.type).toBe('grip');
       expect(g.to).toBe(GRIP_WIDTH[parts[t.partId].cls]);
       const d = segs.findIndex((s) => s.type === 'detach' && s.task === i);
-      expect(segs[d - 1].type).toBe('grip');
-      expect(segs[d - 1].to).toBeGreaterThan(GRIP_WIDTH[parts[t.partId].cls]);
-      expect(segs[d - 1].to).toBeLessThanOrEqual(GRIP_MAX);
-      // 松开后零件从夹爪下（零件底面 = 指尖高度 − 夹取高度）落到规划的位置
+      // 松开时不先空张夹爪：放开零件后，零件下落和夹爪张开同时进行（零件不会悬在张开的夹爪里）
+      expect(segs[d - 1].type).toBe('line');
       const f = segs[d + 1];
+      expect(f.grip.from).toBe(GRIP_WIDTH[parts[t.partId].cls]);
+      expect(f.grip.to).toBeGreaterThan(GRIP_WIDTH[parts[t.partId].cls]);
+      expect(f.grip.to).toBeLessThanOrEqual(GRIP_MAX);
+      expect(f.grip.ms).toBeLessThanOrEqual(f.ms);
+      // 零件从夹爪下（零件底面 = 指尖高度 − 夹取高度）落到规划的位置
       expect(f).toMatchObject({ type: 'drop', partId: t.partId, from: t.drop.from, to: t.drop.to });
       expect(f.from[2]).toBeCloseTo(t.to[2] - t.graspZ, 9);
     });

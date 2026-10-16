@@ -70,9 +70,10 @@ describe('落进料盒', () => {
     end.forEach((v, i) => expect(v).toBeCloseTo(d.to[i], 9));
     const zs = Array.from({ length: 101 }, (_, i) => dropPose(d, i / 100)[2]);
     expect(Math.min(...zs)).toBeGreaterThanOrEqual(2 - 1e-9);
-    // 先落到底（≈ 0.45），之后有一段高于盒底（弹起）
-    expect(zs[45]).toBeCloseTo(2, 6);
-    expect(Math.max(...zs.slice(50, 70))).toBeGreaterThan(2.5);
+    // 很快落到底（0.3），之后有一段高于盒底（弹起）；前一半时间里一直在往下掉，不会停在半空
+    expect(zs[30]).toBeCloseTo(2, 6);
+    expect(Math.max(...zs.slice(32, 55))).toBeGreaterThan(2.5);
+    for (let i = 1; i <= 30; i++) expect(zs[i]).toBeLessThan(zs[i - 1]);
     // 角度走最短方向
     expect(dropPose({ from: [0, 0, 5, 170], to: [0, 0, 2, -170] }, 1)[3]).toBeCloseTo(190, 9);
   });

@@ -7,7 +7,8 @@
 //   line   指尖走直线（每帧解一次逆运动学），用于竖直下降 / 抬起
 //   grip   夹爪开口变化（两指内侧间距，mm）
 //   attach / detach  零件挂到夹爪上 / 放回场景（瞬间完成）
-//   drop   零件从松开处落到盒里（robot/drop.js 的 dropPose）
+//   drop   零件从松开处落到盒里（robot/drop.js 的 dropPose）；带 grip 字段时夹爪同时张开
+//          （松开是一个动作：手指一离开零件就开始往下掉，不能等夹爪张到最大再掉，否则零件会悬在半空）
 import { ikWorld, pathClear } from './ik.js';
 import { GRIP_WIDTH } from './planner.js';
 import { DROP } from './drop.js';
@@ -16,6 +17,8 @@ import { DROP } from './drop.js';
 export const GRIP_MAX = 34;
 /** 夹爪开合时长（ms） */
 export const GRIP_MS = 250;
+/** 松开时夹爪张开的时长（ms），与零件下落同时进行 */
+export const RELEASE_GRIP_MS = 150;
 
 const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
 
@@ -80,9 +83,15 @@ export function buildSequence(tasks, parts, arm, { startAngles, homeAngles, star
     const placeYaw = t.placeYaw === undefined ? t.gripYaw : t.placeYaw;
     move(solve(t.hoverTo, placeYaw), i, '移到料盒上方');
     line(t.hoverTo, t.to, placeYaw, i, '放入料盒');
-    grip(open, i, '松开');
-    segs.push({ type: 'detach', task: i, phase: '放下', partId: t.partId, ms: 0 });
-    if (t.drop) segs.push({ type: 'drop', task: i, phase: '落下', partId: t.partId, from: t.drop.from, to: t.drop.to, ms: DROP.ms });
+    if (t.drop) {
+      // 先放开零件，再在零件下落的同时张开夹爪
+      segs.push({ type: 'detach', task: i, phase: '松开', partId: t.partId, ms: 0 });
+      segs.push({ type: 'drop', task: i, phase: '松开 · 落下', partId: t.partId, from: t.drop.from, to: t.drop.to, grip: { from: gap, to: open, ms: RELEASE_GRIP_MS }, ms: DROP.ms });
+      gap = open;
+    } else {
+      grip(open, i, '松开');
+      segs.push({ type: 'detach', task: i, phase: '放下', partId: t.partId, ms: 0 });
+    }
     line(t.to, t.hoverTo, placeYaw, i, '离开');
   });
   move(homeAngles, null, '回到初始姿态');

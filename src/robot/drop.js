@@ -7,7 +7,7 @@
 import { BIN_WALL } from '../config.js';
 
 /** 参数：松开时零件底面离盒底的高度、占地矩形之间留的间隙、落点随机偏移、动画时长 */
-export const DROP = { height: 12, margin: 0.4, jitterMm: 3, jitterDeg: 12, ms: 700 };
+export const DROP = { height: 12, margin: 0.4, jitterMm: 3, jitterDeg: 12, ms: 600 };
 
 /** 可复现的伪随机数（mulberry32），返回 [0, 1) */
 export function rng(seed) {
@@ -132,7 +132,7 @@ const easeOut = (t) => (t <= 0 ? 0 : t >= 1 ? 1 : 1 - (1 - t) ** 3);
 export function dropPose({ from, to }, k) {
   const [x0, y0, z0, a0] = from;
   const [x1, y1, z1, a1] = to;
-  const fall = 0.45; // 落地时刻
+  const fall = 0.3; // 落地时刻：约 0.18 秒落到底，太慢看起来像飘着
   const h = Math.max(0, z0 - z1);
   let z;
   if (k < fall) {
@@ -140,12 +140,12 @@ export function dropPose({ from, to }, k) {
   } else {
     const b1 = Math.min(2.5, 0.2 * h);
     const bump = (u, b) => b * 4 * u * (1 - u);
-    if (k < 0.72) z = z1 + bump((k - fall) / (0.72 - fall), b1);
-    else if (k < 0.88) z = z1 + bump((k - 0.72) / 0.16, b1 * 0.35);
+    if (k < 0.56) z = z1 + bump((k - fall) / (0.56 - fall), b1);
+    else if (k < 0.72) z = z1 + bump((k - 0.56) / 0.16, b1 * 0.35);
     else z = z1;
   }
   // 离盒底还剩约 1/3 高度时开始滑动（像擦着下面的零件弹开），落地弹跳期间滑到位
-  const s = easeOut((k - 0.6 * fall) / (0.9 - 0.6 * fall));
+  const s = easeOut((k - 0.6 * fall) / (0.8 - 0.6 * fall));
   const da = ((((a1 - a0) % 360) + 540) % 360) - 180;
   return [x0 + (x1 - x0) * s, y0 + (y1 - y0) * s, z, a0 + da * smooth(s)];
 }
