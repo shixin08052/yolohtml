@@ -412,7 +412,7 @@ body.demo .only-normal { display: none; }
 .tab:disabled { opacity: 0.45; cursor: default; }
 .tab:disabled:hover { color: var(--text-2); }
 #btn-demo[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
-body.demo .info-panel > .panel-section:not([data-key="status"]):not([data-key="sort"]) { display: none; }
+body.demo .info-panel > .panel-section:not([data-key="status"]):not([data-key="sort"]):not([data-key="export"]) { display: none; }
 body.demo-wait .info-panel > .panel-section[data-key="sort"] { display: none; }
 body.demo #view-debug .view-tools > :not(#btn-boxedit):not(.zoom-btns) { display: none; }
 body.demo #view-debug .view-tools #btn-boxedit:disabled { display: none; }
@@ -447,3 +447,16 @@ body.demo #view-three .view-tools > :not(#three-reset):not(#btn-transition) { di
 }
 .confirm-chip::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--c); }
 .confirm-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+/* 流程图的三个阶段：识别 / 定位 / 执行 */
+.flowchart .fc-phase rect { stroke: none; }
+.flowchart .fc-phase-label { font-size: 12px; font-weight: 700; text-anchor: middle; dominant-baseline: central; }
+.flowchart .p-recognize rect { fill: color-mix(in srgb, #3f7fd0 8%, transparent); }
+.flowchart .p-recognize .fc-phase-label { fill: color-mix(in srgb, #3f7fd0 80%, var(--text)); }
+.flowchart .p-locate rect { fill: color-mix(in srgb, #3a9a5b 8%, transparent); }
+.flowchart .p-locate .fc-phase-label { fill: color-mix(in srgb, #3a9a5b 80%, var(--text)); }
+.flowchart .p-execute rect { fill: color-mix(in srgb, #c96442 9%, transparent); }
+.flowchart .p-execute .fc-phase-label { fill: color-mix(in srgb, #c96442 85%, var(--text)); }
+
+/* 导出 */
+.export-grid { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; align-items: center; font-size: 13px; color: var(--text-2); }
+.export-grid .btn-small { min-width: 52px; }

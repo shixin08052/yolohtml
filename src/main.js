@@ -43,7 +43,10 @@ import { buildSequence, GRIP_MAX } from './robot/sequence.js';
 import { createSortPlayer } from './scene/sortPlayer.js';
 import { createRun, recordStep, finishRun, summarizeRun, RUN_KINDS } from './timing.js';
 import { createExperimentPanel } from './ui/experimentPanel.js';
-import { flowStatuses, flowSvg, currentNode } from './ui/flowchart.js';
+import { flowStatuses, flowSvg, currentNode, flowSvgStandalone } from './ui/flowchart.js';
+import { renderPartSheet } from './ui/partSheet.js';
+import { downloadText, downloadCanvas, svgToCanvas } from './ui/download.js';
+import { sortInstructions, instructionsCsv, instructionsJson } from './robot/export.js';
 import * as THREE from 'three';
 import { toThree } from './math/coords.js';
 
@@ -1395,6 +1398,7 @@ function refreshPlan() {
   sortPlayer.load(segs);
   renderSortSection();
   renderStatus();
+  updateExportButtons();
 }
 
 /** 重置：零件回到原位，机械臂回到初始姿态 */
@@ -1579,6 +1583,92 @@ const experiment = createExperimentPanel({
 });
 store.on('stage:sceneBuilt', () => experiment.render());
 store.on('stage:imageLoaded', () => experiment.render());
+
+/* ------------------------------------------------------------------ */
+/* 导出：流程图、零件图片、分拣指令（交付材料）                              */
+/* ------------------------------------------------------------------ */
+
+/** 文件名里用的照片名（去掉扩展名和不能用的字符） */
+const photoStem = () => (store.state.image?.fileName ?? '照片').replace(/\.[^.]+$/, '').replace(/[\\/:*?"<>|]/g, '_');
+const stamp = () => {
+  const d = new Date();
+  const z = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())} ${z(d.getHours())}:${z(d.getMinutes())}`;
+};
+
+/** 场景建好、底板贴图是这张照片的 */
+const sceneReady = () => {
+  const { image, parts, stage } = store.state;
+  return !!image && !!parts && stageIndex(stage) >= stageIndex('sceneBuilt') && boardTex?.bitmap === image.bitmap;
+};
+
+renderStatus(); // 先建"状态"分区，导出放在它后面
+const exportBody = panel.setCustom('export', '导出');
+exportBody.innerHTML = `
+  <p class="muted small">交付材料：流程图按"识别—定位—执行"分段；零件图片为正视图框选 + 每个零件的特写；分拣指令含抓取点、夹爪方向和开口、关节角。</p>
+  <div class="export-grid">
+    <span>流程图</span><span><button type="button" class="btn btn-small" data-exp="flow-png">PNG</button> <button type="button" class="btn btn-small" data-exp="flow-svg">SVG</button></span>
+    <span>零件图片</span><span><button type="button" class="btn btn-small" data-exp="parts-png">PNG</button></span>
+    <span>分拣指令</span><span><button type="button" class="btn btn-small" data-exp="plan-csv">CSV</button> <button type="button" class="btn btn-small" data-exp="plan-json">JSON</button></span>
+  </div>`;
+
+function updateExportButtons() {
+  const ready = sceneReady();
+  exportBody.querySelector('[data-exp="parts-png"]').disabled = !ready || !store.state.parts.length;
+  for (const k of ['plan-csv', 'plan-json']) exportBody.querySelector(`[data-exp="${k}"]`).disabled = !ready || !sortPlan;
+}
+store.on('change', updateExportButtons);
+
+async function exportFlow(kind) {
+  const { svg, width, height } = flowSvgStandalone({ demo: demoMode });
+  const name = `流程图_识别-定位-执行${demoMode ? '_演示' : ''}`;
+  if (kind === 'svg') downloadText(svg, `${name}.svg`, 'image/svg+xml;charset=utf-8');
+  else await downloadCanvas(await svgToCanvas(svg, width, height, 4), `${name}.png`);
+}
+
+async function exportParts() {
+  if (!sceneReady()) return;
+  const { image, calib, parts } = store.state;
+  // 正视图重新按 6 px/mm 拉正（比 3D 贴图清楚）
+  const S = 6;
+  const { frame } = boardTex;
+  const front = rectify(image.bitmap, mul3(calib.H, frameMatrix(frame)), S, { boardW: frame.w, boardH: frame.h });
+  const toFront = invert3(mul3(frameMatrix(frame), [[1 / S, 0, 0], [0, -1 / S, frame.h], [0, 0, 1]]));
+  const det = DET_SOURCE_LABELS[detResult?.source] ?? '';
+  const sheet = renderPartSheet({
+    front,
+    toFront,
+    photo: image.bitmap,
+    H: calib.H,
+    parts,
+    classes: CLASSES,
+    body: (cls) => partFootprint(cls).rects[0],
+    subtitle: `照片 ${image.fileName} · ${stamp()}${det ? ` · 检测：${det}` : ''}`,
+    note: `坐标为底板坐标（mm，原点在底板左下角，X 向右、Y 向远处）；${parallaxOn ? '已做视差修正' : '未做视差修正'}。框按零件本体画在正视图上的位置。`,
+  });
+  await downloadCanvas(sheet, `零件图片_${photoStem()}.png`);
+}
+
+function exportPlan(kind) {
+  if (!sceneReady() || !sortPlan) return;
+  const ins = sortInstructions(sortPlan, store.state.parts, BINS, CLASSES, ARM);
+  if (kind === 'csv') downloadText(instructionsCsv(ins), `分拣指令_${photoStem()}.csv`, 'text/csv;charset=utf-8');
+  else downloadText(instructionsJson(ins, { photo: store.state.image.fileName, time: stamp(), arm: ARM }), `分拣指令_${photoStem()}.json`, 'application/json;charset=utf-8');
+}
+
+exportBody.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-exp]');
+  if (!b || b.disabled) return;
+  const k = b.dataset.exp;
+  const job = k.startsWith('flow') ? exportFlow(k.slice(5)) : k === 'parts-png' ? exportParts() : exportPlan(k.slice(5));
+  Promise.resolve(job)
+    .then(() => panel.message('已导出', 'ok'))
+    .catch((err) => {
+      console.error(err);
+      panel.message(`导出失败：${err.message}`, 'error');
+    });
+});
+updateExportButtons();
 
 /* ------------------------------------------------------------------ */
 /* 演示模式：正视图 · 确认识别结果                                        */

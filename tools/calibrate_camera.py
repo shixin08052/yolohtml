@@ -14,6 +14,11 @@
 - OpenCV 的像素中心在整数坐标上，网页约定像素 (i, j) 覆盖 [i, i+1)、中心在 +0.5，
   所以写出的 cx、cy 比 OpenCV 的结果各加 0.5。
 - 输出格式：{ fx, fy, cx, cy, width, height, dist, rms, ... }，width / height 为参考分辨率（横向）。
+- 畸变模型：iPhone 输出的照片已经在手机里做过镜头畸变校正，残余畸变很小，用 OpenCV 默认的 5 个畸变系数
+  （k1 k2 p1 p2 k3）去拟合，容易把角点噪声"拟合"进系数里（过拟合：系数很大、正负交替），连带 fx、fy 也跟着偏。
+  所以脚本会比较四种模型——无畸变、只 k1、k1 + k2、完整 5 参数——用交叉验证（分 5 组，轮流拿一组照片不参与标定，
+  只用来检验）算"没参与标定的照片"上的重投影误差。误差最小的模型最可信；差不多时（2% 以内）选更简单的。
+  默认（--dist auto）按这个结果写出内参；网页不做畸变校正，所以无畸变模型的 fx、fy 与网页的针孔模型最一致。
 """
 import argparse
 import json
@@ -22,6 +27,65 @@ from datetime import datetime
 from pathlib import Path
 
 EXTS = {'.jpg', '.jpeg', '.png', '.heic', '.heif', '.tif', '.tiff', '.bmp'}
+
+# 畸变模型（由简到繁）：名称、说明、OpenCV 标志（在 dist_flags 里换成 cv2 常量）
+DIST_MODELS = [
+    ('none', '无畸变', ('FIX_K1', 'FIX_K2', 'FIX_K3', 'ZERO_TANGENT_DIST')),
+    ('k1', '只 k1', ('FIX_K2', 'FIX_K3', 'ZERO_TANGENT_DIST')),
+    ('k1k2', 'k1 + k2', ('FIX_K3', 'ZERO_TANGENT_DIST')),
+    ('full', '完整 5 参数', ()),
+]
+
+
+def dist_flags(names):
+    import cv2
+    f = 0
+    for n in names:
+        f |= getattr(cv2, f'CALIB_{n}')
+    return f
+
+
+def calibrate(obj_pts, img_pts, size, flags):
+    """标定，返回 (rms, K, dist, rvecs, tvecs)"""
+    import cv2
+    return cv2.calibrateCamera(obj_pts, img_pts, size, None, None, flags=flags)
+
+
+def heldout_rms(obj_pts, img_pts, size, flags, folds=5):
+    """交叉验证：照片轮流分成 folds 组，每次用其余照片标定，再在这一组上求位姿（内参固定）、算重投影误差。
+    返回所有没参与标定的角点的 RMS（px）。"""
+    import cv2
+    import numpy as np
+    n = len(obj_pts)
+    folds = max(2, min(folds, n))
+    sq = []
+    for k in range(folds):
+        test = [i for i in range(n) if i % folds == k]
+        train = [i for i in range(n) if i % folds != k]
+        _, K, dist, _, _ = calibrate([obj_pts[i] for i in train], [img_pts[i] for i in train], size, flags)
+        for i in test:
+            ok, rvec, tvec = cv2.solvePnP(obj_pts[i], img_pts[i], K, dist)
+            if not ok:
+                continue
+            proj, _ = cv2.projectPoints(obj_pts[i], rvec, tvec, K, dist)
+            sq.extend(np.sum((proj.reshape(-1, 2) - img_pts[i].reshape(-1, 2)) ** 2, axis=1).tolist())
+    return float(np.sqrt(np.mean(sq))) if sq else float('nan')
+
+
+def compare_models(obj_pts, img_pts, size, folds=5):
+    """四种畸变模型的训练误差、交叉验证误差和内参；推荐交叉验证误差最小（2% 以内取更简单）的模型"""
+    rows = []
+    for name, label, flag_names in DIST_MODELS:
+        flags = dist_flags(flag_names)
+        rms, K, dist, _, _ = calibrate(obj_pts, img_pts, size, flags)
+        rows.append({
+            'model': name, 'label': label, 'rms': float(rms), 'heldout': heldout_rms(obj_pts, img_pts, size, flags, folds),
+            'fx': float(K[0, 0]), 'fy': float(K[1, 1]), 'cx': float(K[0, 2]), 'cy': float(K[1, 2]),
+            'dist': [float(x) for x in dist.ravel()[:5]],
+        })
+    best = min(r['heldout'] for r in rows)
+    recommended = next(r['model'] for r in rows if r['heldout'] <= best * 1.02)
+    return rows, recommended
 
 
 def load_image(path):
@@ -66,6 +130,8 @@ def main():
     ap.add_argument('--out', type=Path, default=Path('public/intrinsics.json'), help='输出文件（默认 public/intrinsics.json）')
     ap.add_argument('--min-images', type=int, default=10, help='至少需要多少张成功检测的照片（默认 10）')
     ap.add_argument('--show-errors', action='store_true', help='逐张打印重投影误差')
+    ap.add_argument('--dist', choices=['auto', 'none', 'k1', 'k1k2', 'full'], default='auto',
+                    help='畸变模型：auto（默认，按交叉验证选）、none、k1、k1k2、full（OpenCV 默认的 5 参数）')
     args = ap.parse_args()
 
     import cv2
@@ -110,7 +176,21 @@ def main():
     if n < args.min_images:
         sys.exit(f'成功的照片少于 {args.min_images} 张，请补拍（棋盘格占画面 1/3 以上，从不同角度、不同位置拍，覆盖画面四角）')
 
-    rms, K, dist, rvecs, tvecs = cv2.calibrateCamera(obj_pts, img_pts, size, None, None)
+    # 比较畸变模型（交叉验证），再按选定的模型标定
+    rows, recommended = compare_models(obj_pts, img_pts, size)
+    print('\n畸变模型比较（交叉验证误差 = 没参与标定的照片上的重投影误差，越小越可信）：')
+    print(f'  {"模型":<10}{"标定 RMS":>10}{"交叉验证":>10}{"fx":>10}{"fy":>10}   畸变系数')
+    for r_ in rows:
+        mark = ' ← 推荐' if r_['model'] == recommended else ''
+        print(f"  {r_['label']:<10}{r_['rms']:>10.3f}{r_['heldout']:>10.3f}{r_['fx']:>10.1f}{r_['fy']:>10.1f}   "
+              f"[{', '.join(f'{x:.4f}' for x in r_['dist'])}]{mark}")
+    full = next(r_ for r_ in rows if r_['model'] == 'full')
+    if recommended != 'full' and full['rms'] < rows[0]['rms']:
+        print('  完整 5 参数在参与标定的照片上误差更小，但换到没参与的照片上并不更好——多出来的系数是在拟合噪声（过拟合）。')
+    model = recommended if args.dist == 'auto' else args.dist
+    print(f'使用：{next(r_["label"] for r_ in rows if r_["model"] == model)}\n')
+    flags = dist_flags(next(f for m, _, f in DIST_MODELS if m == model))
+    rms, K, dist, rvecs, tvecs = calibrate(obj_pts, img_pts, size, flags)
     w, h = size
 
     per_image = []
@@ -133,8 +213,11 @@ def main():
         'cy': round(cy, 3),
         'width': w,
         'height': h,
-        'dist': [round(float(x), 6) for x in dist.ravel()],
+        'dist': [round(float(x), 6) for x in dist.ravel()[:5]],
+        'distModel': model,
         'rms': round(float(rms), 4),
+        'compare': [{k: (round(v, 4) if isinstance(v, float) else [round(x, 6) for x in v] if isinstance(v, list) else v)
+                     for k, v in r_.items()} for r_ in rows],
         'images': n,
         'squareMm': args.square,
         'pattern': [args.cols, args.rows],
@@ -150,6 +233,7 @@ def main():
     if rms > 1.0:
         print('注意：RMS 大于 1 px，建议删掉误差最大的几张（--show-errors 查看）后重跑。')
     print(f'已写入 {args.out}')
+    print('网页的固定内参写在 src/config.js 的 FIXED_INTRINSICS 里（不读取这个文件），请把 fx、fy、cx、cy 抄过去。')
 
 
 if __name__ == '__main__':

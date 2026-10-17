@@ -29,6 +29,48 @@ export function countByClass(parts, classes) {
   return classes.map((c) => ({ ...c, n: parts.filter((p) => p.cls === c.id).length })).filter((c) => c.n > 0);
 }
 
+/** 零件的显示编号（从 1 开始，与导出的零件图片、分拣指令一致） */
+export const partNo = (p, i = 0) => (Number.isInteger(p.id) ? p.id : i) + 1;
+
+/**
+ * 在画布上框出元件（按类别颜色，编号 + 类别名的标签）
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {{ parts: object[], classes: object[], body: (cls: number) => object, toScreen: (P: number[]) => number[],
+ *           width: number, scale?: number, pad?: number }} o scale：线宽、字号的倍数
+ */
+export function drawPartBoxes(ctx, { parts, classes, body, toScreen, width, scale = 1, pad = 1.5 }) {
+  ctx.save();
+  ctx.lineJoin = 'round';
+  parts.forEach((p, i) => {
+    const color = classes[p.cls]?.color ?? '#c96442';
+    const pts = outlineCorners(p, body(p.cls), pad).map(toScreen);
+    ctx.beginPath();
+    pts.forEach(([x, y], j) => (j ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+    ctx.closePath();
+    ctx.fillStyle = `${color}2e`;
+    ctx.fill();
+    ctx.lineWidth = 2.5 * scale;
+    ctx.strokeStyle = color;
+    ctx.stroke();
+    // 编号：放在轮廓最上面的角旁边
+    const top = pts.reduce((a, b) => (b[1] < a[1] ? b : a));
+    const label = `${partNo(p, i)} ${classes[p.cls]?.name ?? ''}`;
+    ctx.font = `600 ${12 * scale}px system-ui, "PingFang SC", "Microsoft YaHei", sans-serif`;
+    const tw = ctx.measureText(label).width + 10 * scale;
+    const h = 18 * scale;
+    const lx = Math.min(Math.max(top[0] - tw / 2, 2), width - tw - 2);
+    const ly = Math.max(top[1] - 24 * scale, 2);
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.roundRect(lx, ly, tw, h, 4 * scale);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, lx + 5 * scale, ly + h / 2 + 0.5 * scale);
+  });
+  ctx.restore();
+}
+
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 
 /**
@@ -81,33 +123,7 @@ export function createConfirmView({ root, onConfirm, onEdit }) {
       const w = toTex[2][0] * X + toTex[2][1] * Y + toTex[2][2];
       return [ox + ((toTex[0][0] * X + toTex[0][1] * Y + toTex[0][2]) / w) * k, oy + ((toTex[1][0] * X + toTex[1][1] * Y + toTex[1][2]) / w) * k];
     };
-    ctx.lineJoin = 'round';
-    parts.forEach((p, i) => {
-      const color = classes[p.cls]?.color ?? '#c96442';
-      const pts = outlineCorners(p, body(p.cls)).map(toScreen);
-      ctx.beginPath();
-      pts.forEach(([x, y], j) => (j ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
-      ctx.closePath();
-      ctx.fillStyle = `${color}2e`;
-      ctx.fill();
-      ctx.lineWidth = 2.5;
-      ctx.strokeStyle = color;
-      ctx.stroke();
-      // 编号：放在轮廓最上面的角旁边
-      const top = pts.reduce((a, b) => (b[1] < a[1] ? b : a));
-      const label = `${i + 1} ${classes[p.cls]?.name ?? ''}`;
-      ctx.font = '600 12px system-ui, sans-serif';
-      const tw = ctx.measureText(label).width + 10;
-      const lx = Math.min(Math.max(top[0] - tw / 2, 2), W - tw - 2);
-      const ly = Math.max(top[1] - 24, 2);
-      ctx.fillStyle = color;
-      ctx.beginPath();
-      ctx.roundRect(lx, ly, tw, 18, 4);
-      ctx.fill();
-      ctx.fillStyle = '#fff';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(label, lx + 5, ly + 9.5);
-    });
+    drawPartBoxes(ctx, { parts, classes, body, toScreen, width: W });
   }
 
   new ResizeObserver(() => draw()).observe(canvas);

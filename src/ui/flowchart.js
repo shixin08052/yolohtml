@@ -17,7 +17,7 @@ export const MAIN_NODES = [
   { id: 'detect', label: '零件检测（YOLO + 颜色）', hint: '模型推理找零件，颜色分割补漏' },
   { id: 'scene', label: '坐标映射 · 建 3D 场景', hint: '检测框映射到底板坐标，摆放 3D 零件' },
   { id: 'transition', label: '照片 → 3D 转场', hint: '切到 3D 视图播放转场' },
-  { id: 'sort', label: '机械臂分拣', hint: '点"开始"让机械臂把零件放进料盒' },
+  { id: 'sort', label: '路径规划 · 机械臂分拣', hint: '点"开始"让机械臂把零件放进料盒' },
   { id: 'done', label: '分拣完成', hint: '全部零件已放进料盒' },
 ];
 
@@ -42,6 +42,18 @@ export const SIDE_NODES = [
   { id: 'e_detect', from: 'detect', label: '检测失败', sub: '推理出错 / 无检测文件' },
   { id: 'manual', from: 'e_detect', at: 'scene', label: '手动框选零件', sub: '框好后继续建场景', to: 'scene' },
   { id: 'e_sort', from: 'sort', label: '有零件够不到', sub: '跳过，其余照常分拣' },
+];
+
+/**
+ * 三个阶段（对应"识别—定位—执行"），每段是连续的几个主流程节点：
+ * 识别：读照片、识别码求单应性与相机位姿（为换算坐标做准备）、检测并分类零件；
+ * 定位：检测框换算成底板毫米坐标、建数字孪生场景（演示模式含确认）、转场展示；
+ * 执行：规划抓取顺序、机械臂分拣
+ */
+export const PHASES = [
+  { id: 'recognize', label: '识别', title: '视觉识别：码与零件', nodes: ['input', 'image', 'calib', 'pose', 'detect'] },
+  { id: 'locate', label: '定位', title: '坐标映射与 3D 重建', nodes: ['scene', 'confirm', 'transition'] },
+  { id: 'execute', label: '执行', title: '规划与机械臂分拣', nodes: ['sort', 'done'] },
 ];
 
 /** 分支节点所在的行 */
@@ -124,14 +136,35 @@ export function currentNode(statuses) {
 /* SVG                                                                 */
 /* ------------------------------------------------------------------ */
 
-const W = 320;
+const W = 336;
 const ROW = 46;
 const NH = 32;
-const TOP = 6;
-const MAIN = { x: 6, w: 164 };
-const SIDE = { x: 196, w: 118 };
+const TOP = 8;
+const GUTTER = 22; // 左侧阶段名
+const MAIN = { x: 26, w: 158 };
+const SIDE = { x: 208, w: 122 };
 const rowY = (i) => TOP + i * ROW;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+
+/** 阶段色带：每段从第一个节点上方到最后一个节点下方，左侧竖排阶段名 */
+function phaseBands(nodes) {
+  const out = [];
+  for (const ph of PHASES) {
+    const rows = ph.nodes.map((id) => nodes.findIndex((n) => n.id === id)).filter((i) => i >= 0);
+    if (!rows.length) continue;
+    const y0 = rowY(Math.min(...rows)) - 5;
+    const y1 = rowY(Math.max(...rows)) + NH + 5;
+    const cy = (y0 + y1) / 2;
+    out.push(
+      `<g class="fc-phase p-${ph.id}" data-phase="${ph.id}"><title>${esc(ph.title)}</title>` +
+        `<rect x="2" y="${y0}" width="${W - 4}" height="${y1 - y0}" rx="10"/>` +
+        `<text x="${GUTTER / 2 + 1}" y="${cy}" class="fc-phase-label">` +
+        [...ph.label].map((ch, i, a) => `<tspan x="${GUTTER / 2 + 1}" y="${cy + (i - (a.length - 1) / 2) * 15}">${esc(ch)}</tspan>`).join('') +
+        '</text></g>',
+    );
+  }
+  return out;
+}
 
 /**
  * 流程图 SVG（颜色用 CSS 类，跟随主题）
@@ -140,7 +173,7 @@ const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&l
 export function flowSvg(st) {
   const nodes = flowNodes({ demo: 'confirm' in st });
   const H = rowY(nodes.length - 1) + NH + TOP;
-  const parts = [];
+  const parts = phaseBands(nodes);
   const edge = (d, cls, marker = 'arrow') => parts.push(`<path class="fc-edge ${cls}" d="${d}" marker-end="url(#fc-${marker}-${cls.split(' ')[0]})"/>`);
   // 主流程的竖线
   nodes.slice(0, -1).forEach((n, i) => {
@@ -187,4 +220,63 @@ export function flowSvg(st) {
     .map((c) => `<marker id="fc-arrow-${c}" viewBox="0 0 8 8" refX="7" refY="4" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="fc-head ${c}" d="M0 0 L8 4 L0 8 z"/></marker>`)
     .join('');
   return `<svg class="flowchart" viewBox="0 0 ${W} ${H}" role="img" aria-label="流程图"><defs>${markers}</defs>${parts.join('')}</svg>`;
+}
+
+/* ------------------------------------------------------------------ */
+/* 导出用的独立 SVG（不依赖网页样式，放进报告、PPT）                       */
+/* ------------------------------------------------------------------ */
+
+/** 导出图的样式：固定浅色，主流程实线框、出错分支红色虚线框 */
+const EXPORT_CSS = `
+text { font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", "Source Han Sans SC", sans-serif; }
+.title { font-size: 15px; font-weight: 600; fill: #1f1e1d; text-anchor: middle; }
+.legend { font-size: 10px; fill: #6b6862; }
+.fc-node rect { fill: #ffffff; stroke: #5f5b55; stroke-width: 1.2; }
+.fc-label { font-size: 11.5px; fill: #1f1e1d; text-anchor: middle; dominant-baseline: central; }
+.fc-side rect { fill: #fdf3f2; stroke: #c9473c; stroke-width: 1.1; stroke-dasharray: 4 3; }
+.fc-side .fc-label { font-size: 11px; font-weight: 600; fill: #b23a30; }
+.fc-sub { font-size: 9.5px; fill: #7a5752; text-anchor: middle; dominant-baseline: central; }
+.fc-node[data-node="manual"] rect { fill: #f2f6fd; stroke: #3f6fc0; }
+.fc-node[data-node="manual"] .fc-label { fill: #2f5aa3; }
+.fc-node[data-node="manual"] .fc-sub { fill: #4d6386; }
+.fc-node[data-node="e_sort"] rect { fill: #fdf7ea; stroke: #b7791f; }
+.fc-node[data-node="e_sort"] .fc-label { fill: #96610f; }
+.fc-node[data-node="e_sort"] .fc-sub { fill: #7d6640; }
+.fc-edge { fill: none; stroke: #5f5b55; stroke-width: 1.3; }
+.fc-edge.dash { stroke: #c9473c; stroke-dasharray: 4 3; }
+.fc-head { fill: #5f5b55; }
+.fc-phase rect { stroke: none; }
+.fc-phase-label { font-size: 13px; font-weight: 700; text-anchor: middle; dominant-baseline: central; }
+.p-recognize rect { fill: #e9f1fb; } .p-recognize .fc-phase-label { fill: #2f5aa3; }
+.p-locate rect { fill: #eaf5ec; } .p-locate .fc-phase-label { fill: #2e7a43; }
+.p-execute rect { fill: #fbefe6; } .p-execute .fc-phase-label { fill: #b0532e; }
+`;
+
+/**
+ * 完整流程图（不带当前状态）的独立 SVG：标题 + 三个阶段 + 全部节点和出错分支 + 图例
+ * @param {{ demo?: boolean, title?: string }} [opts]
+ * @returns {{ svg: string, width: number, height: number }}
+ */
+export function flowSvgStandalone({ demo = false, title = '视觉分拣系统流程（识别 — 定位 — 执行）' } = {}) {
+  const st = {};
+  for (const n of flowNodes({ demo })) st[n.id] = 'todo';
+  for (const n of SIDE_NODES) st[n.id] = 'idle';
+  const inner = flowSvg(st).replace(/^<svg[^>]*>/, '').replace(/<\/svg>$/, '');
+  const head = 34;
+  const body = rowY(flowNodes({ demo }).length - 1) + NH + TOP;
+  const foot = 26;
+  const width = W;
+  const height = head + body + foot;
+  const legend =
+    `<g transform="translate(8 ${head + body + 8})" class="legend">` +
+    '<rect x="0" y="0" width="16" height="10" rx="3" fill="#fff" stroke="#5f5b55"/><text x="20" y="5" dominant-baseline="central">主流程</text>' +
+    '<rect x="70" y="0" width="16" height="10" rx="3" fill="#fdf3f2" stroke="#c9473c" stroke-dasharray="3 2"/><text x="90" y="5" dominant-baseline="central">出错 / 异常分支</text>' +
+    '<rect x="176" y="0" width="16" height="10" rx="3" fill="#f2f6fd" stroke="#3f6fc0" stroke-dasharray="3 2"/><text x="196" y="5" dominant-baseline="central">人工补救</text>' +
+    '</g>';
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}">` +
+    `<style>${EXPORT_CSS}</style><rect width="100%" height="100%" fill="#ffffff"/>` +
+    `<text x="${width / 2}" y="21" class="title">${esc(title)}</text>` +
+    `<g transform="translate(0 ${head})">${inner}</g>${legend}</svg>`;
+  return { svg, width, height };
 }
