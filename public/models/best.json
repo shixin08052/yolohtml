@@ -42,16 +42,16 @@
     "author": "Ultralytics",
     "docs": "https://docs.ultralytics.com",
     "head": "Detect",
-    "version": "8.4.176",
+    "version": "8.4.178",
     "batch": "1",
     "license": "AGPL-3.0 License (https://ultralytics.com/license)",
     "stride": "32",
     "task": "detect",
-    "date": "2026-10-13T08:17:24.383767+00:00",
+    "date": "2026-10-17T08:30:24.044669+00:00",
     "imgsz": "[1024, 1024]",
     "names": "{0: 'resistor', 1: 'capacitor', 2: 'led', 3: 'screw'}",
     "args": "{'data': None, 'batch': 1, 'fraction': 1.0, 'quantize': None, 'nms': False, 'dynamic': False, 'simplify': True, 'opset': None}"
   },
-  "ultralytics": "8.4.176",
-  "date": "2026-10-13 08:17"
+  "ultralytics": "8.4.178",
+  "date": "2026-10-17 08:30"
 }
