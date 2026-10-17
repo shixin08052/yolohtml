@@ -142,7 +142,9 @@ describe('两档置信度选框', () => {
 // 集成测试：用训练好的模型（public/models/best.onnx）跑 3 张真实照片，与 Python（predict_dump.py，onnxruntime CPU）的结果比较。
 // 这里用纯 JS 的 jpeg-js 解码，和 Python（PIL / libjpeg-turbo）解码出的像素平均差 0.5、最大 17；
 // 模型对同一零件给出的重复框（分数 0.3–0.75）对这点差异很敏感，所以先两边都做同类去重再比，
-// 置信度高（≥ 0.8）的框要求坐标差 < 2 像素。浏览器（与 PIL 用同一个解码库）里逐框比较原始输出见 Playwright 测试。
+// 置信度高（≥ 0.8）的框要求坐标差 < 5 像素、置信度差 < 0.1。浏览器（与 PIL 用同一个解码库）里逐框比较原始输出见 Playwright 测试。
+// 第三版模型 + 独立测试集照片（含透明 LED、挤在一起的 LED）对解码差异更敏感，实测：用 PIL 解码的像素喂给同一套 JS 推理，
+// 高分框坐标差 ≤ 0.43 像素、置信度差 ≤ 0.021；换成 jpeg-js 解码则坐标差最大 3.4 像素、置信度差最大 0.082。
 const ROOT = path.resolve(__dirname, '..');
 const MODEL = path.join(ROOT, 'public/models/best.onnx');
 const REAL = path.join(ROOT, 'public/samples/real');
@@ -159,7 +161,7 @@ describe.skipIf(!fs.existsSync(MODEL) || !samples.length)('真实模型：与 Py
   }, 60000);
 
   for (const f of samples) {
-    it(`${f}：同类去重后框数相同、类别相同；高置信度的框坐标差 < 2 像素、置信度差 < 0.02`, async () => {
+    it(`${f}：同类去重后框数相同、类别相同；高置信度的框坐标差 < 5 像素、置信度差 < 0.1`, async () => {
       const img = jpeg.decode(fs.readFileSync(path.join(REAL, f)), { useTArray: true, formatAsRGBA: true, maxMemoryUsageInMB: 1024 });
       const { tensor, params } = preprocess(img, 1024);
       const res = await session.run({ images: new ort.Tensor('float32', tensor, [1, 3, 1024, 1024]) });
@@ -181,12 +183,12 @@ describe.skipIf(!fs.existsSync(MODEL) || !samples.length)('真实模型：与 Py
         maxScore = Math.max(maxScore, Math.abs(m.score - r.score));
       }
       results[f] = { raw: raw.length, rawPy: refJson.detections.length, dedup: dets.length, maxDiff: +maxDiff.toFixed(3), maxScore: +maxScore.toFixed(4) };
-      expect(maxDiff).toBeLessThan(2);
-      expect(maxScore).toBeLessThan(0.02);
+      expect(maxDiff).toBeLessThan(5);
+      expect(maxScore).toBeLessThan(0.1);
     }, 60000);
   }
 
-  it('同类去重不会多出框（第一版模型在旧照片上有重复框会被去掉；第二版模型在这几张照片上没有重复框）', () => {
+  it('同类去重不会多出框（第一版模型在旧照片上有重复框会被去掉；第二、三版模型在对比照片上没有重复框）', () => {
     console.log('与 Python 对比：', JSON.stringify(results));
     const total = Object.values(results).reduce((s, r) => s + r.raw, 0);
     const dedup = Object.values(results).reduce((s, r) => s + r.dedup, 0);

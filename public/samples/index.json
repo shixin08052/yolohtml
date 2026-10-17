@@ -20,19 +20,19 @@
       "truth": "synth_45.truth.json"
     },
     {
-      "key": "IMG_9524",
-      "label": "真实照片 · IMG_9524",
-      "image": "real/IMG_9524.jpg"
+      "key": "IMG_9899",
+      "label": "真实照片 · IMG_9899",
+      "image": "real/IMG_9899.jpg"
     },
     {
-      "key": "IMG_9525",
-      "label": "真实照片 · IMG_9525",
-      "image": "real/IMG_9525.jpg"
+      "key": "IMG_9901",
+      "label": "真实照片 · IMG_9901",
+      "image": "real/IMG_9901.jpg"
     },
     {
-      "key": "IMG_9526",
-      "label": "真实照片 · IMG_9526",
-      "image": "real/IMG_9526.jpg"
+      "key": "IMG_9902",
+      "label": "真实照片 · IMG_9902",
+      "image": "real/IMG_9902.jpg"
     }
   ]
 }

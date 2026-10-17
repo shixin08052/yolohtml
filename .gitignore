@@ -11,6 +11,8 @@ training/data/
 training/datasets/
 training/runs/
 training/dumps/
+training/holdout/
+training/holdout_raw/
 training/*.pt
 calib_photos/
 __pycache__/

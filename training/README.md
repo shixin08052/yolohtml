@@ -21,7 +21,7 @@
 | `training/prepare_images.py` | HEIC / JPG → 按 EXIF 方向转正的 JPG |
 | `training/autolabel.py` | 按颜色预标注：红色 LED、蓝色电阻，只框本体（见第 2 节） |
 | `training/detections_to_yolo.py` | 网页"框选"保存的 `*.detections.json` → YOLO 标注 `*.txt` |
-| `training/split_dataset.py` | 按照片划分训练 / 验证 / 测试 = 8 : 1 : 1（种子 42），生成带绝对路径的 `datasets/parts/parts.yaml` |
+| `training/split_dataset.py` | 按照片划分训练 / 验证 / 测试 = 8 : 1 : 1（种子 42），生成带绝对路径的 `datasets/parts/parts.yaml`；给了 `--test-images/--test-labels` 时测试集用独立测试集，训练数据只分训练 / 验证 |
 | `training/train.py`（`train.sh`） | 训练，默认 `yolo26n.pt`、imgsz 1024、150 轮、batch 自动 |
 | `training/export.py`（`export.sh`） | 导出 ONNX（默认端到端输出 `[1, 300, 6]`），复制到 `public/models/` 并写说明 json |
 | `training/predict_dump.py` | 推理结果写成网页 `*.detections.json` 格式，供步骤 14 对比 |
@@ -171,6 +171,16 @@ print(picked)
 !cd .. && zip -r /content/drive/MyDrive/yolohtml/step13_outputs.zip public/models public/samples/real
 !cp /content/drive/MyDrive/yolohtml/runs/parts/results.png /content/drive/MyDrive/yolohtml/runs/parts/confusion_matrix.png /content/drive/MyDrive/yolohtml/
 ```
+
+## 5b. 独立测试集（推荐）
+
+随机抽出的测试集只有十几张，而且同一次摆放拍的几张照片可能分到训练集和测试集两边，成绩偏乐观。独立测试集是**另外拍、从不参与训练**的照片：
+
+1. 另找时间拍 20–30 张：各种颜色（含透明）的 LED 和电阻都要有，每张 4–10 个；有分散的、挨在一起的；俯角、光线、横竖拍都变化；每次摆放只拍 1 张。**不要放进训练照片里**，单独放 `holdout_raw/`。
+2. `python prepare_images.py holdout_raw holdout/images` 转正。
+3. 标注规则与训练集相同，标到 `holdout/labels/`。不要用待评估的模型预标注（它漏掉的零件你容易跟着漏标，成绩偏高）；可以用 `autolabel.py` 预标再手工补其他颜色的 LED。
+4. 打包成 `holdout_data.zip`（里面直接是 `images/`、`labels/`），和 `parts_data.zip` 一起放在 Drive 的 `MyDrive/yolohtml/`。
+5. 运行 `colab_train.ipynb`：第 3 个单元格发现 `holdout_data.zip` 后，`parts_data.zip` 按 9 : 1 分成训练集和验证集，测试集直接用独立测试集；后面的训练、评估（第 6 个单元格）、导出不变。
 
 ## 6. 相机标定【需要用户拍照，本地执行】
 
