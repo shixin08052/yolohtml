@@ -79,8 +79,8 @@
 | `public/models/yolo26n_coco.onnx` / `.json` | 官方 COCO 模型（10.2 MB，Colab 上导出），步骤 14 先用它打通网页推理 |
 
 - 输入 `images: [1, 3, 1024, 1024]`，输出 `output0: [1, 300, 6]`，每行 `[x1, y1, x2, y2, 置信度, 类别]`，坐标在 1024 × 1024 输入图上。
-- `public/samples/real/`：3 张第二版测试集照片（4032 × 3024）及其 ONNX 推理结果（`predict_dump.py --device cpu`，阈值 0.4，**未去重**），供步骤 14 与网页推理结果对比：网页先对比去重前的原始输出，再看去重后的结果。
-- 第一版校验：在另一台机器（Linux、onnxruntime CPU）上用第一版 `best.onnx` 重跑对比照片，框坐标、置信度、类别与 Colab 结果逐位相同。
+- `public/samples/real/`：3 张第二版测试集照片（`IMG_9524`、`IMG_9525`、`IMG_9526`，4032 × 3024，按文件名取测试集前 3 张，碰巧都只有红色 LED）及其 ONNX 推理结果（`predict_dump.py --device cpu`，阈值 0.4，**未去重**），供步骤 14 与网页推理结果对比：网页先对比去重前的原始输出，再看去重后的结果。每张 5 个零件全部检出、类别正确，没有重复框。
+- 校验：在另一台机器（Linux、onnxruntime CPU）上用 `best.onnx` 重跑对比照片，框坐标、置信度、类别与 Colab 结果一致（两版都验证过）。
 
 ## 6. 相机标定
 
