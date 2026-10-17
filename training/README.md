@@ -24,6 +24,7 @@
 | `training/split_dataset.py` | 按照片划分训练 / 验证 / 测试 = 8 : 1 : 1（种子 42），生成带绝对路径的 `datasets/parts/parts.yaml` |
 | `training/train.py`（`train.sh`） | 训练，默认 `yolo26n.pt`、imgsz 1024、150 轮、batch 自动 |
 | `training/export.py`（`export.sh`） | 导出 ONNX（默认端到端输出 `[1, 300, 6]`），复制到 `public/models/` 并写说明 json |
+| `training/eval_holdout.py` | 独立测试集评估：多个模型（`.pt` / `.onnx`）在从未参与训练的照片上评估，打印对比表 |
 | `training/predict_dump.py` | 推理结果写成网页 `*.detections.json` 格式，供步骤 14 对比 |
 | `tools/make_chessboard.py` | 生成棋盘格矢量 PDF（默认 A4 横向，9 × 6 内角点，方格 25 mm，带 100 mm 比例尺；`--paper a3/letter`、`--square`）；现成的在 `tools/chessboard_a4.pdf` |
 | `tools/calibrate_camera.py` | 棋盘格标定 → `public/intrinsics.json` |
@@ -170,6 +171,15 @@ print(picked)
 !cd .. && zip -r /content/drive/MyDrive/yolohtml/step13_outputs.zip public/models public/samples/real
 !cp /content/drive/MyDrive/yolohtml/runs/parts/results.png /content/drive/MyDrive/yolohtml/runs/parts/confusion_matrix.png /content/drive/MyDrive/yolohtml/
 ```
+
+## 5b. 独立测试集（可选，推荐）
+
+`split_dataset.py` 随机抽出的测试集只有十几张，而且同一次摆放拍的几张照片可能分进训练集和测试集两边，成绩偏乐观。独立测试集是**另外拍、从不参与训练**的照片：
+
+1. 另找时间拍 20–30 张：各种颜色（含透明）的 LED 和电阻都要有，每张 4–10 个；有分散的、挨在一起的；俯角、光线、横竖拍都变化。**不要放进 `raw/` 训练照片里**，单独放 `holdout_raw/`。
+2. `python prepare_images.py holdout_raw holdout/images` 转正。
+3. 标注规则与训练集相同，标到 `holdout/labels/`。尽量手工标或用 `autolabel.py` 预标再改；如果用待评估的模型预标，要逐个框仔细检查，否则模型漏掉的零件你也容易跟着漏标，成绩会偏高。
+4. 把 `holdout/images`、`holdout/labels` 打包成 `holdout_data.zip`（里面直接是 `images/`、`labels/`），上传到 Drive 的 `MyDrive/yolohtml/`，运行 `colab_train.ipynb` 第 10 节。会同时评估第二版和第一版模型。
 
 ## 6. 相机标定【需要用户拍照，本地执行】
 
