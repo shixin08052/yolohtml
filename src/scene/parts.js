@@ -87,7 +87,7 @@ export function partFootprint(cls) {
     const parts = [];
     m.traverse((o) => {
       if (o.isMesh && o.userData.lead) leads.expandByObject(o);
-      else if (o.isMesh) parts.push(rect(new THREE.Box3().setFromObject(o)));
+      else if (o.isMesh) parts.push(...meshProfile(o));
       if (o.isMesh) o.geometry.dispose();
     });
     const rects = [rect(body)];
@@ -97,10 +97,41 @@ export function partFootprint(cls) {
   return footprintCache.get(cls);
 }
 
+/** 本体外形切片的长度（mm） */
+const PROFILE_STEP = 0.5;
+
 /**
- * 本体的精确外形：每块本体网格一个矩形，去掉被别的矩形包住的，同样粗、首尾相接的并成一个。
- * LED 是底边 Φ5.8（长 1 mm）+ 灯体和灯头 Φ5，比整体外接矩形（5.8 宽）细一圈；
- * 两颗头尾相反并排贴着时，中心只隔约 5.4 mm，用外接矩形判断会以为插进去了、被推开留出缝
+ * 一块本体网格俯视的外形：圆柱（粗细不变）用外接矩形；其他（LED 的半球灯头、电阻两头鼓中间细的本体）
+ * 沿局部 X 每 PROFILE_STEP 切一段，每段取这一段及两侧相邻一段里顶点的最大半宽（宁大勿小）。
+ * 灯头越往尖端越细：两颗头尾相反并排时，一颗的底边能挨到另一颗灯头收窄的地方，按整段 Φ5 的矩形算会多出约 0.4 mm 的缝
+ * @param {THREE.Mesh} o 已 updateMatrixWorld
+ * @returns {{ minX: number, maxX: number, halfW: number }[]}
+ */
+function meshProfile(o) {
+  const box = new THREE.Box3().setFromObject(o);
+  const rectOf = (b) => ({ minX: b.min.x, maxX: b.max.x, halfW: Math.max(-b.min.z, b.max.z) });
+  if (o.geometry.type === 'CylinderGeometry') return [rectOf(box)];
+  const pos = o.geometry.attributes.position;
+  const v = new THREE.Vector3();
+  const n = Math.max(1, Math.ceil((box.max.x - box.min.x) / PROFILE_STEP - 1e-9));
+  const step = (box.max.x - box.min.x) / n;
+  const w = new Array(n).fill(0);
+  for (let i = 0; i < pos.count; i++) {
+    v.fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld);
+    const k = Math.min(n - 1, Math.max(0, Math.floor((v.x - box.min.x) / step)));
+    w[k] = Math.max(w[k], Math.abs(v.z));
+  }
+  return w.map((_, k) => ({
+    minX: box.min.x + k * step,
+    maxX: box.min.x + (k + 1) * step,
+    halfW: Math.max(w[k], w[k - 1] ?? 0, w[k + 1] ?? 0),
+  }));
+}
+
+/**
+ * 本体的精确外形：每块本体网格一个或几个矩形，去掉被别的矩形包住的，粗细差不多、首尾相接的并成一个。
+ * LED 是底边 Φ5.8（长 1 mm）+ 灯体 Φ5 + 越往尖端越细的半球灯头，比整体外接矩形（5.8 宽）细一圈；
+ * 两颗头尾相反并排贴着时，中心只隔约 5.0 mm，用外接矩形判断会以为插进去了、被推开留出缝
  * @param {{ minX: number, maxX: number, halfW: number }[]} rs
  */
 export function bodyOutline(rs) {
@@ -110,8 +141,11 @@ export function bodyOutline(rs) {
   const merged = [];
   for (const r of out) {
     const last = merged[merged.length - 1];
-    if (last && Math.abs(last.halfW - r.halfW) < eps && r.minX <= last.maxX + eps) last.maxX = Math.max(last.maxX, r.maxX);
-    else merged.push({ ...r });
+    // 粗细差不到 0.1 mm、首尾相接或重叠的并成一段（取粗的），段数少判断快
+    if (last && Math.abs(last.halfW - r.halfW) < 0.1 && r.minX <= last.maxX + eps) {
+      last.maxX = Math.max(last.maxX, r.maxX);
+      last.halfW = Math.max(last.halfW, r.halfW);
+    } else merged.push({ ...r });
   }
   return merged;
 }

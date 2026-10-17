@@ -71,6 +71,16 @@ describe('本体互相插进去时推开', () => {
     expect(separateBodies([P(0, 1, 100, 100, 0), P(1, 1, 100, 105.5, 0)], fps).moved.size).toBe(2);
   });
 
+  it('头尾相反、沿长轴错开 1.1 mm、中心隔 5.05 mm（用户实拍的两颗黄色 LED）：底边挨着对方灯头收窄的地方，不推开', () => {
+    const { moved } = separateBodies([P(0, 1, 100, 100, 0), P(1, 1, 101.1, 105.05, 180)], fps);
+    expect(moved.size).toBe(0);
+    // 真插进去（隔 4.6 mm）才推，推到灯体刚好贴上（约 5 mm）为止，不留缝
+    const r = separateBodies([P(0, 1, 100, 100, 0), P(1, 1, 101.1, 104.6, 180)], fps);
+    const d = r.parts[1].y - r.parts[0].y;
+    expect(d).toBeGreaterThan(4.9);
+    expect(d).toBeLessThan(5.15);
+  });
+
   it('不相交的不动', () => {
     const { moved } = separateBodies([P(0, 1, 100, 100, 90), P(1, 1, 120, 100, 90)], fps);
     expect(moved.size).toBe(0);

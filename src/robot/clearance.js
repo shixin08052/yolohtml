@@ -186,14 +186,17 @@ export function mtv(A, B) {
  * @param {object} fps
  * @returns {{ parts: object[], moved: Map<number, number> }} moved：零件 id → 挪动距离（mm）
  */
-export function separateBodies(parts, fps, { maxMove = 2, gapMm = 0.1, iters = 24 } = {}) {
+export function separateBodies(parts, fps, { maxMove = 2, gapMm = 0, iters = 24 } = {}) {
   const ps = parts.map((p) => ({ ...p }));
   const shift = new Map(ps.map((p) => [p.id, [0, 0]]));
+  const reach = (p) => Math.max(...(fps[p.cls].outline ?? [fps[p.cls].rects[0]]).map((r) => Math.hypot(Math.max(-r.minX, r.maxX), r.halfW)));
   const total = (id) => Math.hypot(...shift.get(id));
   for (let it = 0; it < iters; it++) {
     let any = false;
     for (let i = 0; i < ps.length; i++) {
       for (let j = i + 1; j < ps.length; j++) {
+        // 中心隔得比两者外接圆半径之和还远：不可能相交
+        if (Math.hypot(ps[i].x - ps[j].x, ps[i].y - ps[j].y) > reach(ps[i]) + reach(ps[j]) + gapMm) continue;
         const A = outlinePolys(ps[i], fps, gapMm / 2);
         const B = outlinePolys(ps[j], fps, gapMm / 2);
         const v = groupMtv(A, B);
@@ -251,7 +254,17 @@ export function planPush(part, others, { width, fps, board, ok = () => true, rea
   const obst = others.map((o) => partPolys(o, fps));
   // 零件与零件之间按本体的精确外形（LED 灯体比底边细）：并排贴着的两颗外接矩形本来就有一点重叠，按外接矩形会哪儿都推不动
   const shape = (p, grow) => [...outlinePolys(p, fps, grow), ...leadPolys(p, fps, grow)];
-  const obstShape = others.map((o) => shape(o, 0));
+  const aabb = (polys) => {
+    const xs = polys.flat().map((q) => q[0]);
+    const ys = polys.flat().map((q) => q[1]);
+    return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+  };
+  const hit = (a, b) => a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3];
+  // 外接框先筛一遍（外形有好几段，逐段判断慢），离得远的不用细看
+  const obstShape = others.map((o) => {
+    const polys = shape(o, 0);
+    return { polys, box: aabb(polys) };
+  });
   const ownLeads = leadPolys(part, fps);
   const ownBody = bodyPolys(part, fps);
   const near = others.filter((o) => Math.hypot(o.x - part.x, o.y - part.y) < 15);
@@ -306,7 +319,8 @@ export function planPush(part, others, { width, fps, board, ok = () => true, rea
           // 推的路上零件（连同引脚）撞到别的零件或别人的引脚、手指扫到别的零件或引脚：这个方向不行
           const f1 = fingers(end, m.gap);
           const sm = slide(moved);
-          if (obstShape.some((ob) => anyOverlap(sm, ob)) || obst.some((ob) => anyOverlap(f1, ob))) break;
+          const smBox = aabb(sm);
+          if (obstShape.some((ob) => hit(smBox, ob.box) && anyOverlap(sm, ob.polys)) || obst.some((ob) => anyOverlap(f1, ob))) break;
           if (!inBoard(bodyPolys(moved, fps))) break;
           // 能下爪了吗（夹的时候推的手指已经抬走，不用管它）
           if (!findGrasp(moved, others, { width, fps, ok })) continue;
