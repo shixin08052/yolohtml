@@ -3,7 +3,7 @@
 // 方法 2 = 视差修正（xParallax, yParallax）。
 
 /** 内参来源的中文名 */
-export const SOURCE_LABELS = { exif: 'EXIF 等效焦距', calib: '标定文件', truth: '真值', self: '由照片估计' };
+export const SOURCE_LABELS = { exif: 'EXIF 等效焦距', calib: '固定内参', truth: '真值', self: '由照片估计' };
 
 const finite = (v) => typeof v === 'number' && Number.isFinite(v);
 

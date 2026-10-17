@@ -30,17 +30,18 @@ export function renderImagePanel(panel, { image, intrinsics, truth, notes, calib
 
   const k = panel.setCustom('intrinsics', '内参');
   const sources = [
-    { key: 'exif', label: 'EXIF', enabled: true },
-    { key: 'calib', label: '标定文件', enabled: calibAvailable, title: calibAvailable ? '' : '没有 public/intrinsics.json（步骤 13 生成）' },
+    { key: 'calib', label: '固定内参', enabled: calibAvailable, title: 'iPhone 13 Pro 主摄的棋盘格标定结果（所有照片都用这台手机拍）' },
     {
       key: 'self',
       label: '照片估计',
       enabled: !!selfFocal?.reliable,
       title: selfFocal
-        ? selfFocal.reliable ? '' : '这张照片接近正上方拍摄，无法估计焦距（斜拍 45°–75° 时可用）'
+        ? selfFocal.reliable ? '斜拍且与固定内参明显不同时会自动改用' : '这张照片接近正上方拍摄，无法估计焦距（斜拍 45°–75° 时可用）'
         : '位姿求出后才能估计',
     },
     ...(truth ? [{ key: 'truth', label: '真值', enabled: true }] : []),
+    // EXIF 换算只留作对比（不是默认）
+    { key: 'exif', label: 'EXIF', enabled: true, title: '按 EXIF 等效焦距换算（仅作对比）' },
   ];
   k.innerHTML =
     '<div class="seg" role="radiogroup" aria-label="内参来源">' +
@@ -55,7 +56,7 @@ export function renderImagePanel(panel, { image, intrinsics, truth, notes, calib
     kv([
       ['fx / fy', `${fmt(intrinsics.fx)} / ${fmt(intrinsics.fy)}`],
       ['cx / cy', `${fmt(intrinsics.cx)} / ${fmt(intrinsics.cy)}`],
-      ['来源', { exif: 'EXIF 等效焦距', calib: '标定文件', truth: '真值', self: '由这张照片估计' }[intrinsics.source]],
+      ['来源', { exif: 'EXIF 等效焦距', calib: '固定内参（iPhone 13 Pro 标定）', truth: '真值', self: '由这张照片估计' }[intrinsics.source]],
     ]) +
     notesHTML(notes);
   for (const b of k.querySelectorAll('.seg button')) {

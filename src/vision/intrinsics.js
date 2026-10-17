@@ -118,14 +118,17 @@ export function computeIntrinsics(source, { image, calib = null, truth = null, s
   if (source === 'self') {
     if (!selfFocal?.reliable) throw new Error('这张照片无法估计焦距');
     const f = selfFocal.f;
-    return { intrinsics: { fx: f, fy: f, cx: width / 2, cy: height / 2, width, height, source: 'self' }, notes };
+    // 主点沿用估计焦距时固定的主点（标定的主点）；没有时取图像中心
+    const cx = selfFocal.cx ?? width / 2;
+    const cy = selfFocal.cy ?? height / 2;
+    return { intrinsics: { fx: f, fy: f, cx, cy, width, height, source: 'self' }, notes };
   }
   if (source === 'truth') {
     if (!truth) throw new Error('这张照片没有真值');
     return { intrinsics: { ...truth.intrinsics, source: 'truth' }, notes };
   }
   if (source === 'calib') {
-    if (!calib) throw new Error('没有标定文件 intrinsics.json');
+    if (!calib) throw new Error('没有固定内参');
     const w = calibAspectWarning(calib, width, height);
     if (w) notes.push({ level: 'warn', text: w });
     const lw = lensWarning(exif.focal35);
@@ -149,11 +152,11 @@ export function computeIntrinsics(source, { image, calib = null, truth = null, s
 }
 
 /**
- * 默认的内参来源：合成图用真值；有标定文件且照片是主摄、未裁剪时用标定文件；否则用 EXIF
+ * 默认的内参来源：合成图用真值；真实照片都是同一台手机拍的，一律用固定内参（标定结果）。
+ * 照片裁剪过、换了镜头时仍用固定内参，只在提示里说明；斜拍时位姿求出后会自动改用照片估计的焦距（见 main.js）。
  * @returns {'exif'|'calib'|'truth'}
  */
-export function defaultSource({ image, calib = null, truth = null }) {
+export function defaultSource({ calib = null, truth = null }) {
   if (truth) return 'truth';
-  if (calib && !lensWarning(image.exif.focal35) && !calibAspectWarning(calib, image.width, image.height)) return 'calib';
-  return 'exif';
+  return calib ? 'calib' : 'exif';
 }

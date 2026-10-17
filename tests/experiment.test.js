@@ -70,7 +70,7 @@ describe('实验记录：CSV', () => {
     expect(header).toContain('耗时·颜色分割 (ms)');
     const row = Object.fromEntries(header.map((h, i) => [h, lines[1].match(/("([^"]|"")*"|[^,]*)(,|$)/g)[i].replace(/,$/, '')]));
     expect(row['照片']).toBe('"IMG_1,2.jpg"');
-    expect(row['内参来源']).toBe('标定文件');
+    expect(row['内参来源']).toBe('固定内参');
     expect(row['系统高度 (mm)']).toBe('252.3');
     expect(row['高度误差 (mm)']).toBe('2.3');
     expect(row['方法1 平均误差 (mm)']).toBe('5.00');

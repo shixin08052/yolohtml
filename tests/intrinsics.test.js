@@ -128,8 +128,9 @@ describe('按来源计算内参', async () => {
     expect(defaultSource({ image: img(4032, 3024), truth: {} })).toBe('truth');
     expect(defaultSource({ image: img(4032, 3024), calib })).toBe('calib');
     expect(defaultSource({ image: img(4032, 3024) })).toBe('exif');
-    expect(defaultSource({ image: img(4032, 3024, { focal35: 77 }), calib })).toBe('exif');
-    expect(defaultSource({ image: img(4032, 2268), calib })).toBe('exif');
+    // 都是同一台手机拍的：换了镜头、裁剪过也用固定内参（只给提示）
+    expect(defaultSource({ image: img(4032, 3024, { focal35: 77 }), calib })).toBe('calib');
+    expect(defaultSource({ image: img(4032, 2268), calib })).toBe('calib');
   });
 });
 
@@ -140,5 +141,17 @@ describe('EXIF 内参：非 4:3 的照片给出提醒', () => {
     expect(computeIntrinsics('exif', { image: img(4032, 2268) }).notes.some((n) => /不是 4:3/.test(n.text))).toBe(true);
     expect(computeIntrinsics('exif', { image: img(4032, 3024) }).notes.some((n) => /不是 4:3/.test(n.text))).toBe(false);
     expect(computeIntrinsics('exif', { image: img(3024, 4032) }).notes.some((n) => /不是 4:3/.test(n.text))).toBe(false);
+  });
+});
+
+describe('照片估计的焦距', () => {
+  it('主点沿用估计时固定的主点；没给时取图像中心', async () => {
+    const { computeIntrinsics } = await import('../src/vision/intrinsics.js');
+    const image = { width: 4032, height: 3024, exif: {} };
+    const a = computeIntrinsics('self', { image, selfFocal: { f: 3100, reliable: true, cx: 2002.6, cy: 1514.2 } }).intrinsics;
+    expect(a).toMatchObject({ fx: 3100, fy: 3100, cx: 2002.6, cy: 1514.2, source: 'self' });
+    const b = computeIntrinsics('self', { image, selfFocal: { f: 3100, reliable: true } }).intrinsics;
+    expect([b.cx, b.cy]).toEqual([2016, 1512]);
+    expect(() => computeIntrinsics('self', { image, selfFocal: { f: 3100, reliable: false } })).toThrow();
   });
 });

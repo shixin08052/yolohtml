@@ -26,7 +26,7 @@ import { estimateYaw, expandPoly } from './vision/orientation.js';
 import { segmentParts, fuseDetections } from './vision/colorSeg.js';
 import { measurePaper, EDGE_NAMES, CHECK_LIMITS } from './vision/boardCheck.js';
 import { markerCornersWorld, markerRectOnPage, paperFrame, designFrame, frameMatrix } from './vision/boardLayout.js';
-import { BOARD, MARKERS } from './config.js';
+import { BOARD, MARKERS, FIXED_INTRINSICS } from './config.js';
 import { drawMarkers } from './ui/markerOverlay.js';
 import { createBoxEditor } from './ui/boxEditor.js';
 import { createPartsLayer, leadFootprint, partFootprint } from './scene/parts.js';
@@ -514,15 +514,8 @@ $('#zoom-reset').addEventListener('click', () => debugView.reset());
 /* 内参：标定文件、来源切换                                              */
 /* ------------------------------------------------------------------ */
 
-/** public/intrinsics.json（步骤 13 生成）；没有时为 null */
-let calib = null;
-const calibReady = fetch(new URL('intrinsics.json', document.baseURI))
-  .then(async (res) => {
-    if (!res.ok) return;
-    const j = await res.json().catch(() => null); // 开发服务器找不到文件时会返回 HTML
-    if (j && ['fx', 'fy', 'cx', 'cy'].every((k) => typeof j[k] === 'number')) calib = j;
-  })
-  .catch(() => {});
+/** 固定内参（iPhone 13 Pro 主摄的标定结果，写在 config.js 里，不再读取文件） */
+const calib = FIXED_INTRINSICS;
 
 /** 照片的内参提示（缺 EXIF、换了镜头等），随来源变化 */
 let intrinsicsNotes = [];
@@ -531,6 +524,11 @@ let intrinsicsNotes = [];
 /** 由照片估计的焦距（按照片缓存）：{ bitmap, f, sigmaF, reliable } */
 let focalEstimate = null;
 const selfFocalFor = (image) => (focalEstimate?.bitmap === image.bitmap ? focalEstimate : null);
+
+/** 用户在"内参"分区手动选过来源的照片（bitmap）：这张照片不再自动改用估计的焦距 */
+let sourcePickedFor = null;
+/** 自动改用估计焦距的记录：{ bitmap, from, diff }（from：原来的来源，diff：估计焦距比原来大多少，比例） */
+let autoFocal = null;
 
 function setImage(image, truth, source = defaultSource({ image, calib, truth })) {
   const { intrinsics, notes } = computeIntrinsics(source, { image, calib, truth, selfFocal: selfFocalFor(image) });
@@ -551,6 +549,7 @@ function renderImagePanelNow() {
     selfFocal: selfFocalFor(image),
     // 切换来源：重新计算内参，从这一步重跑（后续结果清空）
     onSourceChange: (source) => {
+      sourcePickedFor = store.state.image.bitmap;
       beginRun('intrinsics');
       setImage(store.state.image, store.state.truth, source);
     },
@@ -801,8 +800,28 @@ function runPose() {
     store.fail('pose', '求出的手机位置在桌面以下，位姿无效。请检查内参或重新拍照。');
     return;
   }
+  // 由这张照片估计焦距（同一张照片只算一次）
+  const photo = store.state.image;
+  if (!selfFocalFor(photo)) {
+    const est = estimateFocal(intrinsics, pose.R, pose.t, world, image);
+    focalEstimate = { bitmap: photo.bitmap, f: est.f, sigmaF: est.sigmaF, reliable: est.reliable, cx: intrinsics.cx, cy: intrinsics.cy };
+    renderImagePanelNow();
+  }
+  const fe = selfFocalFor(photo);
+  const focalDiff = fe.reliable ? fe.f / intrinsics.fx - 1 : 0;
+  const focalOff = fe.reliable && Math.abs(focalDiff) > Math.max(0.003, (2 * fe.sigmaF) / fe.f);
   // 位姿求出后检测、映射会接着同步开始，所以在这里记耗时
   timeStep('pose', now() - t0);
+  // 斜拍、能从照片估计焦距且与当前内参明显不同：自动改用估计的焦距，从内参这一步重算（用户手动选过来源时不改）
+  if (focalOff && (intrinsics.source === 'calib' || intrinsics.source === 'exif') && sourcePickedFor !== photo.bitmap) {
+    autoFocal = { bitmap: photo.bitmap, from: intrinsics.source, diff: focalDiff };
+    panel.message(`斜拍：按照片估计的焦距比${intrinsics.source === 'calib' ? '固定内参' : 'EXIF'}${focalDiff > 0 ? '大' : '小'} ${fmt(Math.abs(focalDiff) * 100, 1)}%，已自动改用估计的焦距`, 'info');
+    // 放到当前事件处理完之后再重算，免得在"已标定"的事件里嵌套进入新一轮
+    queueMicrotask(() => {
+      if (store.state.image === photo && store.state.stage === 'calibrated') setImage(photo, store.state.truth, 'self');
+    });
+    return;
+  }
   store.advance('posed', { pose });
 
   const rows = [
@@ -822,33 +841,28 @@ function runPose() {
   if (calib.reprojErrPx < 1.5 && pose.reprojErrPx > 3 * calib.reprojErrPx + 1) {
     html += '<p class="note warn">位姿的重投影误差明显大于单应性的，内参可能不准（例如等效焦距不对）。可以试试切换内参来源。</p>';
   }
-  // 由这张照片估计焦距（用"照片估计"作为来源时沿用已有结果，不再重算）
-  const photo = store.state.image;
-  if (!selfFocalFor(photo)) {
-    const est = estimateFocal(intrinsics, pose.R, pose.t, world, image);
-    focalEstimate = { bitmap: photo.bitmap, f: est.f, sigmaF: est.sigmaF, reliable: est.reliable };
-    renderImagePanelNow();
-  }
-  const fe = selfFocalFor(photo);
   let focalAction = false;
   if (fe.reliable) {
-    const diff = fe.f / intrinsics.fx - 1;
-    const sig = fe.sigmaF / fe.f;
-    html += `<dl class="kv"><dt>按照片估计焦距</dt><dd>${fmt(fe.f, 0)} ± ${fmt(fe.sigmaF, 0)}（比当前 ${diff >= 0 ? '+' : ''}${fmt(diff * 100, 1)}%）</dd></dl>`;
-    if (intrinsics.source !== 'self' && Math.abs(diff) > Math.max(0.003, 2 * sig)) {
-      html += `<p class="note warn">这张照片是斜拍的，能从照片本身估计焦距：比当前内参${diff > 0 ? '大' : '小'} ${fmt(Math.abs(diff) * 100, 1)}%。斜拍时焦距不准会让上面的框线错开、高度也按比例偏差。</p>`;
+    html += `<dl class="kv"><dt>按照片估计焦距</dt><dd>${fmt(fe.f, 0)} ± ${fmt(fe.sigmaF, 0)}（比当前 ${focalDiff >= 0 ? '+' : ''}${fmt(focalDiff * 100, 1)}%）</dd></dl>`;
+    const auto = autoFocal?.bitmap === photo.bitmap ? autoFocal : null;
+    if (intrinsics.source === 'self' && auto) {
+      html += `<p class="note info">这张照片是斜拍的，按照片估计的焦距比${auto.from === 'calib' ? '固定内参' : 'EXIF'}${auto.diff > 0 ? '大' : '小'} ${fmt(Math.abs(auto.diff) * 100, 1)}%，已自动改用估计的焦距（可在"内参"分区切回）。</p>`;
+    } else if (focalOff && intrinsics.source !== 'self') {
+      // 用户手动选了别的来源：只提示，不自动改
+      html += `<p class="note warn">这张照片是斜拍的，能从照片本身估计焦距：比当前内参${focalDiff > 0 ? '大' : '小'} ${fmt(Math.abs(focalDiff) * 100, 1)}%。斜拍时焦距不准会让上面的框线错开、高度也按比例偏差。</p>`;
       focalAction = true;
     }
   } else if (pose.pitchDeg < 80) {
     html += '<p class="note info">这张照片无法可靠地估计焦距（码的透视不够明显）。</p>';
   }
   if (intrinsics.source === 'exif' && pose.pitchDeg > 75) {
-    html += '<p class="note info">接近正上方拍摄时，焦距的误差几乎不会让上面的框线错开，但会按比例影响高度（焦距差 1%，高度约差 1%）。EXIF 只给出取整的等效焦距，要让高度更准需要棋盘格标定（步骤 13）。</p>';
+    html += '<p class="note info">接近正上方拍摄时，焦距的误差几乎不会让上面的框线错开，但会按比例影响高度（焦距差 1%，高度约差 1%）。EXIF 只给出取整的等效焦距，用固定内参（标定结果）时高度更准。</p>';
   }
   if (focalAction) html += '<div class="sec-actions"><button type="button" class="btn btn-small" id="btn-use-focal">改用估计的焦距</button></div>';
   const poseBody = panel.setCustom('pose', '位姿');
   poseBody.innerHTML = html;
   poseBody.querySelector('#btn-use-focal')?.addEventListener('click', () => {
+    sourcePickedFor = store.state.image.bitmap;
     beginRun('intrinsics');
     setImage(store.state.image, store.state.truth, 'self');
   });
@@ -1464,7 +1478,6 @@ $('#file-input').addEventListener('change', async (e) => {
   try {
     const t0 = now();
     const image = await loadImageFile(file);
-    await calibReady;
     if (tok !== loadSeq) {
       image.bitmap.close?.(); // 读取期间又选了别的照片：这张作废
       return;
@@ -1502,7 +1515,6 @@ sampleSelect.addEventListener('change', async (e) => {
   try {
     const t0 = now();
     const { image, truth } = await loadSample(entry);
-    await calibReady;
     if (tok !== loadSeq) {
       image.bitmap.close?.(); // 加载期间又选了别的照片：这张作废
       return;

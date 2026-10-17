@@ -16,6 +16,11 @@ export const WORK_AREA = { margin: 12, markerPadding: 5 };
 // 默认相机：iPhone 13 Pro 主摄
 export const CAMERA = { expectedFocal35: 26, refWidth: 4032, refHeight: 3024 };
 
+// 固定内参：所有照片都用同一台 iPhone 13 Pro 的主摄拍（4:3，4032 × 3024，横向），直接用棋盘格标定的结果，
+// 不再从网页读取 intrinsics.json、也不按 EXIF 换算。数值来自 tools/calibrate_camera.py（2026-10-13，26 张，RMS 1.32 px），
+// 重新标定后把 public/intrinsics.json 里的 fx、fy、cx、cy 抄到这里。
+export const FIXED_INTRINSICS = { fx: 3060.356, fy: 3063.542, cx: 2002.641, cy: 1514.248, width: 4032, height: 3024 };
+
 // 类别：只有手头的两种元件（都躺平放置）。key 与模型类别名对应：模型输出的类别 ID 按名字换成这里的 ID
 export const CLASSES = [
   { id: 0, key: 'resistor', name: '色环电阻', heightMm: 2.4, color: '#3f7fd0' }, // 1/4 W 蓝色金属膜电阻：本体 Φ2.4×6.3
