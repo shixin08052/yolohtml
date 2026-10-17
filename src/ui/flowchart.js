@@ -14,7 +14,7 @@ export const MAIN_NODES = [
   { id: 'image', label: '读取照片', hint: '读取照片（内参固定，用 iPhone 13 Pro 的标定结果）' },
   { id: 'calib', label: '识别码 · 单应性', hint: '识别 4 个 ArUco 码，求底板到照片的单应性' },
   { id: 'pose', label: '手机位姿', hint: '由单应性和固定内参求手机的位置与朝向；斜拍时自动改用照片估计的焦距' },
-  { id: 'detect', label: '零件检测（YOLO + 颜色）', hint: '模型推理找零件，颜色分割补漏' },
+  { id: 'detect', label: '零件检测（YOLO + 颜色）', hint: '模型推理找零件，颜色分割补漏，按 LED 的尺寸修正挤在一起时偏大的框' },
   { id: 'scene', label: '坐标映射 · 建 3D 场景', hint: '检测框映射到底板坐标，摆放 3D 零件' },
   { id: 'transition', label: '照片 → 3D 转场', hint: '切到 3D 视图播放转场' },
   { id: 'sort', label: '路径规划 · 机械臂分拣', hint: '点"开始"让机械臂把零件放进料盒' },

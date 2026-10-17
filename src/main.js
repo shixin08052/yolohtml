@@ -25,6 +25,7 @@ import { boardHomography, rectify, invert3, bitmapPixels } from './vision/homogr
 import { boxToTexture, erasePolygons } from './vision/erase.js';
 import { estimateYaw, expandPoly } from './vision/orientation.js';
 import { samplePatch, boardToPatch, leadDirection, ledColor, LEAD } from './vision/leads.js';
+import { fitBoxes, SIZE } from './vision/sizePrior.js';
 import { binsFor, partName as displayName, partColor } from './robot/bins.js';
 import { separateBodies } from './robot/clearance.js';
 import { segmentParts, fuseDetections } from './vision/colorSeg.js';
@@ -1092,8 +1093,25 @@ async function runDetect({ force = false } = {}) {
     }
     if (stale()) return;
     // 官方 COCO 模型（调试用）的类别不是零件：框只在调试视图里显示，不映射成零件
-    detResult = { bitmap: image.bitmap, detections, source, note, onnx, debugOnly: mode === 'onnx' && detSettings.model !== 'parts' };
+    const debugOnly = mode === 'onnx' && detSettings.model !== 'parts';
+    // 按 LED 的固定尺寸修正偏大的框（挤在一起时中间那几个）
+    let fit = null;
+    if (source !== 'none' && !debugOnly) {
+      const t2 = now();
+      fit = fitDetections(detections);
+      detections = fit.dets;
+      fit.ms = now() - t2;
+    }
+    detResult = { bitmap: image.bitmap, detections, source, note, onnx, debugOnly, fit };
     boxEditor.setBoxes(detections);
+    if (fit?.changes.length) {
+      const nSplit = fit.changes.filter((c) => c.kind === 'split').length;
+      const nTrim = fit.changes.length - nSplit;
+      panel.message(
+        `按 LED 的尺寸修正了 ${fit.changes.length} 个偏大的框：${[nTrim ? `${nTrim} 个伸进了旁边零件，裁掉挨着的那一头` : '', nSplit ? `${nSplit} 个是并排的几个 LED 合成了一个框，已拆开` : ''].filter(Boolean).join('；')}（虚线为原来的框）`,
+        'info',
+      );
+    }
     if (onnx) {
       const t = onnx;
       const nLow = t.dets.filter((d) => d.low).length;
@@ -1162,6 +1180,38 @@ function applyDetections() {
   }
 }
 
+/** 检测框（原图像素）在底板上的四边形（mm） */
+const boxToBoard = (box, Hinv) =>
+  [[box[0], box[1]], [box[2], box[1]], [box[2], box[3]], [box[0], box[3]]].map(([u, v]) => {
+    const w = Hinv[2][0] * u + Hinv[2][1] * v + Hinv[2][2];
+    return [(Hinv[0][0] * u + Hinv[0][1] * v + Hinv[0][2]) / w, (Hinv[1][0] * u + Hinv[1][1] * v + Hinv[1][2]) / w];
+  });
+
+/**
+ * 按 LED 的固定尺寸修正检测框（vision/sizePrior.js）：挤在一起时中间的 LED 框容易偏大，
+ * 伸进旁边零件的那一头裁掉，两个并排合成一个框的拆开。朝向看引脚（与 refineFromPhoto 同一套办法）
+ * @param {object[]} dets
+ * @returns {ReturnType<typeof fitBoxes>}
+ */
+function fitDetections(dets) {
+  const { image, calib } = store.state;
+  if (!image || !calib || !dets.length) return { dets, changes: [], scale: {} };
+  const photo = bitmapPixels(image.bitmap);
+  const led = partFootprint(1).rects[0];
+  const yawOf = (box, others) => {
+    const poly = boxToBoard(box, calib.Hinv);
+    const cx = poly.reduce((a, p) => a + p[0], 0) / 4;
+    const cy = poly.reduce((a, p) => a + p[1], 0) / 4;
+    const half = Math.max(...poly.map(([X, Y]) => Math.hypot(X - cx, Y - cy)));
+    const size = Math.min(LEAD.patchMm, 2 * (half + LEAD.ringMaxMm + 2));
+    const patch = samplePatch(photo, calib.H, cx, cy, size, LEAD.pxPerMm);
+    const toPatch = (q) => q.map(([X, Y]) => boardToPatch(patch, X, Y));
+    const near = others.map((b) => boxToBoard(b, calib.Hinv)).filter((q) => q.some(([X, Y]) => Math.hypot(X - cx, Y - cy) < size));
+    return leadDirection(patch, toPatch(poly), 'led', { others: near.map(toPatch) });
+  };
+  return fitBoxes(dets, { H: calib.H, Hinv: calib.Hinv, dims: { 1: [led.maxX - led.minX, 2 * led.halfW] }, yawOf, img: photo });
+}
+
 /** 估计朝向时检测框向外扩的距离（mm）：把电阻、LED 的一段引脚也纳入 */
 const YAW_SEARCH_MM = 10;
 
@@ -1176,13 +1226,7 @@ function refineFromPhoto(parts) {
   const { image, calib } = store.state;
   if (!image || !calib) return parts;
   const photo = bitmapPixels(image.bitmap);
-  // 每个检测框在底板上的四边形（mm）
-  const boardPoly = (box) => [[box[0], box[1]], [box[2], box[1]], [box[2], box[3]], [box[0], box[3]]].map(([u, v]) => {
-    const H = calib.Hinv;
-    const w = H[2][0] * u + H[2][1] * v + H[2][2];
-    return [(H[0][0] * u + H[0][1] * v + H[0][2]) / w, (H[1][0] * u + H[1][1] * v + H[1][2]) / w];
-  });
-  const polys = parts.map((p) => boardPoly(detResult.detections[p.detIndex].box));
+  const polys = parts.map((p) => boxToBoard(detResult.detections[p.detIndex].box, calib.Hinv));
   const out = parts.map((p, i) => {
     // 取样窗口：盖住检测框和框外一圈引脚就够（框的半对角 + 外径 + 余量），不必固定 44 mm
     const half = Math.max(...polys[i].map(([X, Y]) => Math.hypot(X - p.xPlane, Y - p.yPlane)));
@@ -1336,6 +1380,12 @@ function renderDetControls() {
     html += `<dt>检测数量</dt><dd>${t.raw.length} 个 → 保留 ${t.dets.length} 个${nLow ? `（含 ${nLow} 个低置信度补漏）` : ''} <span class="muted">（置信度 ≥ ${DETECT.scoreThreshold} 的同类去重，IoU > ${DETECT.dedupIou} 视为重复；${DETECT.lowThreshold}–${DETECT.scoreThreshold} 的只在与别的框重叠 ≤ ${DETECT.lowMaxIou} 时补上）</span></dd>`;
     if (t.color) {
       html += `<dt>颜色分割</dt><dd>${t.color.candidates} 个候选，补上 <b>${t.color.added}</b> 个 YOLO 漏掉的 <span class="muted">（${fmt(t.color.ms, 0)} ms，虚线框）</span></dd>`;
+    }
+    const f = detResult.fit;
+    if (f) {
+      const sc = f.scale[1];
+      const nSplit = f.changes.filter((c) => c.kind === 'split').length;
+      html += `<dt>尺寸修正</dt><dd>${f.changes.length ? `${f.changes.length} 个偏大的框（裁短 ${f.changes.length - nSplit}、拆开 ${nSplit}）` : '框的大小都正常'} <span class="muted">（LED 本体按 8.5 × 5.8 mm、朝向看引脚推算框该多大${sc ? `，本张照片比例 ${fmt(sc, 2)}` : ''}；超过 ${SIZE.trim} 倍算偏大；${fmt(f.ms, 0)} ms）</span></dd>`;
     }
     html += '</dl>';
     if (t.model !== 'parts') {
@@ -1847,4 +1897,4 @@ if ('requestIdleCallback' in window) requestIdleCallback(preloadModel, { timeout
 else setTimeout(preloadModel, 1000);
 
 // 调试用：在控制台访问
-window.__twin = { store, panel, debugView, world, phone, transition, partsLayer, boxEditor, arm, armGoto, sortPlayer, getOnnxDetector, colorCandidates, get detResult() { return detResult; }, get sortPlan() { return sortPlan; }, get calib() { return calib; } };
+window.__twin = { store, panel, debugView, fitDetections, world, phone, transition, partsLayer, boxEditor, arm, armGoto, sortPlayer, getOnnxDetector, colorCandidates, get detResult() { return detResult; }, get sortPlan() { return sortPlan; }, get calib() { return calib; } };

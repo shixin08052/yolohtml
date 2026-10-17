@@ -23,8 +23,18 @@ export function drawDetections(ctx, boxes, scale, dpr = 1, { selected = -1, draf
     const [x1, y1, x2, y2] = d.box;
     const color = CLASSES[d.cls]?.color ?? '#c96442';
     const sel = i === selected;
-    ctx.lineWidth = sel ? lw * 1.8 : lw;
     ctx.strokeStyle = color;
+    // 按尺寸修正过的框：原来的框画成细虚线
+    if (d.rawBox) {
+      const [r1, s1, r2, s2] = d.rawBox;
+      ctx.lineWidth = lw * 0.7;
+      ctx.setLineDash([3 * lw, 3 * lw]);
+      ctx.globalAlpha = 0.7;
+      ctx.strokeRect(r1, s1, r2 - r1, s2 - s1);
+      ctx.globalAlpha = 1;
+      ctx.setLineDash([]);
+    }
+    ctx.lineWidth = sel ? lw * 1.8 : lw;
     // 颜色分割补上的框用虚线
     ctx.setLineDash(d.origin === 'color' ? [5 * lw, 3 * lw] : []);
     ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
@@ -33,7 +43,8 @@ export function drawDetections(ctx, boxes, scale, dpr = 1, { selected = -1, draf
       ctx.fillStyle = `${color}22`;
       ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
     }
-    const text = `${CLASSES[d.cls]?.name ?? d.name ?? d.cls}${d.origin === 'color' ? ' · 颜色' : showScore && d.score < 1 ? ` ${d.score.toFixed(2)}` : ''}`;
+    const fit = d.fit === 'split' ? ' · 拆开' : d.fit === 'trim' ? ' · 按尺寸' : '';
+    const text = `${CLASSES[d.cls]?.name ?? d.name ?? d.cls}${d.origin === 'color' ? ' · 颜色' : showScore && d.score < 1 ? ` ${d.score.toFixed(2)}` : ''}${fit}`;
     const tw = ctx.measureText(text).width;
     const pad = 3 * dpr / scale;
     ctx.fillStyle = color;
@@ -148,7 +159,7 @@ export function createBoxEditor({ getScale, dpr = () => window.devicePixelRatio 
           const opp = [[o[2], o[3]], [o[0], o[3]], [o[0], o[1]], [o[2], o[1]]][drag.corner];
           b = normBox([opp[0], opp[1], drag.cur[0], drag.cur[1]]);
         }
-        boxes[selected] = { ...boxes[selected], box: b };
+        boxes[selected] = { ...boxes[selected], box: b, fit: undefined, rawBox: undefined }; // 手动改过：不再标"按尺寸修正"
       }
       redraw();
     },
