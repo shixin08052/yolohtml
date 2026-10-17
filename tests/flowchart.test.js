@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { flowStatuses, flowSvg, currentNode, MAIN_NODES, SIDE_NODES } from '../src/ui/flowchart.js';
+import { flowStatuses, flowSvg, currentNode, flowNodes, MAIN_NODES, SIDE_NODES } from '../src/ui/flowchart.js';
 
 const main = (st) => MAIN_NODES.map((n) => st[n.id]).join(' ');
 
@@ -54,6 +54,34 @@ describe('流程图状态', () => {
   it('有零件够不到：分拣旁的分支显示为提醒', () => {
     expect(flowStatuses({ stage: 'sceneBuilt', skipped: 2 }).e_sort).toBe('warn');
     expect(flowStatuses({ stage: 'posed', skipped: 2 }).e_sort).toBe('idle');
+  });
+});
+
+describe('演示模式：建好场景后先确认识别结果', () => {
+  const demo = (st) => flowNodes({ demo: true }).map((n) => st[n.id]).join(' ');
+
+  it('多一个"确认"节点，排在转场前面；普通模式没有', () => {
+    expect(flowNodes({ demo: true }).map((n) => n.id)).toEqual(['input', 'image', 'calib', 'pose', 'detect', 'scene', 'confirm', 'transition', 'sort', 'done']);
+    expect('confirm' in flowStatuses({ stage: 'sceneBuilt' })).toBe(false);
+  });
+
+  it('场景建好、还没确认：等待确认（即使转场标记为已播放也不算完成）；确认后进入转场', () => {
+    const st = flowStatuses({ stage: 'sceneBuilt', demo: true });
+    expect(demo(st)).toBe('done done done done done done active todo todo todo');
+    expect(currentNode(st).id).toBe('confirm');
+    expect(demo(flowStatuses({ stage: 'sceneBuilt', demo: true, transitionDone: true }))).toBe('done done done done done done active todo todo todo');
+    expect(demo(flowStatuses({ stage: 'sceneBuilt', demo: true, confirmed: true }))).toBe('done done done done done done done active todo todo');
+    expect(demo(flowStatuses({ stage: 'done', demo: true, confirmed: true, transitionDone: true }))).toBe('done done done done done done done done done done');
+  });
+
+  it('SVG：节点多一行，分支仍画在各自节点那一行（够不到的提醒挨着分拣）', () => {
+    const st = flowStatuses({ stage: 'sceneBuilt', demo: true, skipped: 1 });
+    const svg = flowSvg(st);
+    expect(svg).toContain('data-node="confirm"');
+    const y = (id) => Number(svg.match(new RegExp(`data-node="${id}"><rect x="[\\d.]+" y="([\\d.]+)"`))[1]);
+    expect(y('e_sort')).toBe(y('sort'));
+    expect(y('manual')).toBe(y('scene'));
+    expect(y('sort')).toBeGreaterThan(y('transition'));
   });
 });
 

@@ -3,6 +3,7 @@ import { store, STAGE_LABELS, STEPS, stageIndex } from './state.js';
 import { createStepper } from './ui/stepper.js';
 import { createTabs } from './ui/tabs.js';
 import { createInfoPanel } from './ui/infoPanel.js';
+import { createConfirmView } from './ui/confirmView.js';
 import { createDebugView } from './ui/debugView.js';
 import { drawTruth } from './ui/truthOverlay.js';
 import { createWorld } from './scene/world.js';
@@ -85,6 +86,13 @@ world.scene.add(partsLayer.group);
 $('#show-part-labels').addEventListener('change', (e) => partsLayer.setLabelsVisible(e.target.checked));
 let transitionPending = false; // 有新位姿、还没在 3D 视图里播过转场
 
+/** 演示模式：只显示流程图；识别后先给出正视图请用户确认，确认后才转场建模（地址带 ?demo 或点顶栏按钮打开） */
+let demoMode = false;
+/** 演示模式下已确认识别结果的照片（bitmap） */
+let confirmedFor = null;
+/** 演示模式下当前照片还要等用户确认 */
+const needConfirm = () => demoMode && confirmedFor !== store.state.image?.bitmap;
+
 const transition = createTransition({
   world,
   container: $('#three-container'),
@@ -133,10 +141,11 @@ store.on('stage:posed', (st) => {
   world.requestRender();
   $('#btn-transition').disabled = false;
   $('#btn-compare').disabled = false;
-  transitionPending = true;
   transitionShown = false;
+  // 演示模式：确认识别结果之后才转场
+  transitionPending = !needConfirm();
   // 正在看 3D 视图时直接播放；否则等切换到 3D 视图时播放
-  if ($('#view-three').classList.contains('active')) playTransition();
+  if (transitionPending && $('#view-three').classList.contains('active')) playTransition();
 });
 
 /* ------------------------------------------------------------------ */
@@ -400,6 +409,7 @@ function plainTexture(design, { frame, toBoard }) {
 }
 
 const tabs = createTabs($('.main'), (view) => {
+  if (view === 'confirm') confirmView.redraw();
   if (view === 'three') {
     world.resize();
     if (transitionPending) playTransition();
@@ -431,6 +441,8 @@ function renderStatus() {
     transitionPlaying: transition.mode === 'playing',
     skipped: sortPlan?.skipped.length ?? 0,
     manual: detResult?.source === 'manual',
+    demo: demoMode,
+    confirmed: !needConfirm(),
   });
   const cur = currentNode(st);
   let html = `<dl class="kv"><dt>流程</dt><dd>${loadingPhoto ? '读取照片中' : STAGE_LABELS[stage]}</dd></dl>`;
@@ -502,7 +514,7 @@ store.on('error', ({ step }) => endRun({ error: step }));
 
 function updateTruthOverlay() {
   const truth = store.state.truth;
-  const on = truth && $('#show-truth').checked;
+  const on = truth && $('#show-truth').checked && !demoMode;
   debugView.setOverlay('truth', on ? (ctx, s, dpr) => drawTruth(ctx, truth, s, 1.5 * dpr) : null);
 }
 $('#show-truth').addEventListener('change', updateTruthOverlay);
@@ -567,6 +579,9 @@ store.on('stage:imageLoaded', (st) => {
   phone.clear();
   world.setFocusPoints(null);
   transitionPending = false;
+  confirmedFor = null;
+  confirmView.clear();
+  updateDemoTabs();
   $('#btn-transition').disabled = true;
   $('#btn-compare').disabled = true;
   panel.remove('pose');
@@ -780,7 +795,7 @@ store.on('stage:calibrated', (st) => {
 
 function updatePoseOverlay() {
   const { pose, intrinsics } = store.state;
-  const on = pose && $('#show-pose').checked;
+  const on = pose && $('#show-pose').checked && !demoMode;
   const K = pose ? intrinsicsMatrix(intrinsics) : null;
   const paper = store.state.calib?.paper?.corners ?? null;
   debugView.setOverlay('pose', on ? (ctx, s, dpr) => drawPose(ctx, K, pose, s, dpr, paper) : null);
@@ -930,6 +945,7 @@ const boxEditor = createBoxEditor({
     if (!detResult) return;
     detSeq++; // 正在进行的检测作废，以手动框选为准
     detResult = { ...detResult, detections: boxes, source: 'manual', note: null, pending: false, debugOnly: false };
+    if (demoMode) confirmedFor = null; // 演示模式：改了框要重新确认
     applyDetections();
   },
   onSelect: (i) => {
@@ -970,6 +986,8 @@ function setBoxEditing(on) {
     $('#box-class').value = String(boxEditor.cls);
   } else {
     boxEditor.setBoxes(boxEditor.getBoxes()); // 取消选中
+    // 演示模式：框好后回到正视图确认
+    if (needConfirm() && stageIndex(store.state.stage) >= stageIndex('sceneBuilt')) showConfirm();
   }
   updateDetOverlay();
 }
@@ -1116,6 +1134,12 @@ function applyDetections() {
   renderDetectSection({ parts, dropped });
   refreshPlan();
   timeStep('scene', now() - t1);
+  // 演示模式：先给出正视图请用户确认（一键流程计时到这里结束，不算用户确认的时间）；正在手动框选时等框完再给
+  if (needConfirm()) {
+    if (run && run.end == null) endRun();
+    if (!boxEditing) showConfirm();
+    return;
+  }
   // 一键流程：新照片建好场景后切到 3D 视图播放转场（playTransition 里结束计时）；切换内参来源到这里结束
   if (run && run.end == null) {
     if (run.until === 'scene') endRun();
@@ -1555,6 +1579,97 @@ const experiment = createExperimentPanel({
 });
 store.on('stage:sceneBuilt', () => experiment.render());
 store.on('stage:imageLoaded', () => experiment.render());
+
+/* ------------------------------------------------------------------ */
+/* 演示模式：正视图 · 确认识别结果                                        */
+/* ------------------------------------------------------------------ */
+
+const confirmView = createConfirmView({
+  root: $('#view-confirm'),
+  onConfirm: () => {
+    if (!store.state.image || stageIndex(store.state.stage) < stageIndex('sceneBuilt')) return;
+    confirmedFor = store.state.image.bitmap;
+    updateDemoTabs();
+    renderStatus();
+    transitionPending = true;
+    tabs.select('three'); // 切到 3D 视图时播放转场
+  },
+  onEdit: () => {
+    if (!detResult) return;
+    $('#btn-boxedit').disabled = false;
+    setBoxEditing(true);
+  },
+});
+
+/** 演示模式下 3D 视图要等确认后才能看；正视图标签只在演示模式、场景建好后可用 */
+function updateDemoTabs() {
+  const built = stageIndex(store.state.stage) >= stageIndex('sceneBuilt');
+  $('#tab-three').disabled = demoMode && needConfirm();
+  $('#tab-confirm').disabled = !(demoMode && built && store.state.parts);
+  // 确认之前不显示分拣（免得没确认就开始分拣）
+  document.body.classList.toggle('demo-wait', demoMode && needConfirm());
+}
+store.on('change', updateDemoTabs);
+
+/** 给出正视图请用户确认（场景建好后、确认之前） */
+function showConfirm() {
+  const { parts } = store.state;
+  if (!boardTex || boardTex.bitmap !== store.state.image?.bitmap || !parts) return;
+  confirmView.show({
+    image: boardTex.canvas,
+    toTex: invert3(boardTex.toBoard),
+    parts,
+    classes: CLASSES,
+    body: (cls) => partFootprint(cls).rects[0],
+  });
+  updateDemoTabs();
+  tabs.select('confirm');
+}
+
+function setDemoMode(on) {
+  demoMode = on;
+  document.body.classList.toggle('demo', on);
+  $('#btn-demo').setAttribute('aria-pressed', String(on));
+  try {
+    localStorage.setItem('yolohtml.demo', on ? '1' : '0');
+  } catch {
+    // 不能存就算了
+  }
+  updatePoseOverlay();
+  updateTruthOverlay();
+  // 3D 零件标签带坐标和置信度，演示时不显示
+  partsLayer.setLabelsVisible(!on && $('#show-part-labels').checked);
+  const built = stageIndex(store.state.stage) >= stageIndex('sceneBuilt');
+  if (on) {
+    setArmDebug(false);
+    // 已经转场过的照片算已确认；场景建好还没转场的，给出正视图
+    if (transitionShown) confirmedFor = store.state.image?.bitmap ?? null;
+    else if (built) {
+      transitionPending = false;
+      showConfirm();
+    }
+  } else {
+    if ($('#view-confirm').classList.contains('active')) tabs.select(built ? 'three' : 'debug');
+    if (built && !transitionShown) {
+      transitionPending = true;
+      if ($('#view-three').classList.contains('active')) playTransition();
+    }
+  }
+  updateDemoTabs();
+  renderStatus();
+}
+$('#btn-demo').addEventListener('click', () => setDemoMode(!demoMode));
+{
+  let saved = null;
+  try {
+    saved = localStorage.getItem('yolohtml.demo');
+  } catch {
+    // 读不了：按地址决定
+  }
+  const q = new URLSearchParams(location.search);
+  if (q.has('demo') ? q.get('demo') !== '0' : saved === '1') setDemoMode(true);
+  else updateDemoTabs();
+}
 
 renderStatus();
 

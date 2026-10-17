@@ -23,6 +23,7 @@
         </div>
         <ol id="stepper" class="stepper" aria-label="流程步骤"></ol>
         <div class="actions">
+          <button type="button" class="btn btn-ghost" id="btn-demo" aria-pressed="false" title="演示模式：只显示流程图；识别后先给出正视图请你确认，再转场建模">演示模式</button>
           <a class="btn btn-ghost" href="./board.html" target="_blank">标定板</a>
           <label class="btn btn-primary" for="file-input">上传照片</label>
           <input id="file-input" type="file" accept="image/*,.heic,.heif" hidden />
@@ -35,8 +36,9 @@
       <!-- 中间主区域：两个视图标签页 -->
       <main class="main">
         <div class="tabs" role="tablist">
-          <button class="tab active" role="tab" data-view="debug" aria-selected="true">调试视图</button>
-          <button class="tab" role="tab" data-view="three" aria-selected="false">3D 视图</button>
+          <button class="tab active" role="tab" data-view="debug" aria-selected="true"><span class="only-normal">调试视图</span><span class="only-demo">照片</span></button>
+          <button class="tab only-demo" role="tab" data-view="confirm" aria-selected="false" id="tab-confirm">正视图</button>
+          <button class="tab" role="tab" data-view="three" aria-selected="false" id="tab-three">3D 视图</button>
         </div>
         <div class="views">
           <section id="view-debug" class="view active" role="tabpanel">
@@ -71,6 +73,8 @@
               <figcaption>正射图 <span class="muted">· 虚线为设计的码位置 · 点击放大</span></figcaption>
             </figure>
           </section>
+          <!-- 演示模式：正视图 · 确认识别结果 -->
+          <section id="view-confirm" class="view" role="tabpanel"></section>
           <section id="view-three" class="view" role="tabpanel">
             <div id="three-container" class="three-container">
               <!-- 转场 / 对比时盖在画布上的照片 -->

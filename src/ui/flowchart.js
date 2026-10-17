@@ -3,6 +3,7 @@
 //
 // 主流程：选择照片 → 读取照片·内参 → 识别码·单应性 → 手机位姿 → 零件检测 → 坐标映射·建场景 → 转场 → 机械臂分拣 → 完成
 // 出错分支：读不了照片、识别不到码、位姿无效、检测失败（→ 手动框选 → 回到建场景）、有零件够不到（跳过）
+// 演示模式在建场景和转场之间多一步"正视图 · 确认识别结果"（flowNodes({ demo: true })）
 
 /** 节点状态 */
 export const FLOW_STATUS = ['todo', 'active', 'done', 'error', 'warn', 'idle'];
@@ -20,15 +21,31 @@ export const MAIN_NODES = [
   { id: 'done', label: '分拣完成', hint: '全部零件已放进料盒' },
 ];
 
-/** 出错 / 分支节点：from 为所在主流程节点；row 为所在行 */
+/** 演示模式多出的一步：建好场景后先给出正视图、框出元件，确认后才转场 */
+export const CONFIRM_NODE = { id: 'confirm', label: '正视图 · 确认识别结果', hint: '核对正视图上框出的元件，点"确认"开始建模' };
+
+/**
+ * 主流程节点
+ * @param {{ demo?: boolean }} [opts]
+ */
+export function flowNodes({ demo = false } = {}) {
+  if (!demo) return MAIN_NODES;
+  const i = MAIN_NODES.findIndex((n) => n.id === 'transition');
+  return [...MAIN_NODES.slice(0, i), CONFIRM_NODE, ...MAIN_NODES.slice(i)];
+}
+
+/** 出错 / 分支节点：from 为所在主流程节点（与它同一行）；at 为放在哪个主流程节点那一行（默认 = from） */
 export const SIDE_NODES = [
-  { id: 'e_image', from: 'image', row: 1, label: '读不了照片', sub: '换 JPG 或重新选择' },
-  { id: 'e_calib', from: 'calib', row: 2, label: '识别不到码', sub: '重拍：整张板入镜' },
-  { id: 'e_pose', from: 'pose', row: 3, label: '位姿无效', sub: '换内参来源或重拍' },
-  { id: 'e_detect', from: 'detect', row: 4, label: '检测失败', sub: '推理出错 / 无检测文件' },
-  { id: 'manual', from: 'e_detect', row: 5, label: '手动框选零件', sub: '框好后继续建场景', to: 'scene' },
-  { id: 'e_sort', from: 'sort', row: 7, label: '有零件够不到', sub: '跳过，其余照常分拣' },
+  { id: 'e_image', from: 'image', label: '读不了照片', sub: '换 JPG 或重新选择' },
+  { id: 'e_calib', from: 'calib', label: '识别不到码', sub: '重拍：整张板入镜' },
+  { id: 'e_pose', from: 'pose', label: '位姿无效', sub: '换内参来源或重拍' },
+  { id: 'e_detect', from: 'detect', label: '检测失败', sub: '推理出错 / 无检测文件' },
+  { id: 'manual', from: 'e_detect', at: 'scene', label: '手动框选零件', sub: '框好后继续建场景', to: 'scene' },
+  { id: 'e_sort', from: 'sort', label: '有零件够不到', sub: '跳过，其余照常分拣' },
 ];
+
+/** 分支节点所在的行 */
+const sideRow = (nodes, n) => nodes.findIndex((m) => m.id === (n.at ?? n.from));
 
 const STAGE_ORDER = ['idle', 'imageLoaded', 'calibrated', 'posed', 'detected', 'sceneBuilt', 'sorting', 'done'];
 const at = (stage, s) => STAGE_ORDER.indexOf(stage) >= STAGE_ORDER.indexOf(s);
@@ -48,11 +65,13 @@ const ERROR_SIDE = { image: 'e_image', calib: 'e_calib', pose: 'e_pose', detect:
  *   transitionPlaying?: boolean,
  *   skipped?: number,                    // 分拣规划里够不到的零件数
  *   manual?: boolean,                    // 检测结果来自手动框选
+ *   demo?: boolean,                      // 演示模式（多一步"确认识别结果"）
+ *   confirmed?: boolean,                 // 演示模式：识别结果已确认
  * }} s
  * @returns {Record<string, 'todo'|'active'|'done'|'error'|'warn'|'idle'>}
  */
 export function flowStatuses(s) {
-  const { stage, error = null, loading = false, transitionDone = false, transitionPlaying = false, skipped = 0, manual = false } = s;
+  const { stage, error = null, loading = false, transitionDone = false, transitionPlaying = false, skipped = 0, manual = false, demo = false, confirmed = false } = s;
   const done = {
     input: loading || at(stage, 'imageLoaded'),
     image: at(stage, 'imageLoaded'),
@@ -60,7 +79,8 @@ export function flowStatuses(s) {
     pose: at(stage, 'posed'),
     detect: at(stage, 'detected'),
     scene: at(stage, 'sceneBuilt'),
-    transition: at(stage, 'sceneBuilt') && transitionDone && !transitionPlaying,
+    confirm: at(stage, 'sceneBuilt') && confirmed,
+    transition: at(stage, 'sceneBuilt') && transitionDone && !transitionPlaying && (!demo || confirmed),
     sort: stage === 'done',
     done: stage === 'done',
   };
@@ -68,7 +88,7 @@ export function flowStatuses(s) {
   const errNode = error ? ERROR_NODE[error.step] : null;
   let activeSet = false;
   let stopped = false; // 出错之后的步骤都停着（即使上一张照片曾经做完）
-  for (const n of MAIN_NODES) {
+  for (const n of flowNodes({ demo })) {
     if (n.id === errNode) {
       out[n.id] = 'error';
       activeSet = true;
@@ -96,7 +116,8 @@ export function flowStatuses(s) {
 
 /** 当前要提示的节点：出错的、否则进行中的 */
 export function currentNode(statuses) {
-  return MAIN_NODES.find((n) => statuses[n.id] === 'error') ?? MAIN_NODES.find((n) => statuses[n.id] === 'active') ?? null;
+  const nodes = flowNodes({ demo: 'confirm' in statuses });
+  return nodes.find((n) => statuses[n.id] === 'error') ?? nodes.find((n) => statuses[n.id] === 'active') ?? null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -117,24 +138,26 @@ const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&l
  * @param {ReturnType<typeof flowStatuses>} st
  */
 export function flowSvg(st) {
-  const H = rowY(MAIN_NODES.length - 1) + NH + TOP;
+  const nodes = flowNodes({ demo: 'confirm' in st });
+  const H = rowY(nodes.length - 1) + NH + TOP;
   const parts = [];
   const edge = (d, cls, marker = 'arrow') => parts.push(`<path class="fc-edge ${cls}" d="${d}" marker-end="url(#fc-${marker}-${cls.split(' ')[0]})"/>`);
   // 主流程的竖线
-  MAIN_NODES.slice(0, -1).forEach((n, i) => {
-    const next = MAIN_NODES[i + 1];
+  nodes.slice(0, -1).forEach((n, i) => {
+    const next = nodes[i + 1];
     const cls = st[n.id] === 'done' && (st[next.id] === 'done' || st[next.id] === 'active') ? 'on' : 'off';
     const x = MAIN.x + MAIN.w / 2;
     edge(`M${x} ${rowY(i) + NH} V${rowY(i + 1) - 2}`, cls);
   });
   // 分支
   for (const n of SIDE_NODES) {
-    const y = rowY(n.row) + NH / 2;
+    const row = sideRow(nodes, n);
+    const y = rowY(row) + NH / 2;
     if (n.from === 'e_detect') {
       // 检测失败 → 手动框选（竖线），手动框选 → 建场景（向左）
       const x = SIDE.x + SIDE.w / 2;
       const on = st.manual === 'active' || st.manual === 'done';
-      edge(`M${x} ${rowY(n.row - 1) + NH} V${rowY(n.row) - 2}`, st.manual === 'active' ? 'err' : on ? 'on' : 'off');
+      edge(`M${x} ${rowY(sideRow(nodes, SIDE_NODES.find((m) => m.id === 'e_detect'))) + NH} V${rowY(row) - 2}`, st.manual === 'active' ? 'err' : on ? 'on' : 'off');
       edge(`M${SIDE.x} ${y} H${MAIN.x + MAIN.w + 2}`, st.manual === 'done' ? 'on' : 'off');
     } else {
       const cls = st[n.id] === 'error' ? 'err' : st[n.id] === 'warn' ? 'warn' : 'off';
@@ -142,7 +165,7 @@ export function flowSvg(st) {
     }
   }
   // 节点
-  MAIN_NODES.forEach((n, i) => {
+  nodes.forEach((n, i) => {
     const s = st[n.id];
     const y = rowY(i);
     const mark = s === 'done' ? '✓ ' : s === 'error' ? '✕ ' : '';
@@ -153,7 +176,7 @@ export function flowSvg(st) {
   });
   for (const n of SIDE_NODES) {
     const s = st[n.id];
-    const y = rowY(n.row);
+    const y = rowY(sideRow(nodes, n));
     parts.push(
       `<g class="fc-node fc-side fc-${s}" data-node="${n.id}"><rect x="${SIDE.x}" y="${y}" width="${SIDE.w}" height="${NH}" rx="8"/>` +
         `<text x="${SIDE.x + SIDE.w / 2}" y="${y + 11}" class="fc-label">${esc(n.label)}</text>` +

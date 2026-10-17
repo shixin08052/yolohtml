@@ -402,3 +402,48 @@ body { background: var(--bg); overflow: hidden; -webkit-font-smoothing: antialia
 .fc-dot.active { background: color-mix(in srgb, var(--flow-active) 14%, var(--card)); border-color: var(--flow-active); }
 .fc-dot.error { background: color-mix(in srgb, var(--err) 18%, var(--card)); border-color: var(--err); }
 .fc-dot.todo { border-color: var(--line-strong); }
+
+/* ---------------- 演示模式 ---------------- */
+/* 只显示流程图（和分拣控制）；调试用的勾选项、参数分区、消息都不显示 */
+.only-demo { display: none; }
+body.demo .only-demo { display: revert; }
+body.demo .tab.only-demo { display: inline-block; }
+body.demo .only-normal { display: none; }
+.tab:disabled { opacity: 0.45; cursor: default; }
+.tab:disabled:hover { color: var(--text-2); }
+#btn-demo[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+body.demo .info-panel > .panel-section:not([data-key="status"]):not([data-key="sort"]) { display: none; }
+body.demo-wait .info-panel > .panel-section[data-key="sort"] { display: none; }
+body.demo #view-debug .view-tools > :not(#btn-boxedit):not(.zoom-btns) { display: none; }
+body.demo #view-debug .view-tools #btn-boxedit:disabled { display: none; }
+body.demo #rect-inset { display: none; }
+body.demo #view-three .view-tools > :not(#three-reset):not(#btn-transition) { display: none; }
+
+/* 正视图 · 确认识别结果 */
+#view-confirm.active { display: flex; flex-direction: column; }
+.confirm-canvas { flex: 1; min-height: 0; width: 100%; display: block; }
+.confirm-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--line);
+  background: var(--card);
+}
+.confirm-text { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 14px; color: var(--text-2); }
+.confirm-text > b { font-family: var(--serif); font-weight: 500; font-size: 16px; color: var(--text); }
+.confirm-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--c) 14%, transparent);
+  color: var(--text);
+  font-size: 13px;
+  margin-right: 4px;
+}
+.confirm-chip::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--c); }
+.confirm-actions { display: flex; flex-wrap: wrap; gap: 8px; }
