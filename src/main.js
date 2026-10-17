@@ -24,7 +24,7 @@ import { drawPose } from './ui/poseOverlay.js';
 import { boardHomography, rectify, invert3, bitmapPixels } from './vision/homography.js';
 import { boxToTexture, erasePolygons } from './vision/erase.js';
 import { estimateYaw, expandPoly } from './vision/orientation.js';
-import { samplePatch, boardToPatch, leadDirection, ledColor, LEAD } from './vision/leads.js';
+import { samplePatch, boardToPatch, leadDirection, ledColor, bodyAxis, LEAD } from './vision/leads.js';
 import { fitBoxes, SIZE } from './vision/sizePrior.js';
 import { binsFor, partName as displayName, partColor } from './robot/bins.js';
 import { separateBodies } from './robot/clearance.js';
@@ -1215,6 +1215,9 @@ function fitDetections(dets) {
   return fitBoxes(dets, { H: calib.H, Hinv: calib.Hinv, dims: { 1: [led.maxX - led.minX, 2 * led.halfW] }, yawOf, img: photo });
 }
 
+/** 按灯体长轴微调 LED 角度：饱和像素至少 minPx 个、长短方向方差比至少 minRatio（看得出长条）、与引脚定的角度差不超过 maxDiffDeg */
+const BODY_AXIS = { minPx: 150, minRatio: 1.6, maxDiffDeg: 12 };
+
 /** 估计朝向时检测框向外扩的距离（mm）：把电阻、LED 的一段引脚也纳入 */
 const YAW_SEARCH_MM = 10;
 
@@ -1245,11 +1248,19 @@ function refineFromPhoto(parts) {
     if (p.cls === 1) {
       const c = ledColor(patch, body, { others });
       if (c) q = { ...q, color: c.color };
+      // 彩色灯体：引脚常被掰弯几度，角度按灯体自身的长轴微调（头朝哪边仍按引脚）
+      if (c && c.color !== 'clear' && q.yawSource === 'leads') {
+        const ax = bodyAxis(patch, body, { others, paper: c.paper });
+        if (ax && ax.n >= BODY_AXIS.minPx && ax.ratio >= BODY_AXIS.minRatio) {
+          const d = ((((ax.axisDeg - q.rotDeg) % 180) + 270) % 180) - 90; // 轴向差（−90…90）
+          if (Math.abs(d) <= BODY_AXIS.maxDiffDeg) q = { ...q, rotDeg: (((q.rotDeg + d) % 360) + 360) % 360, yawSource: 'leads+body' };
+        }
+      }
     }
     return { ...q, name: displayName(q) };
   });
   // 引脚看不清的零件才用原来的办法（较慢，只对这些零件算）
-  const rest = out.filter((p) => p.yawSource !== 'leads');
+  const rest = out.filter((p) => !p.yawSource?.startsWith('leads'));
   if (!rest.length) return out;
   const byShape = new Map(refineYawByShape(rest).map((p) => [p.id, p]));
   return out.map((p) => {
@@ -1308,14 +1319,15 @@ function renderDetectSection(mapping) {
     const { parts, dropped } = mapping;
     html += `<p class="summary">检测到 <b>${parts.length}</b> 个零件<span class="muted">（来源：${DET_SOURCE_LABELS[detResult.source]}）</span></p>`;
     const oriented = parts; // 电阻、LED 都是长条零件，都要估计朝向
-    const byLeads = oriented.filter((p) => p.yawSource === 'leads').length;
+    const byLeads = oriented.filter((p) => p.yawSource?.startsWith('leads')).length;
+    const byBody = oriented.filter((p) => p.yawSource === 'leads+body').length;
     const byShape = oriented.filter((p) => p.yawSource === 'photo').length;
     const counts = new Map();
     for (const p of parts) counts.set(displayName(p), (counts.get(displayName(p)) ?? 0) + 1);
     if (counts.size) html += '<dl class="kv">' + [...counts].map(([k, n]) => `<dt>${escHtml(k)}</dt><dd>${n}</dd>`).join('') + '</dl>';
     if (oriented.length) {
       const rest = oriented.length - byLeads - byShape;
-      html += `<p class="muted small">朝向：${byLeads} 个看引脚${byShape ? `，${byShape} 个看本体形状（引脚看不清）` : ''}${rest ? `，${rest} 个看不清，按检测框粗判 0° / 90°` : ''}（共 ${oriented.length} 个）。</p>`;
+      html += `<p class="muted small">朝向：${byLeads} 个看引脚${byBody ? `（其中 ${byBody} 个彩色 LED 再按灯体长轴微调角度）` : ''}${byShape ? `，${byShape} 个看本体形状（引脚看不清）` : ''}${rest ? `，${rest} 个看不清，按检测框粗判 0° / 90°` : ''}（共 ${oriented.length} 个）。</p>`;
     }
     html += `<label class="check toggle-row"><input type="checkbox" id="parallax-toggle"${parallaxOn ? ' checked' : ''} /> 视差修正</label>`;
     html += '<p class="muted small">零件有高度，斜拍时检测框中心对应零件半高处；修正后按半高求交，不修正则直接落到板面。</p>';

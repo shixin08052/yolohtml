@@ -237,3 +237,30 @@ describe('LED 颜色：框被别的框整个盖住', () => {
     expect(ledColor(patchOf(img), body, { others: [body] })?.color).toBe('green');
   });
 });
+
+describe('彩色灯体自身的长轴', () => {
+  it('各个角度：灯体长轴误差 < 1.5°（引脚掰弯时用它微调角度）', async () => {
+    const { bodyAxis } = await import('../src/vision/leads.js');
+    for (const t of [0, 17, 45, 90, 133, 170]) {
+      const img = canvas(N, N);
+      const body = drawLed(img, K, N / 2, N / 2, t, [225, 200, 40]);
+      const patch = patchOf(img);
+      const c = ledColor(patch, body);
+      const ax = bodyAxis(patch, body, { paper: c.paper });
+      expect(ax.ratio).toBeGreaterThan(1.6);
+      expect(Math.abs(((ax.axisDeg - t) % 180 + 270) % 180 - 90)).toBeLessThan(1.5);
+    }
+  });
+
+  it('同色的邻居贴着：离邻居框更近的像素不算，长轴不被带偏', async () => {
+    const { bodyAxis } = await import('../src/vision/leads.js');
+    const img = canvas(N, N);
+    // 邻居头尾相反、并排贴着、沿长轴错开 1.5 mm（用户实拍的两颗黄色 LED 那样）；两个框有一点重叠
+    const me = drawLed(img, K, N / 2, N / 2, 3, [225, 200, 40], { leads: false });
+    const nb = drawLed(img, K, N / 2 + 1.5 * K, N / 2 + 5.9 * K, 180, [225, 200, 40], { leads: false });
+    const patch = patchOf(img);
+    const c = ledColor(patch, me, { others: [nb] });
+    const ax = bodyAxis(patch, me, { others: [nb], paper: c.paper });
+    expect(Math.abs(((ax.axisDeg - 3) % 180 + 270) % 180 - 90)).toBeLessThan(1.5);
+  });
+});

@@ -377,7 +377,60 @@ export function ledColor(patch, body, { others = [] } = {}) {
     else votes.blue++;
   }
   const satFrac = nSat / inBody.length;
-  if (satFrac < 0.08) return { color: 'clear', satFrac, votes };
+  if (satFrac < 0.08) return { color: 'clear', satFrac, votes, paper };
   const color = Object.entries(votes).sort((a, b) => b[1] - a[1])[0][0];
-  return { color, satFrac, votes };
+  return { color, satFrac, votes, paper };
+}
+
+/**
+ * 彩色灯体自身的长轴：本体框外扩 1 mm 内、按纸面白平衡后饱和的像素做主成分分析。
+ * 引脚常被掰弯，按引脚定的角度会跟着歪几度；灯体是直的，两颗并排贴着时按灯体看才是平行的。
+ * 离旁边零件框比离自己框近的像素不算（同色的两颗贴在一起时不混进去）。透明灯体没有饱和像素，用不上
+ * @param {ReturnType<typeof samplePatch>} patch
+ * @param {number[][]} body
+ * @param {{ others?: number[][][], paper: number[] }} opts paper：纸面颜色（ledColor 的结果）
+ * @returns {{ axisDeg: number, n: number, ratio: number }|null} axisDeg：长轴方向（底板坐标，0–180°）；ratio：两个方向的方差比
+ */
+export function bodyAxis(patch, body, { others = [], paper }) {
+  const { width: W, height: H, data } = patch;
+  const k = patch.pxPerMm;
+  const xs = body.map((p) => p[0]);
+  const ys = body.map((p) => p[1]);
+  const m = 1 * k;
+  let n = 0;
+  let su = 0;
+  let sv = 0;
+  let suu = 0;
+  let svv = 0;
+  let suv = 0;
+  for (let y = Math.max(0, Math.floor(Math.min(...ys) - m)); y <= Math.min(H - 1, Math.ceil(Math.max(...ys) + m)); y++) {
+    for (let x = Math.max(0, Math.floor(Math.min(...xs) - m)); x <= Math.min(W - 1, Math.ceil(Math.max(...xs) + m)); x++) {
+      const i = (y * W + x) * 4;
+      if (data[i + 3] === 0) continue;
+      const d = polyDistance(body, x, y);
+      if (d > m || others.some((p) => polyDistance(p, x, y) < d)) continue;
+      const r = Math.min(255, (data[i] * 230) / paper[0]);
+      const g = Math.min(255, (data[i + 1] * 230) / paper[1]);
+      const b = Math.min(255, (data[i + 2] * 230) / paper[2]);
+      if (sat(r, g, b) < 90 || Math.max(r, g, b) < 45) continue;
+      n++;
+      su += x;
+      sv += y;
+      suu += x * x;
+      svv += y * y;
+      suv += x * y;
+    }
+  }
+  if (n < 10) return null;
+  const cu = su / n;
+  const cv = sv / n;
+  const a = suu / n - cu * cu;
+  const c = svv / n - cv * cv;
+  const bb = suv / n - cu * cv;
+  const t = Math.sqrt(((a - c) / 2) ** 2 + bb * bb);
+  const l1 = (a + c) / 2 + t;
+  const l2 = (a + c) / 2 - t;
+  // 取样图里 v 向下，换回底板坐标（Y 向上）角度取反
+  const ang = (-0.5 * Math.atan2(2 * bb, a - c) * 180) / Math.PI;
+  return { axisDeg: wrap(ang, 180), n, ratio: l2 > 1e-9 ? l1 / l2 : Infinity };
 }

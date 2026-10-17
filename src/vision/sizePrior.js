@@ -113,7 +113,7 @@ export function foreground(img, box, holes, paper, { step = 2, tol = 40 } = {}) 
  * 已被另一个框盖住的像素、落在别的零件框（exclude）里的像素不算，所以两个框各自贴到自己那个零件上。轮流挪两遍，每个方向最多挪框大小的两成。
  * @returns {number[][]}
  */
-export function snapToParts(img, B, subs, paper, { tol = 40, rounds = 2, maxShift = 0.2, minGain = 0.05, exclude = [] } = {}) {
+export function snapToParts(img, B, subs, paper, { tol = 40, rounds = 2, maxShift = 0.2, minGain = 0.01, exclude = [] } = {}) {
   const { width: W, data } = img;
   const x0 = Math.ceil(B[0]);
   const y0 = Math.ceil(B[1]);
