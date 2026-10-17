@@ -84,7 +84,8 @@ const MAX_PUSHES = 2;
  *   tasks 按执行顺序，两种：
  *   - 抓取放入（kind 'pick'）：PickTask + { gripYaw, placeYaw, graspZ, gap, offset, hoverFrom, hoverTo, partYawDeg, drop: { from, to } }
  *     gap：下爪时的张开量；offset：抓点沿长轴偏离本体中心多少（mm）
- *   - 拨开（kind 'push'）：{ partId, gripYaw, start, end, hoverStart, hoverEnd, partFrom, partTo, dist }
+ *   - 拨开（kind 'push'）：{ partId, gripYaw, start, end, hoverStart, hoverEnd, partFrom, partTo, dist, gap, mode }
+ *     gap：推时夹爪的开口（0 合拢；张到最大时只用一根手指拨）
  *     start / end：合拢的指尖推的起止点；partFrom / partTo：零件的 [x, y, z, 朝向°]
  */
 export function plan(parts, bins, arm, { start = [arm.base[0], arm.base[1], 0], footprints = {}, board = BOARD } = {}) {
@@ -188,6 +189,8 @@ export function plan(parts, bins, arm, { start = [arm.base[0], arm.base[1], 0], 
         partFrom: [before.x, before.y, 0, before.rotDeg ?? 0],
         partTo: [push.part.x, push.part.y, 0, before.rotDeg ?? 0],
         dist: push.dist,
+        gap: push.gap, // 推时夹爪的开口：0 = 合拢两指一起顶；张到最大 = 只用一根手指拨
+        mode: push.mode,
       });
       onBoard.set(c.part.id, { ...before, x: push.part.x, y: push.part.y });
       pushes.set(c.part.id, (pushes.get(c.part.id) ?? 0) + 1);

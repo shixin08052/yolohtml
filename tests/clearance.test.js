@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { fingerPolys, bodyPolys, leadPolys, partPolys, findGrasp, mtv, separateBodies, planPush, FINGER } from '../src/robot/clearance.js';
+import { fingerPolys, bodyPolys, leadPolys, partPolys, findGrasp, mtv, separateBodies, planPush, FINGER, PUSH } from '../src/robot/clearance.js';
 import { plan, GRIP_WIDTH } from '../src/robot/planner.js';
-import { buildSequence } from '../src/robot/sequence.js';
+import { buildSequence, GRIP_MAX } from '../src/robot/sequence.js';
 import { polysOverlap } from '../src/robot/drop.js';
 import { binsFor } from '../src/robot/bins.js';
 import { partFootprint } from '../src/scene/parts.js';
@@ -87,10 +87,11 @@ describe('挤在一起的分拣', () => {
       const others = [...onBoard.values()].filter((o) => o.id !== t.partId).map((o) => partPolys(o, fps));
       if (t.kind === 'push') {
         expect([me.x, me.y]).toEqual([t.partFrom[0], t.partFrom[1]]);
-        const pusher = fingerPolys(t.start, t.gripYaw, 0, { grow: 0 });
+        const pusher = fingerPolys(t.start, t.gripYaw, t.gap ?? 0, { grow: 0 });
         expect(anyOv(pusher, leadPolys(me, fps))).toBe(false);
         expect(anyOv(pusher, bodyPolys(me, fps))).toBe(false);
         expect(others.some((ob) => anyOv(pusher, ob))).toBe(false);
+        expect(others.some((ob) => anyOv(fingerPolys(t.end, t.gripYaw, t.gap ?? 0, { grow: 0 }), ob))).toBe(false);
         const moved = { ...me, x: t.partTo[0], y: t.partTo[1] };
         // 紧贴着滑过去可以，插进去不行（收缩 0.15 mm 再判断）
         expect(others.some((ob) => anyOv(partPolys(moved, fps, -0.15), ob))).toBe(false);
@@ -122,11 +123,31 @@ describe('挤在一起的分拣', () => {
     expect(simulate(photo, tasks).size).toBe(0);
   });
 
-  it('三颗同向并排紧贴：不碰引脚就拆不开——跳过并说明原因，不做压引脚的动作', () => {
-    const { tasks, skipped } = plan(parallel, binsFor(parallel), ARM, { footprints: fps });
-    expect(skipped).toHaveLength(3);
-    expect(skipped[0].skipReason).toMatch(/引脚/);
-    simulate(parallel, tasks);
+  // 独立测试集照片里识别出的位置：IMG_9899 五颗灯头朝中心、引脚向外散开的"花瓣"；IMG_9902 五颗上下叠着紧贴
+  const flower = [P(0, 1, 149.8, 49.5, 24, 'red'), P(1, 1, 163.8, 49.0, 132, 'green'), P(2, 1, 152.5, 57.2, 346, 'clear'), P(3, 1, 157.8, 64.3, 274, 'clear'), P(4, 1, 162.5, 57.3, 198, 'clear')];
+  const stack = [P(0, 1, 146.7, 78.2, 358, 'red'), P(1, 1, 145.9, 103.5, 190, 'green'), P(2, 1, 144.8, 90.8, 357, 'clear'), P(3, 1, 146.8, 84.3, 172, 'clear'), P(4, 1, 146.5, 97.1, 181, 'clear')];
+
+  for (const [name, set] of [['三颗同向并排紧贴', parallel], ['花瓣形（IMG_9899）', flower], ['五颗叠着（IMG_9902）', stack]]) {
+    it(`${name}：合拢夹爪推不进去的缝用一根手指拨，全部分拣，手指从不碰到别的零件和引脚`, () => {
+      const { tasks, skipped } = plan(set, binsFor(set), ARM, { footprints: fps });
+      expect(skipped).toEqual([]);
+      expect(tasks.filter((t) => t.kind === 'pick')).toHaveLength(set.length);
+      expect(simulate(set, tasks).size).toBe(0);
+    });
+  }
+
+  it('单指拨时夹爪张到最大：开口与 GRIP_MAX 一致；拨开前夹爪调到对应开口', () => {
+    expect(PUSH.openGap).toBe(GRIP_MAX);
+    const { tasks } = plan(flower, binsFor(flower), ARM, { footprints: fps });
+    const single = tasks.filter((t) => t.kind === 'push' && t.gap > 0);
+    expect(single.length).toBeGreaterThan(0);
+    const home = [Math.PI / 2, 0.6, -1.4, -0.8, 0];
+    const segs = buildSequence(tasks, flower, ARM, { startAngles: home, homeAngles: home });
+    for (const s of segs.filter((q) => q.push)) {
+      const t = tasks[s.task];
+      const lastGrip = segs.slice(0, segs.indexOf(s)).filter((q) => q.type === 'grip').pop();
+      expect(lastGrip?.to ?? GRIP_MAX).toBe(t.gap);
+    }
   });
 
   it('动作序列：拨开时夹爪合拢、下到板面、平移，零件跟着走', () => {

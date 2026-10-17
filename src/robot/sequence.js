@@ -73,7 +73,8 @@ export function buildSequence(tasks, parts, arm, { startAngles, homeAngles, star
 
   tasks.forEach((t, i) => {
     if (t.kind === 'push') {
-      if (gap > 0) grip(0, i, '合拢夹爪');
+      const g = t.gap ?? 0;
+      if (Math.abs(gap - g) > 1e-6) grip(g, i, g > 0 ? '张开夹爪（用一根手指拨）' : '合拢夹爪');
       move(solve(t.hoverStart, t.gripYaw), i, '移到要拨开的零件旁');
       line(t.hoverStart, t.start, t.gripYaw, i, '下到板面');
       line(t.start, t.end, t.gripYaw, i, '拨开', { push: { partId: t.partId, from: t.partFrom, to: t.partTo } });

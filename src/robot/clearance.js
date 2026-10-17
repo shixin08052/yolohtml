@@ -15,7 +15,8 @@ export const GRIP_CLEARANCE = [5, 3];
 const OFFSETS = [0, 1, -1, 2, -2];
 const GRASP_END = 2;
 /** 拨开：每次最多推多远、步长；合拢的夹爪离零件多远开始推；推完零件离板边至少多远 */
-export const PUSH = { maxMm: 20, stepMm: 1, backoffMm: 1.5, boardMargin: 4, minContactMm: 1.5 };
+export const PUSH = { maxMm: 35, stepMm: 1, backoffMm: 1.5, boardMargin: 4, minContactMm: 1.5, openGap: 34 };
+// openGap：单指拨时夹爪张到最大（与 robot/sequence.js 的 GRIP_MAX 相同，有单元测试核对）
 /** 推杆（合拢的夹爪）相对零件中心的横向偏移（mm）：推杆宽 9 mm，比 LED 还宽，偏到外侧才不会顶到旁边的零件 */
 const PUSH_SIDE = [0, 1, -1, 1.5, -1.5, 2, -2, 2.5, -2.5, 3, -3];
 
@@ -188,20 +189,24 @@ export function separateBodies(parts, fps, { maxMove = 2, gapMm = 0.3, iters = 2
 }
 
 /**
- * 规划一次拨开：试若干方向（背离旁边零件、垂直于长轴两侧、沿长轴两头、八个方位），每个方向按 1 mm 一步往外推，
- * 推的路上零件不能撞到别的零件、合拢的夹爪落点和推完的位置也不能压到别的零件，零件留在板内；
- * 推到某处能下爪就停。取所有方向里推得最短的。
+ * 规划一次拨开：试若干方向（背离旁边零件、垂直于长轴两侧、沿长轴两头、每 15° 一个方位）和三种拨法：
+ *   closed：夹爪合拢，两根手指一起顶（推杆沿推的方向厚 11 mm、横向宽 9 mm）；
+ *   front ：夹爪张到最大，用前面那根手指的外侧顶，另一根手指在后面跟着（手指只有 5.5 mm 厚，插得进零件之间的窄缝）；
+ *   back  ：夹爪张到最大、跨住零件，用后面那根手指的垫片顶，前面那根手指从零件另一侧走（零件在两指之间）。
+ * 每种按 1 mm 一步往外推：推的路上零件（连同引脚）不能插进别的零件和别人的引脚、两根手指扫过的地方不能有别的零件和引脚、
+ * 零件留在板内；手指落下的地方也不能压到任何引脚（包括被推那颗自己的——不从引脚那一侧推）。推到能下爪就停，取推得最短的。
  * @param {object} part
  * @param {object[]} others
  * @param {{ width: number, fps: object, board: { width: number, height: number },
  *           ok?: (point: number[], gripYaw: number) => boolean, reach?: (p: number[], pushYaw: number) => boolean }} o
- *   ok：抓法的额外检查（传给 findGrasp）；reach：夹爪合拢推的起点、终点是否够得着
- * @returns {{ dir: number[], dist: number, start: number[], end: number[], pushYaw: number, part: object }|null}
- *   start / end：合拢夹爪指尖中心的起止位置；part：推完后的零件
+ *   ok：抓法的额外检查（传给 findGrasp）；reach：指尖中心推的起点、终点是否够得着
+ * @returns {{ dir: number[], dist: number, start: number[], end: number[], pushYaw: number, gap: number, mode: string, part: object }|null}
+ *   start / end：指尖中心（两指中间）的起止位置；gap：推时夹爪的开口
  */
 export function planPush(part, others, { width, fps, board, ok = () => true, reach = () => true }) {
   const obst = others.map((o) => partPolys(o, fps));
   const ownLeads = leadPolys(part, fps);
+  const ownBody = bodyPolys(part, fps);
   const near = others.filter((o) => Math.hypot(o.x - part.x, o.y - part.y) < 15);
   const dirs = [];
   if (near.length) {
@@ -211,43 +216,56 @@ export function planPush(part, others, { width, fps, board, ok = () => true, rea
   }
   const a = rad(part.rotDeg ?? 0);
   dirs.push(a + Math.PI / 2, a - Math.PI / 2, a, a + Math.PI);
-  for (let k = 0; k < 12; k++) dirs.push((k * Math.PI) / 6);
+  for (let k = 0; k < 24; k++) dirs.push((k * Math.PI) / 12);
 
   const inBoard = (polys) => polys.every((P) => P.every(([x, y]) => x >= PUSH.boardMargin && y >= PUSH.boardMargin && x <= board.width - PUSH.boardMargin && y <= board.height - PUSH.boardMargin));
   // 推的路上零件与别的零件只要不插进去就行（紧贴着滑过去可以）：本体收缩一点再判断，免得擦边被算成相撞
   const slide = (p) => partPolys(p, fps, -0.15);
-  const pusher = (p, th) => fingerPolys(p, th, 0, { grow: 0.2 });
-  const body = bodyPolys(part, fps)[0];
+  const G = PUSH.openGap;
+  const T = FINGER.thick;
+  // 三种拨法：开口、指尖中心相对"顶住零件的那个面"往后退多少（沿推的方向）
+  const modes = [
+    { mode: 'closed', gap: 0, back: T },
+    { mode: 'front', gap: G, back: G / 2 + T },
+    { mode: 'back', gap: G, back: -G / 2 },
+  ];
+  const body = ownBody[0];
   let best = null;
   for (const th of dirs) {
     const ux = Math.cos(th);
     const uy = Math.sin(th);
     const vx = -uy;
     const vy = ux;
+    const fingers = (p, gap) => fingerPolys(p, th, gap, { grow: 0.2 });
     // 零件在推的方向上的背面、在横向上的宽度
     const back = Math.max(...body.map(([x, y]) => -((x - part.x) * ux + (y - part.y) * uy)));
     const side = body.map(([x, y]) => (x - part.x) * vx + (y - part.y) * vy);
     const [s0, s1] = [Math.min(...side), Math.max(...side)];
-    const off = back + PUSH.backoffMm + FINGER.thick;
-    for (const t of PUSH_SIDE) {
-      // 推杆（两指连线沿推的方向）的面宽 FINGER.len，横向偏 t 后与零件宽度的重叠要够，才推得动
-      const contact = Math.min(t + FINGER.len / 2, s1) - Math.max(t - FINGER.len / 2, s0);
-      if (contact < PUSH.minContactMm) continue;
-      const start = [part.x - ux * off + vx * t, part.y - uy * off + vy * t];
-      // 推杆落下的地方不能压到别的零件和任何引脚（包括被推那颗自己的引脚：不能从引脚那一侧推）
-      if (obst.some((ob) => anyOverlap(pusher(start, th), ob)) || anyOverlap(pusher(start, th), ownLeads)) continue;
-      for (let d = PUSH.stepMm; d <= PUSH.maxMm + 1e-9; d += PUSH.stepMm) {
-        if (best && d >= best.dist) break;
-        const moved = { ...part, x: part.x + ux * d, y: part.y + uy * d };
-        const end = [start[0] + ux * d, start[1] + uy * d];
-        // 推的路上零件（连同引脚）撞到别的零件或别人的引脚、推杆扫到别的零件或引脚：这个方向不行
-        if (obst.some((ob) => anyOverlap(slide(moved), ob) || anyOverlap(pusher(end, th), ob))) break;
-        if (!inBoard(bodyPolys(moved, fps))) break;
-        // 能下爪了吗（夹的时候推杆已经抬走，不用管它）
-        if (!findGrasp(moved, others, { width, fps, ok })) continue;
-        if (!reach(start, th) || !reach(end, th)) break;
-        best = { dir: [ux, uy], dist: d, start, end, pushYaw: th, part: moved };
-        break;
+    for (const m of modes) {
+      // 顶住零件的那个面在零件背面后 backoff；指尖中心再往后 m.back
+      const off = back + PUSH.backoffMm + m.back;
+      for (const t of PUSH_SIDE) {
+        // 手指面宽 FINGER.len，横向偏 t 后与零件宽度的重叠要够，才推得动
+        const contact = Math.min(t + FINGER.len / 2, s1) - Math.max(t - FINGER.len / 2, s0);
+        if (contact < PUSH.minContactMm) continue;
+        const start = [part.x - ux * off + vx * t, part.y - uy * off + vy * t];
+        // 手指落下的地方不能压到别的零件和任何引脚，也不能压到被推那颗自己（跨住它时前面那根手指在它另一侧）
+        const f0 = fingers(start, m.gap);
+        if (obst.some((ob) => anyOverlap(f0, ob)) || anyOverlap(f0, ownLeads) || anyOverlap(f0, ownBody)) continue;
+        for (let d = PUSH.stepMm; d <= PUSH.maxMm + 1e-9; d += PUSH.stepMm) {
+          if (best && d >= best.dist) break;
+          const moved = { ...part, x: part.x + ux * d, y: part.y + uy * d };
+          const end = [start[0] + ux * d, start[1] + uy * d];
+          // 推的路上零件（连同引脚）撞到别的零件或别人的引脚、手指扫到别的零件或引脚：这个方向不行
+          const f1 = fingers(end, m.gap);
+          if (obst.some((ob) => anyOverlap(slide(moved), ob) || anyOverlap(f1, ob))) break;
+          if (!inBoard(bodyPolys(moved, fps))) break;
+          // 能下爪了吗（夹的时候推的手指已经抬走，不用管它）
+          if (!findGrasp(moved, others, { width, fps, ok })) continue;
+          if (!reach(start, th) || !reach(end, th)) break;
+          best = { dir: [ux, uy], dist: d, start, end, pushYaw: th, gap: m.gap, mode: m.mode, part: moved };
+          break;
+        }
       }
     }
   }

@@ -1505,7 +1505,7 @@ function renderSortSection() {
   html += '<ol class="task-list">' + tasks.map((t, i) => {
     const p = byId.get(t.partId);
     if (t.kind === 'push') {
-      return `<li data-i="${i}" class="push"><span class="dot" style="--c:${partColor(p)}"></span>拨开 ${displayName(p)}<span class="muted"> · 夹爪下不去，先推开 ${fmt(t.dist, 0)} mm</span></li>`;
+      return `<li data-i="${i}" class="push"><span class="dot" style="--c:${partColor(p)}"></span>拨开 ${displayName(p)}<span class="muted"> · 夹爪下不去，先${t.gap > 0 ? '用一根手指' : ''}推开 ${fmt(t.dist, 0)} mm</span></li>`;
     }
     const bin = sortPlan.bins.find((b) => b.id === t.binId);
     return `<li data-i="${i}"><span class="dot" style="--c:${partColor(p)}"></span>${partName(p)}<span class="muted"> → ${bin.label}盒</span></li>`;
