@@ -1,7 +1,7 @@
 // 信息面板"状态"分区里的流程图：整条流程（含出错分支）画成 SVG，按当前状态给每个节点上色。
 // flowStatuses、flowSvg 都是纯函数（只拼字符串，不碰 DOM），便于测试。
 //
-// 主流程：选择照片 → 读取照片·内参 → 识别码·单应性 → 手机位姿 → 零件检测 → 坐标映射·建场景 → 转场 → 机械臂分拣 → 完成
+// 主流程：选择照片 → 读取照片 → 识别码·单应性 → 手机位姿 → 零件检测 → 坐标映射·建场景 → 转场 → 机械臂分拣 → 完成
 // 出错分支：读不了照片、识别不到码、位姿无效、检测失败（→ 手动框选 → 回到建场景）、有零件够不到（跳过）
 // 演示模式在建场景和转场之间多一步"正视图 · 确认识别结果"（flowNodes({ demo: true })）
 
@@ -11,9 +11,9 @@ export const FLOW_STATUS = ['todo', 'active', 'done', 'error', 'warn', 'idle'];
 /** 主流程节点（按顺序）；hint 为该步进行中 / 等待时的提示 */
 export const MAIN_NODES = [
   { id: 'input', label: '选择照片（上传 / 示例）', hint: '等待上传照片，或从右上角选择示例' },
-  { id: 'image', label: '读取照片 · 内参', hint: '读取照片、按 EXIF 或标定文件确定内参' },
+  { id: 'image', label: '读取照片', hint: '读取照片（内参固定，用 iPhone 13 Pro 的标定结果）' },
   { id: 'calib', label: '识别码 · 单应性', hint: '识别 4 个 ArUco 码，求底板到照片的单应性' },
-  { id: 'pose', label: '手机位姿', hint: '由单应性和内参求手机的位置与朝向' },
+  { id: 'pose', label: '手机位姿', hint: '由单应性和固定内参求手机的位置与朝向；斜拍时自动改用照片估计的焦距' },
   { id: 'detect', label: '零件检测（YOLO + 颜色）', hint: '模型推理找零件，颜色分割补漏' },
   { id: 'scene', label: '坐标映射 · 建 3D 场景', hint: '检测框映射到底板坐标，摆放 3D 零件' },
   { id: 'transition', label: '照片 → 3D 转场', hint: '切到 3D 视图播放转场' },
@@ -38,7 +38,7 @@ export function flowNodes({ demo = false } = {}) {
 export const SIDE_NODES = [
   { id: 'e_image', from: 'image', label: '读不了照片', sub: '换 JPG 或重新选择' },
   { id: 'e_calib', from: 'calib', label: '识别不到码', sub: '重拍：整张板入镜' },
-  { id: 'e_pose', from: 'pose', label: '位姿无效', sub: '换内参来源或重拍' },
+  { id: 'e_pose', from: 'pose', label: '位姿无效', sub: '重拍：码别太斜、太小' },
   { id: 'e_detect', from: 'detect', label: '检测失败', sub: '推理出错 / 无检测文件' },
   { id: 'manual', from: 'e_detect', at: 'scene', label: '手动框选零件', sub: '框好后继续建场景', to: 'scene' },
   { id: 'e_sort', from: 'sort', label: '有零件够不到', sub: '跳过，其余照常分拣' },

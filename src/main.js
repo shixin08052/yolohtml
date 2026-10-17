@@ -812,7 +812,7 @@ function runPose() {
   const pose0 = poseFromHomography(K, calib.H, world, image, { refine: false }); // 第 1–7 步的解析解
   const pose = poseFromHomography(K, calib.H, world, image);
   if (!(pose.heightMm > 0)) {
-    store.fail('pose', '求出的手机位置在桌面以下，位姿无效。请检查内参或重新拍照。');
+    store.fail('pose', '求出的手机位置在桌面以下，位姿无效。请重新拍照（码不要太斜、太小）。');
     return;
   }
   // 由这张照片估计焦距（同一张照片只算一次）
