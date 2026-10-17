@@ -40,15 +40,38 @@ export const ARM = {
 // 料盒壁厚（mm）：盒底上表面高 BIN_WALL
 export const BIN_WALL = 2;
 
-// 料盒：每类一个，电阻在左、LED 在右（size 为 X 宽、Y 长、高，mm）
+// LED 的颜色（按灯体像素判断，见 vision/leads.js）：名称、3D 与界面用的颜色；按颜色分拣时每种颜色一个料盒
+export const LED_COLORS = {
+  red: { name: '红色', hex: '#d94c4c' },
+  green: { name: '绿色', hex: '#3aa65a' },
+  blue: { name: '蓝色', hex: '#3d6be0' },
+  yellow: { name: '黄色', hex: '#e0ad2e' },
+  clear: { name: '透明', hex: '#9fb4bf' },
+};
+
+// 料盒：按需出现——电阻一个盒；LED 按颜色，照片里有几种颜色就有几个盒（robot/bins.js 的 binsFor）。
+// 盒子的位置从下面的格位里依次取：电阻固定在左中，LED 先右中，再右远、右近、左远、左近、前方
+export const BIN_SIZE = [60, 66, 35]; // X 宽、Y 长、高（mm）
+export const BIN_SLOTS = {
+  leftMid: [-40, 105],
+  rightMid: [337, 105],
+  rightFar: [337, 180],
+  rightNear: [337, 30],
+  leftFar: [-40, 180],
+  leftNear: [-40, 30],
+  front: [148.5, -55], // 底板前方（操作者一侧）：七种同时出现时才用到
+};
+
+// 不分颜色时的两个料盒（单元测试、颜色未知的 LED 用）
 export const BINS = [
-  { id: 0, cls: 0, center: [-40, 105], size: [60, 66, 35] },
-  { id: 1, cls: 1, center: [337, 105], size: [60, 66, 35] },
+  { id: 0, cls: 0, key: 'resistor', label: '色环电阻', hex: '#3f7fd0', center: BIN_SLOTS.leftMid, size: BIN_SIZE },
+  { id: 1, cls: 1, key: 'led', label: 'LED', hex: '#d94c4c', center: BIN_SLOTS.rightMid, size: BIN_SIZE },
 ];
 
 // 检测：输入尺寸、置信度阈值、NMS 阈值（只用于原始输出）、同类去重阈值
-// 去重：训练数据少，端到端模型偶尔对同一个零件出两个框（IoU 0.96–0.98，分数 0.5–0.75），同类 IoU 大于 dedupIou 的只留高分
-export const DETECT = { imgsz: 1024, scoreThreshold: 0.4, iouThreshold: 0.5, dedupIou: 0.7 };
+// 去重：训练数据少，端到端模型偶尔对同一个零件出两个框（IoU 0.96–0.98，分数 0.5–0.75），同类 IoU 大于 dedupIou 的只留高分。
+// 阈值取 0.9：几颗 LED 斜着并排贴在一起时，轴对齐的框彼此重叠也很多（可到 0.7–0.85），阈值太低会把真的第二颗删掉
+export const DETECT = { imgsz: 1024, scoreThreshold: 0.4, iouThreshold: 0.5, dedupIou: 0.9 };
 
 // 模型文件（public/models/，步骤 13 导出）：parts 为零件模型，coco 为官方 COCO 模型（调试用）
 export const MODELS = {

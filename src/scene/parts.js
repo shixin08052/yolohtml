@@ -5,7 +5,8 @@
 // 引脚网格带 userData.lead = true，计算本体包围盒时排除。
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
-import { CLASSES } from '../config.js';
+import { CLASSES, LED_COLORS } from '../config.js';
+import { partName, partColor } from '../robot/bins.js';
 import { toThree } from '../math/coords.js';
 
 /**
@@ -149,11 +150,24 @@ function rod(p0, p1, r, mat) {
 }
 
 /**
+ * LED 灯体材质：按识别出的颜色；透明的用近乎无色、半透明、高光强的材质
+ * @param {string} [color] LED_COLORS 的键
+ */
+function ledMaterial(color) {
+  if (color === 'clear') {
+    return new THREE.MeshPhysicalMaterial({ color: '#f4f8fa', roughness: 0.05, metalness: 0, transparent: true, opacity: 0.38, clearcoat: 1, clearcoatRoughness: 0.05, depthWrite: false });
+  }
+  const hex = LED_COLORS[color]?.hex ?? CLASSES[1].color;
+  return new THREE.MeshStandardMaterial({ color: hex, roughness: 0.25, metalness: 0.1, transparent: true, opacity: 0.92 });
+}
+
+/**
  * 创建一个零件模型（未旋转、位于原点）
  * @param {number} cls 类别 ID
+ * @param {{ color?: string }} [opts] color：LED 灯体颜色（LED_COLORS 的键）
  * @returns {THREE.Group}
  */
-export function createPartMesh(cls) {
+export function createPartMesh(cls, { color } = {}) {
   const g = new THREE.Group();
   g.name = `part-${CLASSES[cls].key}`;
   switch (cls) {
@@ -183,7 +197,7 @@ export function createPartMesh(cls) {
       // LED（躺平，像实物那样侧放在桌上）：灯体靠底边撑起，轴心高 2.9；两根引脚从底边伸出、斜搭到桌面
       // 未平移前：底边 x ∈ [−2.5, −1.5]，灯体 [−1.5, 3.5]，半球头到 6.0，引脚到 −22.5；整体平移 −1.75 使本体居中
       const S = LED_SHIFT;
-      const mat = material(1, { roughness: 0.25, transparent: true, opacity: 0.92 });
+      const mat = ledMaterial(color);
       const axisY = 2.9;
       g.add(lyingCylinder(2.9, 1, mat, -2 + S, axisY)); // 底边
       g.add(lyingCylinder(2.5, 5, mat, 1 + S, axisY)); // 灯体
@@ -247,7 +261,7 @@ export function createPartsLayer({ requestRender, onFrame = () => {} }) {
   /** 标签文字：坐标取目标方法的结果 */
   function labelText(p, parallax) {
     const [x, y] = posAt(p, parallax ? 1 : 0);
-    return `<b>${CLASSES[p.cls].name}</b><span>(${fmt(x)}, ${fmt(y)})${p.score < 1 ? ` · ${p.score.toFixed(2)}` : ''}</span>`;
+    return `<b>${partName(p)}</b><span>(${fmt(x)}, ${fmt(y)})${p.score < 1 ? ` · ${p.score.toFixed(2)}` : ''}</span>`;
   }
 
   function place() {
@@ -301,12 +315,12 @@ export function createPartsLayer({ requestRender, onFrame = () => {} }) {
       for (const part of parts) {
         const node = new THREE.Group();
         node.name = `part-${part.id}`;
-        const model = createPartMesh(part.cls);
+        const model = createPartMesh(part.cls, { color: part.color });
         model.rotation.y = (part.rotDeg * Math.PI) / 180;
         node.add(model);
         const text = document.createElement('div');
         text.className = 'part-tag';
-        text.style.setProperty('--c', CLASSES[part.cls].color);
+        text.style.setProperty('--c', partColor(part));
         text.innerHTML = labelText(part, parallax);
         const label = new CSS2DObject(text);
         label.position.set(0, part.heightMm + 4, 0);

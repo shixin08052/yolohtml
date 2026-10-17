@@ -1,6 +1,7 @@
 // 演示模式的"正视图 · 确认识别结果"：底板正射图（照片按单应性拉正），把识别到的元件按类别颜色框出来、编号，
 // 下方一条确认栏：确认后开始转场建模；也可以回到照片上修改框，或重新选照片。
 // outlineCorners、countByClass 是纯函数（便于测试）；createConfirmView 负责画布和按钮。
+import { partName, partColor } from '../robot/bins.js';
 
 /**
  * 元件在底板上的轮廓（只框本体，不含引脚）：四个角，底板坐标 mm
@@ -21,12 +22,21 @@ export function outlineCorners(part, body, pad = 1.5) {
 }
 
 /**
- * 各类别的数量（按类别顺序，只列出有的）
- * @param {{ cls: number }[]} parts
- * @param {{ id: number, name: string, color: string }[]} classes
+ * 各种零件的数量（LED 按颜色分开，"红色 LED × 2"），按类别、颜色的顺序，只列出有的
+ * @param {{ cls: number, color?: string }[]} parts
+ * @param {{ id: number }[]} classes
+ * @returns {{ name: string, color: string, n: number }[]}
  */
 export function countByClass(parts, classes) {
-  return classes.map((c) => ({ ...c, n: parts.filter((p) => p.cls === c.id).length })).filter((c) => c.n > 0);
+  const out = new Map();
+  for (const c of classes) {
+    for (const p of parts.filter((q) => q.cls === c.id)) {
+      const name = partName(p);
+      if (!out.has(name)) out.set(name, { name, color: partColor(p), n: 0 });
+      out.get(name).n++;
+    }
+  }
+  return [...out.values()];
 }
 
 /** 零件的显示编号（从 1 开始，与导出的零件图片、分拣指令一致） */
@@ -42,7 +52,7 @@ export function drawPartBoxes(ctx, { parts, classes, body, toScreen, width, scal
   ctx.save();
   ctx.lineJoin = 'round';
   parts.forEach((p, i) => {
-    const color = classes[p.cls]?.color ?? '#c96442';
+    const color = partColor(p);
     const pts = outlineCorners(p, body(p.cls), pad).map(toScreen);
     ctx.beginPath();
     pts.forEach(([x, y], j) => (j ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
@@ -54,7 +64,7 @@ export function drawPartBoxes(ctx, { parts, classes, body, toScreen, width, scal
     ctx.stroke();
     // 编号：放在轮廓最上面的角旁边
     const top = pts.reduce((a, b) => (b[1] < a[1] ? b : a));
-    const label = `${partNo(p, i)} ${classes[p.cls]?.name ?? ''}`;
+    const label = `${partNo(p, i)} ${partName(p)}`;
     ctx.font = `600 ${12 * scale}px system-ui, "PingFang SC", "Microsoft YaHei", sans-serif`;
     const tw = ctx.measureText(label).width + 10 * scale;
     const h = 18 * scale;

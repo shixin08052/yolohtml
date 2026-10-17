@@ -1,6 +1,7 @@
 // 导出"零件图片"：一张 PNG 汇总识别结果——上面是底板正视图（框出元件、编号），下面是每个零件的特写
 // （从原照片按单应性取出，转到长轴水平），并标上类别、坐标、朝向、置信度。需要浏览器环境（canvas）。
 import { drawPartBoxes, countByClass, partNo } from './confirmView.js';
+import { partName, partColor } from '../robot/bins.js';
 import { invert3 } from '../vision/homography.js';
 
 /** 特写窗口（mm）：沿零件长轴 × 垂直方向；分辨率按格子大小 */
@@ -122,17 +123,17 @@ export function renderPartSheet({ front, toFront, photo, H, parts, classes, body
   parts.forEach((p, i) => {
     const x = pad + (i % cols) * (cellW + gap);
     const y = gridTop + Math.floor(i / cols) * (cropH + capH + gap);
-    const cls = classes[p.cls];
+    const color = partColor(p);
     ctx.save();
     ctx.translate(x, y);
     drawCrop(ctx, photo, H, p, cellW, cropH);
     ctx.restore();
-    ctx.strokeStyle = cls?.color ?? '#999';
+    ctx.strokeStyle = color;
     ctx.lineWidth = 3;
     ctx.strokeRect(x + 1.5, y + 1.5, cellW - 3, cropH - 3);
-    ctx.fillStyle = cls?.color ?? '#333';
+    ctx.fillStyle = color;
     ctx.font = `600 22px ${FONT}`;
-    ctx.fillText(`${partNo(p, i)}  ${cls?.name ?? ''}`, x, y + cropH + 30);
+    ctx.fillText(`${partNo(p, i)}  ${partName(p)}`, x, y + cropH + 30);
     ctx.fillStyle = '#4a4742';
     ctx.font = `18px ${FONT}`;
     ctx.fillText(`位置 (${f1(p.x)}, ${f1(p.y)}) mm · 朝向 ${f1(p.rotDeg)}°`, x, y + cropH + 56);

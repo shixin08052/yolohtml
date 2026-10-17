@@ -1,13 +1,15 @@
 // 颜色分割找零件（纯函数，不碰 DOM），用来补 YOLO 的漏检。做法与 training/autolabel.py 相同：
 // 1. 只在零件区域（WORK_AREA：板内缩 12 mm、挖掉 4 个码）里找，桌面、码和板边文字不会误检
-// 2. HSV（OpenCV 约定：H 0–180，S、V 0–255）里取红色（LED 灯体）和蓝色（电阻本体）像素
-// 3. 闭运算把色环、高光连成一块，每个连通块的外接矩形是一个候选框；红色像素多算 LED，蓝色多算电阻
+// 2. HSV（OpenCV 约定：H 0–180，S、V 0–255）里取红色、绿色（LED 灯体）和蓝色（电阻本体或蓝色 LED）像素
+// 3. 闭运算把色环、高光连成一块，每个连通块的外接矩形是一个候选框；红、绿像素多算 LED；
+//    蓝色的块按面积分：电阻本体约 6.3 × 2.4 mm（≈ 15 mm²），躺平的 LED 约 8.5 × 5.8 mm（≈ 45 mm²），大于 blueLedMm2 算 LED
+// 透明 LED 没有颜色，这里找不到，只能靠模型。
 // 引脚是银灰色、饱和度低，自然不会被框进去。
 // 特点：几乎不漏，但框常常偏大（阴影、反光、两个零件挨在一起会连成一块），所以只用来补 YOLO 没框到的零件。
 import { inWorkArea } from './mapping.js';
 
 /** 默认参数（与 autolabel.py 一致） */
-export const COLOR_SEG = { redSat: 100, redVal: 50, blueSat: 60, closeMm: 1.5, minMm: 2 };
+export const COLOR_SEG = { redSat: 100, redVal: 50, blueSat: 60, greenSat: 80, greenVal: 50, closeMm: 1.5, minMm: 2, blueLedMm2: 28 };
 
 const RESISTOR = 0;
 const LED = 1;
@@ -88,6 +90,7 @@ export function segmentParts(img, Hinv, pxPerMm, opts = {}) {
       if (!inWorkArea(X, Y)) continue;
       const [hh, s, vv] = rgbToHsv(data[p], data[p + 1], data[p + 2]);
       if ((hh <= 10 || hh >= 170) && s >= o.redSat && vv >= o.redVal) red[i] = 1;
+      else if (hh >= 35 && hh < 80 && s >= o.greenSat && vv >= o.greenVal) red[i] = 1; // 绿色 LED：与红色一样算 LED 像素
       else if (hh >= 80 && hh <= 130 && s >= o.blueSat) blue[i] = 1;
       mask[i] = red[i] | blue[i];
     }
@@ -141,7 +144,9 @@ export function segmentParts(img, Hinv, pxPerMm, opts = {}) {
       }
     }
     if (area < minArea || !(x1 >= x0)) continue;
-    parts.push({ cls: nr > nb ? LED : RESISTOR, box: [x0, y0, x1 + 1, y1 + 1], area, red: nr, blue: nb });
+    // 蓝色为主的块：面积大的是蓝色 LED，小的是电阻本体
+    const cls = nr > nb || area / (pxPerMm * pxPerMm) > o.blueLedMm2 ? LED : RESISTOR;
+    parts.push({ cls, box: [x0, y0, x1 + 1, y1 + 1], area, red: nr, blue: nb });
   }
   return parts;
 }

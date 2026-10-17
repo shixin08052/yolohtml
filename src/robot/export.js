@@ -3,6 +3,7 @@
 // 坐标都是底板坐标（mm，原点在底板左下角，X 向右、Y 向远处、Z 向上），角度为度。
 import { ikWorld } from './ik.js';
 import { GRIP_WIDTH } from './planner.js';
+import { partName } from './bins.js';
 import { toCsv } from '../experiment.js';
 
 const deg = (r) => (r * 180) / Math.PI;
@@ -37,7 +38,8 @@ export function sortInstructions({ tasks, skipped }, parts, bins, classes, arm) 
       partId: t.partId,
       number: t.partId + 1, // 显示编号（与零件图片一致）
       cls: p.cls,
-      name: classes[p.cls]?.name ?? String(p.cls),
+      name: partName(p),
+      color: p.color ?? null,
       part: { x: r2(p.x), y: r2(p.y), rotDeg: r2(p.rotDeg), score: r2(p.score) },
       pick: {
         hover: pt(t.hoverFrom),
@@ -47,7 +49,7 @@ export function sortInstructions({ tasks, skipped }, parts, bins, classes, arm) 
         angles: anglesDeg(t.from, arm, t.gripYaw),
       },
       place: {
-        bin: bin ? { id: bin.id, name: `${classes[bin.cls]?.name ?? bin.cls}盒` } : null,
+        bin: bin ? { id: bin.id, key: bin.key, name: `${bin.label ?? classes[bin.cls]?.name ?? bin.cls}盒` } : null,
         hover: pt(t.hoverTo),
         point: pt(t.to),
         gripYawDeg: placeYaw == null ? null : r2(deg(placeYaw)),
@@ -56,7 +58,7 @@ export function sortInstructions({ tasks, skipped }, parts, bins, classes, arm) 
       rest: t.drop ? { x: r2(t.drop.to[0]), y: r2(t.drop.to[1]), z: r2(t.drop.to[2]), yawDeg: r2(t.drop.to[3]) } : null,
     };
   });
-  const skip = skipped.map((p) => ({ partId: p.id, number: p.id + 1, cls: p.cls, name: classes[p.cls]?.name ?? String(p.cls), x: r2(p.x), y: r2(p.y), reason: p.skipReason }));
+  const skip = skipped.map((p) => ({ partId: p.id, number: p.id + 1, cls: p.cls, name: partName(p), x: r2(p.x), y: r2(p.y), reason: p.skipReason }));
   return { steps, skipped: skip };
 }
 

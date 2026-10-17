@@ -9,6 +9,7 @@
 import { BIN_WALL } from '../config.js';
 import { ikWorld } from './ik.js';
 import { DROP, settle } from './drop.js';
+import { binKey } from './bins.js';
 
 /** 每类零件被夹住处的宽度（mm）：电阻本体中部 Φ2.0（两头的端帽 Φ2.4）、LED 灯体 Φ5 */
 export const GRIP_WIDTH = { 0: 2, 1: 5 };
@@ -79,7 +80,8 @@ export function plan(parts, bins, arm, { start = [arm.base[0], arm.base[1], 0], 
   const skipped = [];
   const candidates = [];
   for (const p of parts) {
-    const bin = bins.find((b) => b.cls === p.cls);
+    // 料盒按 binKey 对应（LED 按颜色）；没有 key 的旧式料盒按类别对应
+    const bin = bins.find((b) => (b.key ? b.key === binKey(p) : b.cls === p.cls));
     if (!bin) {
       skipped.push({ ...p, reachable: false, skipReason: '没有对应的料盒' });
       continue;

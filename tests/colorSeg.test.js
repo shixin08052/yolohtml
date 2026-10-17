@@ -90,3 +90,16 @@ describe('YOLO 与颜色分割合并', () => {
     expect(dets.every((d) => d.origin === 'color')).toBe(true);
   });
 });
+
+describe('颜色分割：各种颜色的 LED', () => {
+  it('绿色 LED 算 LED；蓝色的块按大小分：大的是蓝色 LED，细长小块是电阻', () => {
+    const img = board([
+      { X0: 100, Y0: 100, X1: 108.5, Y1: 105.8, rgb: [40, 170, 70] }, // 绿色 LED
+      { X0: 140, Y0: 100, X1: 148.5, Y1: 105.8, rgb: BLUE }, // 蓝色 LED（8.5 × 5.8 mm）
+      { X0: 180, Y0: 100, X1: 186.3, Y1: 102.4, rgb: BLUE }, // 电阻本体（6.3 × 2.4 mm）
+    ]);
+    const parts = segmentParts(img, Hinv, PPM).sort((a, b) => a.box[0] - b.box[0]);
+    expect(parts.map((p) => p.cls)).toEqual([1, 1, 0]);
+  });
+});
+

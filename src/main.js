@@ -21,9 +21,11 @@ import { poseFromHomography, estimateFocal } from './vision/pose.js';
 import { intrinsicsMatrix } from './math/pinhole.js';
 import { mul3 } from './math/linalg.js';
 import { drawPose } from './ui/poseOverlay.js';
-import { boardHomography, rectify, invert3 } from './vision/homography.js';
+import { boardHomography, rectify, invert3, bitmapPixels } from './vision/homography.js';
 import { boxToTexture, erasePolygons } from './vision/erase.js';
 import { estimateYaw, expandPoly } from './vision/orientation.js';
+import { samplePatch, boardToPatch, leadDirection, ledColor, LEAD } from './vision/leads.js';
+import { binsFor, partName as displayName, partColor } from './robot/bins.js';
 import { segmentParts, fuseDetections } from './vision/colorSeg.js';
 import { measurePaper, EDGE_NAMES, CHECK_LIMITS } from './vision/boardCheck.js';
 import { markerCornersWorld, markerRectOnPage, paperFrame, designFrame, frameMatrix } from './vision/boardLayout.js';
@@ -34,7 +36,7 @@ import { createPartsLayer, leadFootprint, partFootprint } from './scene/parts.js
 import { detect, MockMissingError, detectionsFileName, serializeDetections, parseDetections, lastOnnxRun, getOnnxDetector } from './vision/detector.js';
 import { mapDetections, selectMethod } from './vision/mapping.js';
 import { partsTruthError } from './vision/evaluate.js';
-import { CLASSES, WORK_AREA, ARM, BINS, MODELS, DETECT } from './config.js';
+import { CLASSES, WORK_AREA, ARM, BIN_SLOTS, BIN_SIZE, MODELS, DETECT } from './config.js';
 import { createArm } from './scene/arm.js';
 import { createBins } from './scene/bins.js';
 import { ikWorld, fkWorld, fkChain, fromBase, pathClear } from './robot/ik.js';
@@ -163,9 +165,9 @@ world.scene.add(bins.group);
 // 默认视角要装进画面的固定物体：底板四角、料盒外角（含高度）、机械臂底座和初始姿态的关节
 {
   const pts = [[0, 0, 0], [BOARD.width, 0, 0], [BOARD.width, BOARD.height, 0], [0, BOARD.height, 0]];
-  for (const b of BINS) {
-    const [cx, cy] = b.center;
-    const [sx, sy, h] = b.size;
+  // 料盒按需出现：所有可能的格位都装进画面，换照片时视角不跟着变
+  for (const [cx, cy] of Object.values(BIN_SLOTS)) {
+    const [sx, sy, h] = BIN_SIZE;
     for (const dx of [-1, 1]) for (const dy of [-1, 1]) pts.push([cx + (dx * sx) / 2, cy + (dy * sy) / 2, h]);
   }
   const [bx, by] = ARM.base;
@@ -374,7 +376,7 @@ function refreshBoardTexture() {
     const parts = store.state.image?.bitmap === boardTex.bitmap ? store.state.parts ?? [] : [];
     for (const p of parts) {
       const f = leadFootprint(p.cls);
-      if (!f || p.yawSource !== 'photo') continue;
+      if (!f || !p.yawSource) continue;
       const a = (p.rotDeg * Math.PI) / 180;
       const w = f.halfW + 1; // 留 1 mm 余量
       polys.push([[f.minX - 1, -w], [f.maxX + 1, -w], [f.maxX + 1, w], [f.minX - 1, w]].map(([lx, ly]) => {
@@ -591,6 +593,7 @@ store.on('stage:imageLoaded', (st) => {
   stopSorting();
   panel.remove('sort');
   partsLayer.clear();
+  bins.setBins([]); // 料盒按需出现：换照片后等识别出零件再出现
   if (detResult?.bitmap !== image.bitmap) resetDetections();
   if (markerResult?.bitmap !== image.bitmap) {
     debugView.setOverlay('markers', null);
@@ -1124,9 +1127,10 @@ function applyDetections() {
   }
   const t0 = now();
   const K = intrinsicsMatrix(intrinsics);
-  const mapped = mapDetections(detResult.debugOnly ? [] : detResult.detections, { Hinv: calib.Hinv, K, R: pose.R, position: pose.position }, { parallax: parallaxOn });
+  const cam = { Hinv: calib.Hinv, K, R: pose.R, position: pose.position };
+  const mapped = mapDetections(detResult.debugOnly ? [] : detResult.detections, cam, { parallax: parallaxOn });
   const { dropped } = mapped;
-  const parts = refineYaw(mapped.parts);
+  const parts = refineFromPhoto(mapped.parts);
   timeStep('map', now() - t0);
   const t1 = now();
   stopSorting();
@@ -1154,10 +1158,55 @@ function applyDetections() {
 const YAW_SEARCH_MM = 10;
 
 /**
- * 用照片估计电阻、LED 的朝向（检测框是轴对齐的，看不出角度）：
- * 在底板正射图上取检测框对应的区域分出零件像素，按形状求角度；估计不可靠时沿用 mapping 的 0° / 90° 粗判
+ * 按原照片细看每个零件（检测框是轴对齐的，看不出角度，也分不出 LED 颜色）：
+ * 1. 朝向先看引脚（vision/leads.js）：在原照片上以零件为中心取一小块 8 px/mm 的正射图，框外一圈里找引脚，
+ *    LED 由引脚方向反推灯头朝向，电阻由两侧引脚定长轴；旁边零件的本体所在区域不算，挨在一起也互不干扰；
+ * 2. 引脚看不清时退回原来的办法（底板正射图上按零件像素的形状），再不行沿用 mapping 的 0° / 90° 粗判；
+ * 3. LED 判断灯体颜色（红 / 绿 / 蓝 / 黄 / 透明），决定显示颜色和分到哪个料盒
  */
-function refineYaw(parts) {
+function refineFromPhoto(parts) {
+  const { image, calib } = store.state;
+  if (!image || !calib) return parts;
+  const photo = bitmapPixels(image.bitmap);
+  // 每个检测框在底板上的四边形（mm）
+  const boardPoly = (box) => [[box[0], box[1]], [box[2], box[1]], [box[2], box[3]], [box[0], box[3]]].map(([u, v]) => {
+    const H = calib.Hinv;
+    const w = H[2][0] * u + H[2][1] * v + H[2][2];
+    return [(H[0][0] * u + H[0][1] * v + H[0][2]) / w, (H[1][0] * u + H[1][1] * v + H[1][2]) / w];
+  });
+  const polys = parts.map((p) => boardPoly(detResult.detections[p.detIndex].box));
+  const out = parts.map((p, i) => {
+    // 取样窗口：盖住检测框和框外一圈引脚就够（框的半对角 + 外径 + 余量），不必固定 44 mm
+    const half = Math.max(...polys[i].map(([X, Y]) => Math.hypot(X - p.xPlane, Y - p.yPlane)));
+    const size = Math.min(LEAD.patchMm, 2 * (half + LEAD.ringMaxMm + 2));
+    const patch = samplePatch(photo, calib.H, p.xPlane, p.yPlane, size, LEAD.pxPerMm);
+    const toPatch = (poly) => poly.map(([X, Y]) => boardToPatch(patch, X, Y));
+    const body = toPatch(polys[i]);
+    // 旁边的零件：只取离得近的（取样窗口内）
+    const others = polys.filter((_, j) => j !== i && Math.hypot(parts[j].xPlane - p.xPlane, parts[j].yPlane - p.yPlane) < size).map(toPatch);
+    let q = p;
+    const lead = leadDirection(patch, body, p.cls === 1 ? 'led' : 'axis', { others });
+    if (lead?.reliable) q = { ...p, rotDeg: lead.rotDeg, yawSource: 'leads' };
+    if (p.cls === 1) {
+      const c = ledColor(patch, body, { others });
+      if (c) q = { ...q, color: c.color };
+    }
+    return { ...q, name: displayName(q) };
+  });
+  // 引脚看不清的零件才用原来的办法（较慢，只对这些零件算）
+  const rest = out.filter((p) => p.yawSource !== 'leads');
+  if (!rest.length) return out;
+  const byShape = new Map(refineYawByShape(rest).map((p) => [p.id, p]));
+  return out.map((p) => {
+    const q = byShape.get(p.id);
+    return q?.yawSource ? { ...p, rotDeg: q.rotDeg, yawSource: q.yawSource } : p;
+  });
+}
+
+/**
+ * 原来的办法：在底板正射图上取检测框对应的区域分出零件像素，按形状求角度；估计不可靠时沿用 mapping 的 0° / 90° 粗判
+ */
+function refineYawByShape(parts) {
   if (!boardTex || boardTex.bitmap !== store.state.image?.bitmap) return parts;
   if (!boardTex.pixels) {
     const ctx = boardTex.canvas.getContext('2d');
@@ -1204,11 +1253,14 @@ function renderDetectSection(mapping) {
     const { parts, dropped } = mapping;
     html += `<p class="summary">检测到 <b>${parts.length}</b> 个零件<span class="muted">（来源：${DET_SOURCE_LABELS[detResult.source]}）</span></p>`;
     const oriented = parts; // 电阻、LED 都是长条零件，都要估计朝向
-    const fromPhoto = oriented.filter((p) => p.yawSource === 'photo').length;
-    const counts = CLASSES.map((c) => [c.name, parts.filter((p) => p.cls === c.id).length]).filter(([, n]) => n);
-    if (counts.length) html += '<dl class="kv">' + counts.map(([k, n]) => `<dt>${k}</dt><dd>${n}</dd>`).join('') + '</dl>';
+    const byLeads = oriented.filter((p) => p.yawSource === 'leads').length;
+    const byShape = oriented.filter((p) => p.yawSource === 'photo').length;
+    const counts = new Map();
+    for (const p of parts) counts.set(displayName(p), (counts.get(displayName(p)) ?? 0) + 1);
+    if (counts.size) html += '<dl class="kv">' + [...counts].map(([k, n]) => `<dt>${escHtml(k)}</dt><dd>${n}</dd>`).join('') + '</dl>';
     if (oriented.length) {
-      html += `<p class="muted small">朝向：${fromPhoto} / ${oriented.length} 个电阻、LED 按照片估计${fromPhoto < oriented.length ? '，其余看不清，按检测框粗判 0° / 90°' : ''}。</p>`;
+      const rest = oriented.length - byLeads - byShape;
+      html += `<p class="muted small">朝向：${byLeads} 个看引脚${byShape ? `，${byShape} 个看本体形状（引脚看不清）` : ''}${rest ? `，${rest} 个看不清，按检测框粗判 0° / 90°` : ''}（共 ${oriented.length} 个）。</p>`;
     }
     html += `<label class="check toggle-row"><input type="checkbox" id="parallax-toggle"${parallaxOn ? ' checked' : ''} /> 视差修正</label>`;
     html += '<p class="muted small">零件有高度，斜拍时检测框中心对应零件半高处；修正后按半高求交，不修正则直接落到板面。</p>';
@@ -1389,12 +1441,15 @@ function refreshPlan() {
   if (!parts) return;
   const start = fkWorld(arm.homeAngles, ARM);
   const footprints = Object.fromEntries(CLASSES.map((c) => [c.id, partFootprint(c.id)]));
-  const { tasks, skipped } = plan(parts, BINS, ARM, { start, footprints });
+  // 料盒按需生成：电阻一个，LED 按颜色各一个
+  const binList = binsFor(parts);
+  bins.setBins(binList);
+  const { tasks, skipped } = plan(parts, binList, ARM, { start, footprints });
   const skippedIds = new Set(skipped.map((p) => p.id));
   store.state.parts = parts.map((p) => ({ ...p, reachable: !skippedIds.has(p.id) }));
   partsLayer.markUnreachable([...skippedIds]);
   const segs = buildSequence(tasks, store.state.parts, ARM, { startAngles: arm.homeAngles, homeAngles: arm.homeAngles });
-  sortPlan = { tasks, skipped, segs };
+  sortPlan = { tasks, skipped, segs, bins: binList };
   sortPlayer.load(segs);
   renderSortSection();
   renderStatus();
@@ -1418,7 +1473,7 @@ function startSorting() {
   sortPlayer.start();
 }
 
-const partName = (p) => `${CLASSES[p.cls].name} (${fmt(p.x, 1)}, ${fmt(p.y, 1)})`;
+const partName = (p) => `${displayName(p)} (${fmt(p.x, 1)}, ${fmt(p.y, 1)})`;
 
 /** 渲染"分拣"分区（规划变化时整体重建；进度变化只改样式） */
 function renderSortSection() {
@@ -1436,8 +1491,8 @@ function renderSortSection() {
   <p class="muted small" id="sort-phase">等待开始</p>`;
   html += '<ol class="task-list">' + tasks.map((t, i) => {
     const p = byId.get(t.partId);
-    const bin = BINS.find((b) => b.id === t.binId);
-    return `<li data-i="${i}"><span class="dot" style="--c:${CLASSES[p.cls].color}"></span>${partName(p)}<span class="muted"> → ${CLASSES[bin.cls].name}盒</span></li>`;
+    const bin = sortPlan.bins.find((b) => b.id === t.binId);
+    return `<li data-i="${i}"><span class="dot" style="--c:${partColor(p)}"></span>${partName(p)}<span class="muted"> → ${bin.label}盒</span></li>`;
   }).join('') + '</ol>';
   if (skipped.length) {
     html += '<p class="sub-title">已跳过</p><ul class="skip-list">' + skipped.map((p) => `<li>${partName(p)}<span>${p.skipReason}</span></li>`).join('') + '</ul>';
@@ -1654,7 +1709,7 @@ async function exportParts() {
 
 function exportPlan(kind) {
   if (!sceneReady() || !sortPlan) return;
-  const ins = sortInstructions(sortPlan, store.state.parts, BINS, CLASSES, ARM);
+  const ins = sortInstructions(sortPlan, store.state.parts, sortPlan.bins, CLASSES, ARM);
   if (kind === 'csv') downloadText(instructionsCsv(ins), `分拣指令_${photoStem()}.csv`, 'text/csv;charset=utf-8');
   else downloadText(instructionsJson(ins, { photo: store.state.image.fileName, time: stamp(), arm: ARM }), `分拣指令_${photoStem()}.json`, 'application/json;charset=utf-8');
 }
