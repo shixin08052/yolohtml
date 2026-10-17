@@ -342,6 +342,25 @@ export function createWorld(container) {
       renderer.render(scene, camera);
     }
     labelRenderer.render(scene, camera);
+    declutterTags();
+  }
+
+  /**
+   * 零件标签避让：挤在一起的零件标签会叠成一团、谁也看不清。每帧按顺序摆，和已显示的标签重叠的先藏起来；
+   * 拉近视角零件分开后自然又显示出来
+   */
+  function declutterTags() {
+    const tags = labelRenderer.domElement.querySelectorAll('.part-tag');
+    if (tags.length < 2) return;
+    const shown = [];
+    for (const el of tags) {
+      if (el.style.display === 'none') continue; // 在相机背后（CSS2DRenderer 藏起来的）
+      const r = el.getBoundingClientRect();
+      if (!r.width) continue;
+      const hit = shown.some((q) => r.left < q.right - 2 && q.left < r.right - 2 && r.top < q.bottom - 2 && q.top < r.bottom - 2);
+      el.classList.toggle('tag-hidden', hit);
+      if (!hit) shown.push(r);
+    }
   }
 
   renderer.setAnimationLoop(() => {

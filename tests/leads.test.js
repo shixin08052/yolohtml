@@ -264,3 +264,30 @@ describe('彩色灯体自身的长轴', () => {
     expect(Math.abs(((ax.axisDeg - 3) % 180 + 270) % 180 - 90)).toBeLessThan(1.5);
   });
 });
+
+describe('灯体长轴：斜拍时的拉伸', () => {
+  it('灯体顶部沿视线被拉开一段（斜向）：减掉这段的影响后长轴仍准（不减会偏好几度）', async () => {
+    const { bodyAxis } = await import('../src/vision/leads.js');
+    const t = 20;
+    const smear = [3, 3]; // mm：从相机往外的拉伸
+    const img = canvas(N, N);
+    // 本体形状沿 smear 方向一层层平移叠加（灯体各高度处在板面上的投影）
+    let body = null;
+    for (let i = 0; i <= 12; i++) {
+      const f = i / 12;
+      const b = drawLed(img, K, N / 2 + smear[0] * f * K, N / 2 + smear[1] * f * K, t, [225, 200, 40], { leads: false });
+      body = body ?? b;
+    }
+    const xs = [];
+    const ys = [];
+    for (const [x, y] of body) { xs.push(x); ys.push(y); }
+    const big = [[Math.min(...xs), Math.min(...ys) - smear[1] * K], [Math.max(...xs) + smear[0] * K, Math.min(...ys) - smear[1] * K], [Math.max(...xs) + smear[0] * K, Math.max(...ys)], [Math.min(...xs), Math.max(...ys)]];
+    const patch = patchOf(img);
+    const paper = ledColor(patch, big).paper;
+    const err = (ax) => Math.abs(((ax.axisDeg - t) % 180 + 270) % 180 - 90);
+    const raw = bodyAxis(patch, big, { paper });
+    const fixed = bodyAxis(patch, big, { paper, smear });
+    expect(err(raw)).toBeGreaterThan(4);
+    expect(err(fixed)).toBeLessThan(1.5);
+  });
+});

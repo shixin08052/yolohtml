@@ -1,12 +1,13 @@
 // 手动框选工具：在调试视图上拖出矩形框、选类别、移动 / 拉伸、删除。
 // 坐标一律为原图像素。作为 debugView 的指针工具使用（setTool(editor.tool)）。
 import { CLASSES } from '../config.js';
+import { placeLabels } from './confirmView.js';
 
 /** 新框的最小边长（画布像素）；拖得比这还短算一次点击 */
 const MIN_DRAG_PX = 6;
 
 /**
- * 画检测框：类别颜色的矩形 + 左上角"类别 置信度"标签；选中的框加粗并画四角手柄
+ * 画检测框：类别颜色的矩形 + "类别 置信度"标签（先试框的正上方，挤在一起时避开别的框和标签）；选中的框加粗并画四角手柄
  * @param {CanvasRenderingContext2D} ctx 已处于原图像素坐标
  * @param {import('../state.js').Detection[]} boxes
  * @param {number} scale
@@ -19,6 +20,8 @@ export function drawDetections(ctx, boxes, scale, dpr = 1, { selected = -1, draf
   ctx.textBaseline = 'bottom';
   const fs = (11.5 * dpr) / scale;
   ctx.font = `600 ${fs}px sans-serif`;
+  const pad = (3 * dpr) / scale;
+  const labels = [];
   boxes.forEach((d, i) => {
     const [x1, y1, x2, y2] = d.box;
     const color = CLASSES[d.cls]?.color ?? '#c96442';
@@ -35,12 +38,7 @@ export function drawDetections(ctx, boxes, scale, dpr = 1, { selected = -1, draf
     }
     const fit = d.fit === 'split' ? ' · 拆开' : d.fit === 'trim' ? ' · 按尺寸' : '';
     const text = `${CLASSES[d.cls]?.name ?? d.name ?? d.cls}${d.origin === 'color' ? ' · 颜色' : showScore && d.score < 1 ? ` ${d.score.toFixed(2)}` : ''}${fit}`;
-    const tw = ctx.measureText(text).width;
-    const pad = 3 * dpr / scale;
-    ctx.fillStyle = color;
-    ctx.fillRect(x1 - ctx.lineWidth / 2, y1 - fs - 2 * pad, tw + 2 * pad, fs + 2 * pad);
-    ctx.fillStyle = '#fff';
-    ctx.fillText(text, x1 + pad - ctx.lineWidth / 2, y1 - pad);
+    labels.push({ text, color, bbox: [x1, y1, x2, y2], w: ctx.measureText(text).width + 2 * pad, h: fs + 2 * pad });
     if (sel) {
       const h = (4 * dpr) / scale;
       ctx.fillStyle = '#fff';
@@ -51,6 +49,15 @@ export function drawDetections(ctx, boxes, scale, dpr = 1, { selected = -1, draf
         ctx.strokeRect(x - h, y - h, 2 * h, 2 * h);
       }
     }
+  });
+  // 标签最后画：挤在一起的框，标签避开别的框和已放好的标签（与正视图同一套摆法）
+  const pos = placeLabels(labels, Infinity, Infinity, 2 * pad);
+  labels.forEach((l, i) => {
+    const [lx, ly] = pos[i];
+    ctx.fillStyle = l.color;
+    ctx.fillRect(lx, ly, l.w, l.h);
+    ctx.fillStyle = '#fff';
+    ctx.fillText(l.text, lx + pad, ly + l.h - pad);
   });
   if (draft) {
     const [x1, y1, x2, y2] = draft;

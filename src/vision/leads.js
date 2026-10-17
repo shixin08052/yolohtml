@@ -388,31 +388,49 @@ export function ledColor(patch, body, { others = [] } = {}) {
  * 离旁边零件框比离自己框近的像素不算（同色的两颗贴在一起时不混进去）。透明灯体没有饱和像素，用不上
  * @param {ReturnType<typeof samplePatch>} patch
  * @param {number[][]} body
- * @param {{ others?: number[][][], paper: number[] }} opts paper：纸面颜色（ledColor 的结果）
+ * @param {{ others?: number[][][], paper: number[], smear?: number[] }} opts paper：纸面颜色（ledColor 的结果）；
+ *   smear：斜拍时灯体顶部在板面上被拉开的位移（底板坐标 mm，从相机往外），见 main.js
  * @returns {{ axisDeg: number, n: number, ratio: number }|null} axisDeg：长轴方向（底板坐标，0–180°）；ratio：两个方向的方差比
  */
-export function bodyAxis(patch, body, { others = [], paper }) {
+export function bodyAxis(patch, body, { others = [], paper, smear = null }) {
   const { width: W, height: H, data } = patch;
   const k = patch.pxPerMm;
   const xs = body.map((p) => p[0]);
   const ys = body.map((p) => p[1]);
   const m = 1 * k;
+  // 斜拍的拉伸（取样图像素）：灯体各高度的截面沿视线落到板面，叠成"本体沿 smear 扫过的形状"
+  const du = smear ? Math.round(smear[0] * k) : 0;
+  const dv = smear ? Math.round(-smear[1] * k) : 0;
+  const x0 = Math.max(0, Math.floor(Math.min(...xs) - m - Math.abs(du)));
+  const x1 = Math.min(W - 1, Math.ceil(Math.max(...xs) + m + Math.abs(du)));
+  const y0 = Math.max(0, Math.floor(Math.min(...ys) - m - Math.abs(dv)));
+  const y1 = Math.min(H - 1, Math.ceil(Math.max(...ys) + m + Math.abs(dv)));
+  const w = x1 - x0 + 1;
+  const mask = new Uint8Array(w * (y1 - y0 + 1));
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      const i = (y * W + x) * 4;
+      if (data[i + 3] === 0) continue;
+      const d = polyDistance(body, x, y);
+      if (d > m + Math.hypot(du, dv) || others.some((p) => polyDistance(p, x, y) < d)) continue;
+      const r = Math.min(255, (data[i] * 230) / paper[0]);
+      const g = Math.min(255, (data[i + 1] * 230) / paper[1]);
+      const b = Math.min(255, (data[i + 2] * 230) / paper[2]);
+      if (sat(r, g, b) < 90 || Math.max(r, g, b) < 45) continue;
+      mask[(y - y0) * w + x - x0] = 1;
+    }
+  }
+  const at = (x, y) => x >= x0 && x <= x1 && y >= y0 && y <= y1 && mask[(y - y0) * w + x - x0] === 1;
   let n = 0;
   let su = 0;
   let sv = 0;
   let suu = 0;
   let svv = 0;
   let suv = 0;
-  for (let y = Math.max(0, Math.floor(Math.min(...ys) - m)); y <= Math.min(H - 1, Math.ceil(Math.max(...ys) + m)); y++) {
-    for (let x = Math.max(0, Math.floor(Math.min(...xs) - m)); x <= Math.min(W - 1, Math.ceil(Math.max(...xs) + m)); x++) {
-      const i = (y * W + x) * 4;
-      if (data[i + 3] === 0) continue;
-      const d = polyDistance(body, x, y);
-      if (d > m || others.some((p) => polyDistance(p, x, y) < d)) continue;
-      const r = Math.min(255, (data[i] * 230) / paper[0]);
-      const g = Math.min(255, (data[i + 1] * 230) / paper[1]);
-      const b = Math.min(255, (data[i + 2] * 230) / paper[2]);
-      if (sat(r, g, b) < 90 || Math.max(r, g, b) < 45) continue;
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      // 沿 smear 腐蚀：自己和往外挪 smear 的那一点都是灯体，才算本体底面（凸的本体扫过一段后，这样正好还原）
+      if (!at(x, y) || ((du || dv) && !at(x + du, y + dv))) continue;
       n++;
       su += x;
       sv += y;

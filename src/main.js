@@ -1250,7 +1250,11 @@ function refineFromPhoto(parts) {
       if (c) q = { ...q, color: c.color };
       // 彩色灯体：引脚常被掰弯几度，角度按灯体自身的长轴微调（头朝哪边仍按引脚）
       if (c && c.color !== 'clear' && q.yawSource === 'leads') {
-        const ax = bodyAxis(patch, body, { others, paper: c.paper });
+        // 灯体顶部（高 heightMm）沿视线落到板面，比实际位置往外偏 r·h / (相机高 − h)
+        const C = store.state.pose?.position;
+        const h = CLASSES[1].heightMm;
+        const smear = C && C[2] > h + 1 ? [((p.xPlane - C[0]) * h) / (C[2] - h), ((p.yPlane - C[1]) * h) / (C[2] - h)] : null;
+        const ax = bodyAxis(patch, body, { others, paper: c.paper, smear });
         if (ax && ax.n >= BODY_AXIS.minPx && ax.ratio >= BODY_AXIS.minRatio) {
           const d = ((((ax.axisDeg - q.rotDeg) % 180) + 270) % 180) - 90; // 轴向差（−90…90）
           if (Math.abs(d) <= BODY_AXIS.maxDiffDeg) q = { ...q, rotDeg: (((q.rotDeg + d) % 360) + 360) % 360, yawSource: 'leads+body' };

@@ -224,6 +224,8 @@ body { background: var(--bg); overflow: hidden; -webkit-font-smoothing: antialia
   margin-bottom: 4px;
 }
 .part-tag b { display: block; font-weight: 600; }
+/* 与别的标签重叠时藏起来（world.js 的 declutterTags） */
+.part-tag.tag-hidden { visibility: hidden; }
 .part-tag.bad { border-left-color: var(--err); color: var(--err); }
 .part-tag span { color: var(--text-2); font-variant-numeric: tabular-nums; }
 .icon-btn[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
@@ -262,7 +264,7 @@ body { background: var(--bg); overflow: hidden; -webkit-font-smoothing: antialia
 }
 .kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; }
 .kv dt { color: var(--text-2); }
-.kv dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; word-break: break-all; }
+.kv dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; } /* 先在空格处换行；单个词（如长文件名）放不下时才从中间断 */
 .muted { color: var(--text-2); }
 .note { margin: 8px 0 0; padding: 6px 8px; border-radius: 6px; line-height: 1.5; font-size: 13px; }
 .note.warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); }
@@ -300,6 +302,9 @@ body { background: var(--bg); overflow: hidden; -webkit-font-smoothing: antialia
   }
   .topbar { flex-wrap: wrap; padding: 10px 16px; gap: 8px 16px; }
   .stepper { order: 3; flex-basis: 100%; }
+  /* 按钮一行放不下时换行（不然会把整页撑宽，手机浏览器整体缩小显示） */
+  .actions { flex-wrap: wrap; min-width: 0; max-width: 100%; }
+  .actions .select { flex: 1 1 120px; min-width: 0; }
   .main { padding: 12px 16px; }
   /* 手机上调试视图更高，便于缩放查看 */
   #app { grid-template-rows: auto minmax(420px, 78vh) auto; }
