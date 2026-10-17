@@ -108,6 +108,69 @@ export function foreground(img, box, holes, paper, { step = 2, tol = 40 } = {}) 
 }
 
 /**
+ * 拆出的两个框贴到零件上：两个框先放在大框的对角，但大框往往比两个零件合起来还宽一点（框进了一段引脚、影子），
+ * 放在对角会把两个零件拉开。这里让每个框在大框里平移（大小不变），挪到盖住"不是纸"的像素最多的地方；
+ * 已被另一个框盖住的像素、落在别的零件框（exclude）里的像素不算，所以两个框各自贴到自己那个零件上。轮流挪两遍，每个方向最多挪框大小的两成。
+ * @returns {number[][]}
+ */
+export function snapToParts(img, B, subs, paper, { tol = 40, rounds = 2, maxShift = 0.2, minGain = 0.05, exclude = [] } = {}) {
+  const { width: W, data } = img;
+  const x0 = Math.ceil(B[0]);
+  const y0 = Math.ceil(B[1]);
+  const w = Math.max(1, Math.floor(B[2]) - x0);
+  const h = Math.max(1, Math.floor(B[3]) - y0);
+  // 大框里"不是纸"的像素的积分图
+  const S = new Float64Array((w + 1) * (h + 1));
+  for (let y = 0; y < h; y++) {
+    let row = 0;
+    for (let x = 0; x < w; x++) {
+      const k = ((y0 + y) * W + x0 + x) * 4;
+      const inOther = exclude.some((e) => x0 + x >= e[0] && x0 + x < e[2] && y0 + y >= e[1] && y0 + y < e[3]);
+      if (!inOther && Math.abs(data[k] - paper[0]) + Math.abs(data[k + 1] - paper[1]) + Math.abs(data[k + 2] - paper[2]) > tol) row++;
+      S[(y + 1) * (w + 1) + x + 1] = S[y * (w + 1) + x + 1] + row;
+    }
+  }
+  const cnt = (b) => {
+    const ax = Math.max(0, Math.min(w, Math.round(b[0] - x0)));
+    const bx = Math.max(0, Math.min(w, Math.round(b[2] - x0)));
+    const ay = Math.max(0, Math.min(h, Math.round(b[1] - y0)));
+    const by = Math.max(0, Math.min(h, Math.round(b[3] - y0)));
+    if (bx <= ax || by <= ay) return 0;
+    return S[by * (w + 1) + bx] - S[ay * (w + 1) + bx] - S[by * (w + 1) + ax] + S[ay * (w + 1) + ax];
+  };
+  const inter = (a, b) => [Math.max(a[0], b[0]), Math.max(a[1], b[1]), Math.min(a[2], b[2]), Math.min(a[3], b[3])];
+  const out = subs.map((b) => [...b]);
+  for (let r = 0; r < rounds; r++) {
+    for (let j = 0; j < out.length; j++) {
+      const b = out[j];
+      const o = out[1 - j];
+      const bw = b[2] - b[0];
+      const bh = b[3] - b[1];
+      // 只在原来（对角）位置附近微调：每个方向最多挪框大小的 maxShift，免得被旁边零件的本体、引脚拉走
+      const s0 = subs[j];
+      const xr = [Math.max(B[0], s0[0] - maxShift * bw), Math.min(B[2] - bw, s0[0] + maxShift * bw)];
+      const yr = [Math.max(B[1], s0[1] - maxShift * bh), Math.min(B[3] - bh, s0[1] + maxShift * bh)];
+      let best = null;
+      for (let x = xr[0]; x <= xr[1] + 1e-9; x += 1) {
+        for (let y = yr[0]; y <= yr[1] + 1e-9; y += 1) {
+          const c = [x, y, x + bw, y + bh];
+          const ov = inter(c, o);
+          const v = cnt(c) - (ov[2] > ov[0] && ov[3] > ov[1] ? cnt(ov) : 0);
+          // 一样多时取离原来位置近的
+          const d = Math.abs(x - b[0]) + Math.abs(y - b[1]);
+          if (!best || v > best.v + 1e-9 || (Math.abs(v - best.v) <= 1e-9 && d < best.d)) best = { v, d, c };
+        }
+      }
+      // 多盖住的零件像素不够多（不到框面积的 minGain）时不挪：差一点的多半是旁边的引脚、影子
+      const ov0 = inter(b, o);
+      const v0 = cnt(b) - (ov0[2] > ov0[0] && ov0[3] > ov0[1] ? cnt(ov0) : 0);
+      if (best.v - v0 > minGain * bw * bh) out[j] = best.c;
+    }
+  }
+  return out;
+}
+
+/**
  * @param {{ cls: number, score: number, box: number[] }[]} dets 检测框（原图像素）
  * @param {{
  *   H: number[][], Hinv: number[][],                                  // 底板 mm ↔ 照片像素
@@ -194,7 +257,8 @@ export function fitBoxes(dets, { H, Hinv, dims, yawOf, img = null }, opts = {}) 
         if (!best || score > best.score) best = { subs, score };
       }
     }
-    return best?.subs ?? null;
+    if (!best) return null;
+    return paper ? snapToParts(img, B, best.subs, paper, { exclude: othersOf(i) }) : best.subs;
   };
 
   const out = [];

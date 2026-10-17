@@ -65,6 +65,15 @@ export function leadPolys(part, fps, grow = 0) {
   return footprintPolys({ rects: fp.rects.slice(1) }, { x: part.x, y: part.y, yaw: part.rotDeg ?? 0 }, grow);
 }
 
+/**
+ * 本体的精确外形（占地的 outline，几个矩形；没有时用本体外接矩形）：只用来判断本体是否互相插进去，
+ * 夹爪、拨开的避让仍用外接矩形（宁可保守）
+ */
+export function outlinePolys(part, fps, grow = 0) {
+  const fp = fps[part.cls];
+  return footprintPolys({ rects: fp.outline ?? [fp.rects[0]] }, { x: part.x, y: part.y, yaw: part.rotDeg ?? 0 }, grow);
+}
+
 /** 本体和引脚 */
 export const partPolys = (part, fps, grow = 0) => [...bodyPolys(part, fps, grow), ...leadPolys(part, fps, grow)];
 
@@ -97,6 +106,42 @@ export function findGrasp(part, others, { width, fps, ok = () => true }) {
     }
   }
   return null;
+}
+
+/**
+ * 两组凸多边形（一个零件的外形由几个矩形组成）的平移向量：把 A 整体沿它移开，A 的每一块都不再插进 B 的任何一块；
+ * 不相交时 null。逐对求最小平移向量再拼不行（底边只有 1 mm 长，两块底边之间最近的出路是顺着长轴挪 1 mm，
+ * 挪完灯体还插着，来回推不收敛）：这里对每个候选方向（各块的边的法向，正反两向）求"让所有相交的块对都分开"
+ * 要挪多远，取最短的方向
+ * @param {number[][][]} As
+ * @param {number[][][]} Bs
+ * @returns {number[]|null}
+ */
+export function groupMtv(As, Bs) {
+  const pairs = [];
+  for (const a of As) for (const b of Bs) if (mtv(a, b)) pairs.push([a, b]);
+  if (!pairs.length) return null;
+  const axes = [];
+  for (const P of [...As, ...Bs]) {
+    for (let i = 0; i < P.length; i++) {
+      const [x0, y0] = P[i];
+      const [x1, y1] = P[(i + 1) % P.length];
+      const l = Math.hypot(x1 - x0, y1 - y0) || 1;
+      const n = [(y0 - y1) / l, (x1 - x0) / l];
+      if (!axes.some((m) => Math.abs(m[0] * n[1] - m[1] * n[0]) < 1e-6)) axes.push(n);
+    }
+  }
+  let best = null;
+  for (const n of axes) {
+    for (const sg of [1, -1]) {
+      const d = [n[0] * sg, n[1] * sg];
+      const proj = (Q) => Q.map(([x, y]) => x * d[0] + y * d[1]);
+      // A 沿 d 挪 t：每一对都要 A 的最小投影 ≥ B 的最大投影
+      const t = Math.max(...pairs.map(([a, b]) => Math.max(...proj(b)) - Math.min(...proj(a))));
+      if (!best || t < best.t) best = { t, d };
+    }
+  }
+  return [best.d[0] * best.t, best.d[1] * best.t];
 }
 
 /**
@@ -141,7 +186,7 @@ export function mtv(A, B) {
  * @param {object} fps
  * @returns {{ parts: object[], moved: Map<number, number> }} moved：零件 id → 挪动距离（mm）
  */
-export function separateBodies(parts, fps, { maxMove = 2, gapMm = 0.3, iters = 24 } = {}) {
+export function separateBodies(parts, fps, { maxMove = 2, gapMm = 0.1, iters = 24 } = {}) {
   const ps = parts.map((p) => ({ ...p }));
   const shift = new Map(ps.map((p) => [p.id, [0, 0]]));
   const total = (id) => Math.hypot(...shift.get(id));
@@ -149,10 +194,9 @@ export function separateBodies(parts, fps, { maxMove = 2, gapMm = 0.3, iters = 2
     let any = false;
     for (let i = 0; i < ps.length; i++) {
       for (let j = i + 1; j < ps.length; j++) {
-        const A = bodyPolys(ps[i], fps, gapMm / 2);
-        const B = bodyPolys(ps[j], fps, gapMm / 2);
-        let v = null;
-        for (const a of A) for (const b of B) v = v ?? mtv(a, b);
+        const A = outlinePolys(ps[i], fps, gapMm / 2);
+        const B = outlinePolys(ps[j], fps, gapMm / 2);
+        const v = groupMtv(A, B);
         if (!v) continue;
         any = true;
         for (const [p, k] of [[ps[i], 0.5], [ps[j], -0.5]]) {
@@ -205,6 +249,9 @@ export function separateBodies(parts, fps, { maxMove = 2, gapMm = 0.3, iters = 2
  */
 export function planPush(part, others, { width, fps, board, ok = () => true, reach = () => true }) {
   const obst = others.map((o) => partPolys(o, fps));
+  // 零件与零件之间按本体的精确外形（LED 灯体比底边细）：并排贴着的两颗外接矩形本来就有一点重叠，按外接矩形会哪儿都推不动
+  const shape = (p, grow) => [...outlinePolys(p, fps, grow), ...leadPolys(p, fps, grow)];
+  const obstShape = others.map((o) => shape(o, 0));
   const ownLeads = leadPolys(part, fps);
   const ownBody = bodyPolys(part, fps);
   const near = others.filter((o) => Math.hypot(o.x - part.x, o.y - part.y) < 15);
@@ -220,7 +267,7 @@ export function planPush(part, others, { width, fps, board, ok = () => true, rea
 
   const inBoard = (polys) => polys.every((P) => P.every(([x, y]) => x >= PUSH.boardMargin && y >= PUSH.boardMargin && x <= board.width - PUSH.boardMargin && y <= board.height - PUSH.boardMargin));
   // 推的路上零件与别的零件只要不插进去就行（紧贴着滑过去可以）：本体收缩一点再判断，免得擦边被算成相撞
-  const slide = (p) => partPolys(p, fps, -0.15);
+  const slide = (p) => shape(p, -0.15);
   const G = PUSH.openGap;
   const T = FINGER.thick;
   // 三种拨法：开口、指尖中心相对"顶住零件的那个面"往后退多少（沿推的方向）
@@ -258,7 +305,8 @@ export function planPush(part, others, { width, fps, board, ok = () => true, rea
           const end = [start[0] + ux * d, start[1] + uy * d];
           // 推的路上零件（连同引脚）撞到别的零件或别人的引脚、手指扫到别的零件或引脚：这个方向不行
           const f1 = fingers(end, m.gap);
-          if (obst.some((ob) => anyOverlap(slide(moved), ob) || anyOverlap(f1, ob))) break;
+          const sm = slide(moved);
+          if (obstShape.some((ob) => anyOverlap(sm, ob)) || obst.some((ob) => anyOverlap(f1, ob))) break;
           if (!inBoard(bodyPolys(moved, fps))) break;
           // 能下爪了吗（夹的时候推的手指已经抬走，不用管它）
           if (!findGrasp(moved, others, { width, fps, ok })) continue;

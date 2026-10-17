@@ -73,7 +73,8 @@ const footprintCache = new Map();
  * 零件俯视的占地（模型局部坐标，含引脚）：本体、引脚各一个矩形 { minX, maxX, halfW }，以及本体高度。
  * 料盒里摆放零件时用来判断是否重叠（robot/drop.js）。
  * @param {number} cls
- * @returns {{ rects: {minX:number, maxX:number, halfW:number}[], height: number }}
+ * outline：本体的精确外形（几个矩形，见 bodyOutline），建场景时判断本体是否互相插进去用
+ * @returns {{ rects: {minX:number, maxX:number, halfW:number}[], outline: {minX:number, maxX:number, halfW:number}[], height: number }}
  */
 export function partFootprint(cls) {
   if (!footprintCache.has(cls)) {
@@ -81,17 +82,38 @@ export function partFootprint(cls) {
     m.updateMatrixWorld(true);
     const body = bodyBox(m);
     const leads = new THREE.Box3();
-    m.traverse((o) => {
-      if (o.isMesh && o.userData.lead) leads.expandByObject(o);
-      if (o.isMesh) o.geometry.dispose();
-    });
     // Three.js 的 z = −局部 y
     const rect = (b) => ({ minX: b.min.x, maxX: b.max.x, halfW: Math.max(-b.min.z, b.max.z) });
+    const parts = [];
+    m.traverse((o) => {
+      if (o.isMesh && o.userData.lead) leads.expandByObject(o);
+      else if (o.isMesh) parts.push(rect(new THREE.Box3().setFromObject(o)));
+      if (o.isMesh) o.geometry.dispose();
+    });
     const rects = [rect(body)];
     if (!leads.isEmpty()) rects.push(rect(leads));
-    footprintCache.set(cls, { rects, height: body.max.y - body.min.y });
+    footprintCache.set(cls, { rects, outline: bodyOutline(parts), height: body.max.y - body.min.y });
   }
   return footprintCache.get(cls);
+}
+
+/**
+ * 本体的精确外形：每块本体网格一个矩形，去掉被别的矩形包住的，同样粗、首尾相接的并成一个。
+ * LED 是底边 Φ5.8（长 1 mm）+ 灯体和灯头 Φ5，比整体外接矩形（5.8 宽）细一圈；
+ * 两颗头尾相反并排贴着时，中心只隔约 5.4 mm，用外接矩形判断会以为插进去了、被推开留出缝
+ * @param {{ minX: number, maxX: number, halfW: number }[]} rs
+ */
+export function bodyOutline(rs) {
+  const eps = 1e-3;
+  let out = rs.filter((r, i) => !rs.some((q, j) => j !== i && q.minX <= r.minX + eps && q.maxX >= r.maxX - eps && q.halfW >= r.halfW - eps && (j < i || q.minX < r.minX - eps || q.maxX > r.maxX + eps || q.halfW > r.halfW + eps)));
+  out = out.sort((a, b) => a.minX - b.minX);
+  const merged = [];
+  for (const r of out) {
+    const last = merged[merged.length - 1];
+    if (last && Math.abs(last.halfW - r.halfW) < eps && r.minX <= last.maxX + eps) last.maxX = Math.max(last.maxX, r.maxX);
+    else merged.push({ ...r });
+  }
+  return merged;
 }
 
 /** LED 模型整体沿 X 的平移量，使本体（底边到灯头）居中 */

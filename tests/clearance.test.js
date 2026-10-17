@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { fingerPolys, bodyPolys, leadPolys, partPolys, findGrasp, mtv, separateBodies, planPush, FINGER, PUSH } from '../src/robot/clearance.js';
+import { fingerPolys, bodyPolys, leadPolys, partPolys, outlinePolys, findGrasp, mtv, separateBodies, planPush, FINGER, PUSH } from '../src/robot/clearance.js';
 import { plan, GRIP_WIDTH } from '../src/robot/planner.js';
 import { buildSequence, GRIP_MAX } from '../src/robot/sequence.js';
 import { polysOverlap } from '../src/robot/drop.js';
@@ -55,13 +55,20 @@ describe('本体互相插进去时推开', () => {
     expect(mtv(a, [[3, 0], [4, 0], [4, 1], [3, 1]])).toBeNull();
   });
 
-  it('两颗平行 LED 中心只差 4 mm（灯体宽 5.8，插进去 1.8）：各推开约 1 mm 后不再相交，坐标一起挪', () => {
+  it('两颗同向平行 LED 中心只差 4 mm（底边宽 5.8，插进去 1.8）：各推开约 1 mm 后不再相交，坐标一起挪', () => {
     const { parts, moved } = separateBodies([P(0, 1, 100, 100, 90), P(1, 1, 104, 100, 90)], fps);
-    expect(anyOv(bodyPolys(parts[0], fps), bodyPolys(parts[1], fps))).toBe(false);
+    expect(anyOv(outlinePolys(parts[0], fps), outlinePolys(parts[1], fps))).toBe(false);
     expect(moved.get(0)).toBeLessThan(1.3);
     expect(moved.get(1)).toBeLessThan(1.3);
     expect(parts[0].xParallax).toBeCloseTo(parts[0].x, 9);
     expect(parts[0].x).toBeLessThan(100);
+  });
+
+  it('两颗头尾相反并排贴着（中心隔 5.5 mm）：灯体 Φ5、只有底边 Φ5.8，本来就没插进去，不推开（之前按 5.8 宽的外接矩形会推出缝）', () => {
+    const { moved } = separateBodies([P(0, 1, 100, 100, 0), P(1, 1, 100, 105.5, 180)], fps);
+    expect(moved.size).toBe(0);
+    // 同向的底边对着底边，5.5 就插进去了
+    expect(separateBodies([P(0, 1, 100, 100, 0), P(1, 1, 100, 105.5, 0)], fps).moved.size).toBe(2);
   });
 
   it('不相交的不动', () => {
@@ -94,7 +101,10 @@ describe('挤在一起的分拣', () => {
         expect(others.some((ob) => anyOv(fingerPolys(t.end, t.gripYaw, t.gap ?? 0, { grow: 0 }), ob))).toBe(false);
         const moved = { ...me, x: t.partTo[0], y: t.partTo[1] };
         // 紧贴着滑过去可以，插进去不行（收缩 0.15 mm 再判断）
-        expect(others.some((ob) => anyOv(partPolys(moved, fps, -0.15), ob))).toBe(false);
+        // 零件与零件按本体的精确外形 + 引脚
+        const shape = (q, g) => [...outlinePolys(q, fps, g), ...leadPolys(q, fps, g)];
+        const rest = [...onBoard.values()].filter((o) => o.id !== t.partId).map((o) => shape(o, 0));
+        expect(rest.some((ob) => anyOv(shape(moved, -0.15), ob))).toBe(false);
         onBoard.set(t.partId, moved);
       } else {
         const fingers = fingerPolys(t.from, t.gripYaw, t.gap, { grow: 0 });
