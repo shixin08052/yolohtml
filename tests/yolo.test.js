@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import jpeg from 'jpeg-js';
 import * as ort from 'onnxruntime-web';
-import { pyRound, letterboxParams, preprocess, unletterbox, iou, nmsByClass, outputLayout, postprocess } from '../src/vision/yolo.js';
+import { pyRound, letterboxParams, preprocess, unletterbox, iou, nmsByClass, outputLayout, postprocess, selectDetections } from '../src/vision/yolo.js';
 
 describe('前处理参数', () => {
   it('Python 的 round：.5 取偶数', () => {
@@ -112,6 +112,30 @@ describe('后处理', () => {
 
   it('不认识的输出形状报错', () => {
     expect(() => postprocess(new Float32Array(10), [1, 10], p, 1, 1, { scoreThreshold: 0.4, iouThreshold: 0.5 })).toThrow(/输出形状/);
+  });
+});
+
+describe('两档置信度选框', () => {
+  // 照用户实拍：四颗 LED 上下紧贴，透明那颗模型只给了 0.379；低分里还有红色那颗的重复框（0.313，与红色框 IoU ≈ 0.8）
+  const raw = [
+    { cls: 1, score: 0.868, box: [1146, 748, 1194, 776] }, // 红
+    { cls: 1, score: 0.854, box: [1147, 702, 1193, 727] }, // 蓝
+    { cls: 1, score: 0.743, box: [1148, 774, 1198, 804] }, // 绿
+    { cls: 1, score: 0.379, box: [1146, 728, 1192, 757] }, // 透明（漏检的那颗）
+    { cls: 1, score: 0.313, box: [1147, 753, 1193, 777] }, // 红色的重复框
+    { cls: 1, score: 0.258, box: [1148, 729, 1193, 761] }, // 透明的重复框
+    { cls: 1, score: 0.207, box: [1146, 749, 1193, 776] },
+  ];
+  const o = { scoreThreshold: 0.4, lowThreshold: 0.25, lowMaxIou: 0.3, dedupIou: 0.7 };
+
+  it('补上透明 LED，不多出重复框', () => {
+    const d = selectDetections(raw, o);
+    expect(d).toHaveLength(4);
+    expect(d.filter((x) => x.low).map((x) => x.score)).toEqual([0.379]);
+  });
+
+  it('不开低档时与原来一样（只有 ≥ 0.4 的同类去重）', () => {
+    expect(selectDetections(raw, { scoreThreshold: 0.4, dedupIou: 0.7 })).toHaveLength(3);
   });
 });
 

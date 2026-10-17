@@ -339,7 +339,10 @@ export function ledColor(patch, body, { others = [] } = {}) {
       const i = (y * W + x) * 4;
       if (data[i + 3] === 0) continue;
       const d = polyDistance(body, x, y);
-      if (d <= -0.3 * k) inBody.push(i);
+      // 灯体像素：在自己框里、但不在别的零件框里（挨在一起时框会互相重叠，邻居的颜色不能算进来）
+      if (d <= -0.3 * k) {
+        if (!others.some((p) => polyDistance(p, x, y) < 0.3 * k)) inBody.push(i);
+      }
       else if (d >= 2 * k && d <= m && !others.some((p) => polyDistance(p, x, y) < 0.8 * k)) for (let c = 0; c < 3; c++) ring[c].push(data[i + c]);
     }
   }

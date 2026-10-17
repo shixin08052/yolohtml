@@ -3,7 +3,8 @@
 // 2. findGrasp：在本体中心、沿长轴前后挪一点的几个抓点，配上大小两档张开量，找第一个手指不碰旁边零件本体的抓法；
 // 3. separateBodies：建场景后，本体互相插进去的零件（实拍位置有零点几毫米的误差）沿最小方向各推开一点；
 // 4. planPush：一颗都夹不了时，"拨开"——夹爪合拢，从零件背后下到板面，推着它朝空处滑几毫米，直到能下爪。
-// 只看零件本体，不看引脚（引脚又细又软，手指压到也无妨）。
+// 引脚也不能碰：手指压到引脚会把它压弯、夹住；推杆只能顶本体（LED 的灯头或侧面、电阻的侧面），不能落在引脚上——
+// 所以从 LED 的底座一侧（引脚从那里伸出来）、电阻的两端推都不行；推的路上零件连同引脚不能压到别的零件和别人的引脚。
 import { footprintPolys, polysOverlap } from './drop.js';
 
 /** 手指（scene/arm.js）：沿零件长轴方向宽 9 mm；张开方向上，垫片内侧在开口边缘，手指连垫片厚 5.5 mm；margin 为额外间隙 */
@@ -14,7 +15,7 @@ export const GRIP_CLEARANCE = [5, 3];
 const OFFSETS = [0, 1, -1, 2, -2];
 const GRASP_END = 2;
 /** 拨开：每次最多推多远、步长；合拢的夹爪离零件多远开始推；推完零件离板边至少多远 */
-export const PUSH = { maxMm: 16, stepMm: 1, backoffMm: 1.5, boardMargin: 4, minContactMm: 1.5 };
+export const PUSH = { maxMm: 20, stepMm: 1, backoffMm: 1.5, boardMargin: 4, minContactMm: 1.5 };
 /** 推杆（合拢的夹爪）相对零件中心的横向偏移（mm）：推杆宽 9 mm，比 LED 还宽，偏到外侧才不会顶到旁边的零件 */
 const PUSH_SIDE = [0, 1, -1, 1.5, -1.5, 2, -2, 2.5, -2.5, 3, -3];
 
@@ -52,6 +53,20 @@ export function bodyPolys(part, fps, grow = 0) {
   return footprintPolys({ rects: [fp.rects[0]] }, { x: part.x, y: part.y, yaw: part.rotDeg ?? 0 }, grow);
 }
 
+/**
+ * 引脚占的地方（占地里本体之后的矩形；没有引脚时为空）
+ * @param {{ x: number, y: number, rotDeg: number, cls: number }} part
+ * @param {Record<number, { rects: object[] }>} fps
+ */
+export function leadPolys(part, fps, grow = 0) {
+  const fp = fps[part.cls];
+  if (fp.rects.length < 2) return [];
+  return footprintPolys({ rects: fp.rects.slice(1) }, { x: part.x, y: part.y, yaw: part.rotDeg ?? 0 }, grow);
+}
+
+/** 本体和引脚 */
+export const partPolys = (part, fps, grow = 0) => [...bodyPolys(part, fps, grow), ...leadPolys(part, fps, grow)];
+
 const anyOverlap = (as, bs) => as.some((a) => bs.some((b) => polysOverlap(a, b)));
 
 /**
@@ -67,7 +82,8 @@ export function findGrasp(part, others, { width, fps, ok = () => true }) {
   const gripYaw = a + Math.PI / 2;
   const body = fps[part.cls].rects[0];
   const maxOff = Math.max(0, Math.min(-body.minX, body.maxX) - GRASP_END);
-  const obst = others.map((o) => bodyPolys(o, fps));
+  // 手指不能压到旁边零件的本体和引脚，也不能压到自己的引脚
+  const obst = [...others.map((o) => partPolys(o, fps)), leadPolys(part, fps)];
   for (const s of OFFSETS) {
     if (Math.abs(s) > maxOff + 1e-9) continue;
     const point = [part.x + s * Math.cos(a), part.y + s * Math.sin(a)];
@@ -178,13 +194,14 @@ export function separateBodies(parts, fps, { maxMove = 2, gapMm = 0.3, iters = 2
  * @param {object} part
  * @param {object[]} others
  * @param {{ width: number, fps: object, board: { width: number, height: number },
- *           ok?: (point: number[], gripYaw: number) => boolean, reach?: (p: number[]) => boolean }} o
+ *           ok?: (point: number[], gripYaw: number) => boolean, reach?: (p: number[], pushYaw: number) => boolean }} o
  *   ok：抓法的额外检查（传给 findGrasp）；reach：夹爪合拢推的起点、终点是否够得着
  * @returns {{ dir: number[], dist: number, start: number[], end: number[], pushYaw: number, part: object }|null}
  *   start / end：合拢夹爪指尖中心的起止位置；part：推完后的零件
  */
 export function planPush(part, others, { width, fps, board, ok = () => true, reach = () => true }) {
-  const obst = others.map((o) => bodyPolys(o, fps));
+  const obst = others.map((o) => partPolys(o, fps));
+  const ownLeads = leadPolys(part, fps);
   const near = others.filter((o) => Math.hypot(o.x - part.x, o.y - part.y) < 15);
   const dirs = [];
   if (near.length) {
@@ -194,11 +211,11 @@ export function planPush(part, others, { width, fps, board, ok = () => true, rea
   }
   const a = rad(part.rotDeg ?? 0);
   dirs.push(a + Math.PI / 2, a - Math.PI / 2, a, a + Math.PI);
-  for (let k = 0; k < 8; k++) dirs.push((k * Math.PI) / 4);
+  for (let k = 0; k < 12; k++) dirs.push((k * Math.PI) / 6);
 
   const inBoard = (polys) => polys.every((P) => P.every(([x, y]) => x >= PUSH.boardMargin && y >= PUSH.boardMargin && x <= board.width - PUSH.boardMargin && y <= board.height - PUSH.boardMargin));
   // 推的路上零件与别的零件只要不插进去就行（紧贴着滑过去可以）：本体收缩一点再判断，免得擦边被算成相撞
-  const slideBody = (p) => bodyPolys(p, fps, -0.15);
+  const slide = (p) => partPolys(p, fps, -0.15);
   const pusher = (p, th) => fingerPolys(p, th, 0, { grow: 0.2 });
   const body = bodyPolys(part, fps)[0];
   let best = null;
@@ -217,17 +234,18 @@ export function planPush(part, others, { width, fps, board, ok = () => true, rea
       const contact = Math.min(t + FINGER.len / 2, s1) - Math.max(t - FINGER.len / 2, s0);
       if (contact < PUSH.minContactMm) continue;
       const start = [part.x - ux * off + vx * t, part.y - uy * off + vy * t];
-      if (obst.some((ob) => anyOverlap(pusher(start, th), ob))) continue;
+      // 推杆落下的地方不能压到别的零件和任何引脚（包括被推那颗自己的引脚：不能从引脚那一侧推）
+      if (obst.some((ob) => anyOverlap(pusher(start, th), ob)) || anyOverlap(pusher(start, th), ownLeads)) continue;
       for (let d = PUSH.stepMm; d <= PUSH.maxMm + 1e-9; d += PUSH.stepMm) {
         if (best && d >= best.dist) break;
         const moved = { ...part, x: part.x + ux * d, y: part.y + uy * d };
         const end = [start[0] + ux * d, start[1] + uy * d];
-        // 推的路上撞到别的零件（或推杆压到别的零件）：这个方向不行
-        if (obst.some((ob) => anyOverlap(slideBody(moved), ob) || anyOverlap(pusher(end, th), ob))) break;
+        // 推的路上零件（连同引脚）撞到别的零件或别人的引脚、推杆扫到别的零件或引脚：这个方向不行
+        if (obst.some((ob) => anyOverlap(slide(moved), ob) || anyOverlap(pusher(end, th), ob))) break;
         if (!inBoard(bodyPolys(moved, fps))) break;
         // 能下爪了吗（夹的时候推杆已经抬走，不用管它）
         if (!findGrasp(moved, others, { width, fps, ok })) continue;
-        if (!reach(start) || !reach(end)) break;
+        if (!reach(start, th) || !reach(end, th)) break;
         best = { dir: [ux, uy], dist: d, start, end, pushYaw: th, part: moved };
         break;
       }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { fingerPolys, bodyPolys, findGrasp, mtv, separateBodies, planPush, FINGER } from '../src/robot/clearance.js';
+import { fingerPolys, bodyPolys, leadPolys, partPolys, findGrasp, mtv, separateBodies, planPush, FINGER } from '../src/robot/clearance.js';
 import { plan, GRIP_WIDTH } from '../src/robot/planner.js';
 import { buildSequence } from '../src/robot/sequence.js';
 import { polysOverlap } from '../src/robot/drop.js';
@@ -36,9 +36,9 @@ describe('夹爪手指的落点', () => {
   });
 
   it('邻居在长轴一头挡住：沿长轴挪一点抓点就让开', () => {
-    // 长轴沿 X；邻居（横着放）在 +X 端旁边、正好压在手指下方
+    // 长轴沿 X；邻居（竖着放的 LED，灯头朝下、引脚朝上伸走）在 +X 端旁边，灯体压在中心抓时的手指（x 95.5–104.5）下方
     const me = P(0, 1, 100, 100, 0);
-    const other = P(1, 0, 107, 108.5, 0); // 电阻本体 x 103.85–110.15：中心抓时手指（x 95.5–104.5）压到它
+    const other = P(1, 1, 107, 110, -90);
     const g = findGrasp(me, [other], { width: GRIP_WIDTH[1], fps });
     expect(g).not.toBeNull();
     expect(g.offset).toBeLessThan(0);
@@ -71,46 +71,68 @@ describe('本体互相插进去时推开', () => {
 });
 
 describe('挤在一起的分拣', () => {
-  // 照用户截图：三颗 LED 并排紧贴（互相平行、长轴沿 Y），中间没有缝
-  const cluster = [P(0, 1, 150, 110, 90, 'green'), P(1, 1, 155.8, 110, 90, 'red'), P(2, 1, 161.6, 110, 90, 'blue')];
+  // 照用户实拍：电阻 + 四颗 LED 上下叠着、紧贴，方向一左一右交替（蓝、红灯头朝右，透明、绿灯头朝左）
+  const photo = [P(0, 0, 169.0, 132.4, 9), P(1, 1, 186.9, 98.5, 1, 'red'), P(2, 1, 187.3, 110.8, 1, 'blue'), P(3, 1, 187.4, 91.8, 172, 'green'), P(4, 1, 186.9, 104.6, 180, 'clear')];
+  // 三颗同向并排紧贴（灯头都朝 +Y、引脚都朝 −Y）
+  const parallel = [P(0, 1, 150, 110, 90, 'green'), P(1, 1, 155.8, 110, 90, 'red'), P(2, 1, 161.6, 110, 90, 'blue')];
 
-  /** 按规划走一遍，检查每次下爪时手指都不碰板上剩下的零件本体，拨开时零件不撞别人 */
+  /**
+   * 按规划走一遍，检查：下爪时手指不压到板上剩下的零件本体和引脚（也不压自己的引脚）；
+   * 拨开时推杆落点不压任何引脚（不从引脚那一侧推）和别的零件，推的路上零件连同引脚不插进别的零件和引脚
+   */
   function simulate(parts, tasks) {
     const onBoard = new Map(parts.map((p) => [p.id, { ...p }]));
     for (const t of tasks) {
       const me = onBoard.get(t.partId);
-      const others = [...onBoard.values()].filter((o) => o.id !== t.partId).map((o) => bodyPolys(o, fps));
+      const others = [...onBoard.values()].filter((o) => o.id !== t.partId).map((o) => partPolys(o, fps));
       if (t.kind === 'push') {
         expect([me.x, me.y]).toEqual([t.partFrom[0], t.partFrom[1]]);
+        const pusher = fingerPolys(t.start, t.gripYaw, 0, { grow: 0 });
+        expect(anyOv(pusher, leadPolys(me, fps))).toBe(false);
+        expect(anyOv(pusher, bodyPolys(me, fps))).toBe(false);
+        expect(others.some((ob) => anyOv(pusher, ob))).toBe(false);
         const moved = { ...me, x: t.partTo[0], y: t.partTo[1] };
         // 紧贴着滑过去可以，插进去不行（收缩 0.15 mm 再判断）
-        expect(others.some((ob) => anyOv(bodyPolys(moved, fps, -0.15), ob))).toBe(false);
+        expect(others.some((ob) => anyOv(partPolys(moved, fps, -0.15), ob))).toBe(false);
         onBoard.set(t.partId, moved);
       } else {
         const fingers = fingerPolys(t.from, t.gripYaw, t.gap, { grow: 0 });
         expect(others.some((ob) => anyOv(fingers, ob))).toBe(false);
+        expect(anyOv(fingers, leadPolys(me, fps))).toBe(false);
         onBoard.delete(t.partId);
       }
     }
     return onBoard;
   }
 
-  it('三颗紧贴：一颗都下不去时先拨开，最后全部分拣，手指从不碰到别的零件', () => {
-    const { tasks, skipped } = plan(cluster, binsFor(cluster), ARM, { footprints: fps });
+  it('实拍的一叠：先拨开再夹，全部分拣；推杆都顶在灯头一侧，手指和推杆从不碰到别的零件和引脚', () => {
+    const { tasks, skipped } = plan(photo, binsFor(photo), ARM, { footprints: fps });
     expect(skipped).toEqual([]);
     const picks = tasks.filter((t) => t.kind === 'pick');
     const pushes = tasks.filter((t) => t.kind === 'push');
-    expect(picks.map((t) => t.partId).sort()).toEqual([0, 1, 2]);
+    expect(picks.map((t) => t.partId).sort()).toEqual([0, 1, 2, 3, 4]);
     expect(pushes.length).toBeGreaterThan(0);
-    expect(tasks[0].kind).toBe('push'); // 一开始谁都下不去
-    for (const t of pushes) expect(t.dist).toBeLessThanOrEqual(16);
-    expect(simulate(cluster, tasks).size).toBe(0);
+    for (const t of pushes) {
+      expect(t.dist).toBeLessThanOrEqual(20);
+      // 推的方向朝着底座（引脚）那一侧：推杆在灯头一侧
+      const a = (photo[t.partId].rotDeg * Math.PI) / 180;
+      const d = [t.partTo[0] - t.partFrom[0], t.partTo[1] - t.partFrom[1]];
+      expect(d[0] * Math.cos(a) + d[1] * Math.sin(a)).toBeLessThan(0);
+    }
+    expect(simulate(photo, tasks).size).toBe(0);
+  });
+
+  it('三颗同向并排紧贴：不碰引脚就拆不开——跳过并说明原因，不做压引脚的动作', () => {
+    const { tasks, skipped } = plan(parallel, binsFor(parallel), ARM, { footprints: fps });
+    expect(skipped).toHaveLength(3);
+    expect(skipped[0].skipReason).toMatch(/引脚/);
+    simulate(parallel, tasks);
   });
 
   it('动作序列：拨开时夹爪合拢、下到板面、平移，零件跟着走', () => {
-    const { tasks } = plan(cluster, binsFor(cluster), ARM, { footprints: fps });
+    const { tasks } = plan(photo, binsFor(photo), ARM, { footprints: fps });
     const home = [Math.PI / 2, 0.6, -1.4, -0.8, 0];
-    const segs = buildSequence(tasks, cluster, ARM, { startAngles: home, homeAngles: home });
+    const segs = buildSequence(tasks, photo, ARM, { startAngles: home, homeAngles: home });
     const pushSeg = segs.find((s) => s.push);
     expect(pushSeg.type).toBe('line');
     const i = segs.indexOf(pushSeg);
@@ -128,7 +150,8 @@ describe('挤在一起的分拣', () => {
   });
 
   it('挤在一起但还有缝的（相距 14 mm）：张小一点直接夹，不用拨开', () => {
-    const loose = [P(0, 1, 150, 110, 90), P(1, 1, 164, 110, 90), P(2, 1, 178, 110, 90)];
+    // 引脚朝外交替排（相邻两颗的引脚不会伸到对方下面）
+    const loose = [P(0, 1, 150, 110, 0), P(1, 1, 150, 124, 180), P(2, 1, 150, 138, 0)];
     const { tasks, skipped } = plan(loose, binsFor(loose), ARM, { footprints: fps });
     expect(skipped).toEqual([]);
     expect(tasks.every((t) => t.kind === 'pick')).toBe(true);

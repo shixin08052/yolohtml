@@ -215,3 +215,17 @@ describe('细线走向', () => {
   });
 });
 
+
+describe('LED 颜色：框与邻居重叠', () => {
+  it('透明 LED 的框压到旁边红色 LED 的一部分：重叠处不算，仍判为透明', () => {
+    const img = canvas(N, N);
+    const H = img.height;
+    const clear = drawLed(img, K, N / 2, N / 2 + 3 * K, 180, [205, 208, 210]);
+    paint(img, rectFn(N / 2, N / 2 + 3 * K, 180, -4.25 * K, 4.25 * K, 0.6 * K, H), [250, 250, 250]);
+    const red = drawLed(img, K, N / 2, N / 2 - 3 * K, 0, [200, 35, 40]);
+    // 透明那颗的框往下多框了 2 mm（压到红色的灯体），像模型给的框那样
+    const box = clear.map(([x, y], i) => [x, i >= 2 ? y + 2 * K : y]);
+    expect(ledColor(patchOf(img), box).color).not.toBe('clear'); // 不排除邻居：被红色带偏
+    expect(ledColor(patchOf(img), box, { others: [red] }).color).toBe('clear');
+  });
+});

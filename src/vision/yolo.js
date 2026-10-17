@@ -124,6 +124,24 @@ export function nmsByClass(dets, thr) {
 }
 
 /**
+ * 从原始框里选出检测结果（两档置信度）：
+ * - 置信度 ≥ scoreThreshold 的：同类去重（IoU > dedupIou 只留高分）后全部保留；
+ * - 介于 lowThreshold 和 scoreThreshold 之间的：只有与已保留的框（不论类别）都几乎不重叠（IoU ≤ lowMaxIou）时才补上，
+ *   标记 low。透明 LED 在白纸上反差小，模型给的分常常只有 0.3 多；而低分里更多的是同一零件的重复框（与高分框重叠 0.7 以上），
+ *   这样能补上漏掉的零件，又不会多出重复的。
+ * @param {{cls:number, score:number, box:number[]}[]} raw
+ * @param {{ scoreThreshold: number, lowThreshold?: number, dedupIou: number, lowMaxIou?: number }} o
+ */
+export function selectDetections(raw, { scoreThreshold, lowThreshold = scoreThreshold, dedupIou, lowMaxIou = 0.3 }) {
+  const keep = nmsByClass(raw.filter((d) => d.score >= scoreThreshold), dedupIou);
+  const lows = raw.filter((d) => d.score >= lowThreshold && d.score < scoreThreshold).sort((a, b) => b.score - a.score);
+  for (const d of lows) {
+    if (keep.every((k) => iou(k.box, d.box) <= lowMaxIou)) keep.push({ ...d, low: true });
+  }
+  return keep;
+}
+
+/**
  * 输出形状 → 格式
  * @param {number[]} dims
  * @returns {'end2end'|'raw'|'unknown'}

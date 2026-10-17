@@ -155,7 +155,7 @@ export function plan(parts, bins, arm, { start = [arm.base[0], arm.base[1], 0], 
           fps,
           board,
           ok: (pt) => graspOk(pt, gripYawFor(part)),
-          reach: (q) => [PUSH_Z, PUSH_Z + arm.approach].every((z) => reachable([q[0], q[1], z], 0) || reachable([q[0], q[1], z], Math.PI / 2)),
+          reach: (q, th) => [th, th + Math.PI].some((y) => [PUSH_Z, PUSH_Z + arm.approach].every((z) => reachable([q[0], q[1], z], y))),
         });
         if (!pp) return;
         const key = pp.dist + 1e-3 * Math.hypot(pp.start[0] - cur[0], pp.start[1] - cur[1]);
@@ -165,13 +165,13 @@ export function plan(parts, bins, arm, { start = [arm.base[0], arm.base[1], 0], 
         }
       });
       if (!push) {
-        for (const c of left) skipped.push({ ...onBoard.get(c.part.id), reachable: false, skipReason: '与旁边的零件挤在一起，夹爪下不去，也拨不开' });
+        for (const c of left) skipped.push({ ...onBoard.get(c.part.id), reachable: false, skipReason: '与旁边的零件挤得太紧：夹爪下不去，拨开又会碰到引脚，请手动分开' });
         break;
       }
       const c = left[pushI];
       const before = onBoard.get(c.part.id);
-      // 合拢的两指连线沿推的方向；腕部能转的范围有限，取够得着的那个方向（两指对称，转 180° 也一样）
-      const yaws = [push.pushYaw, push.pushYaw + Math.PI, push.pushYaw + Math.PI / 2, push.pushYaw - Math.PI / 2];
+      // 合拢的两指连线沿推的方向（推杆的形状按这个方向算过避让）；两指对称，转 180° 形状不变，取够得着的那个
+      const yaws = [push.pushYaw, push.pushYaw + Math.PI];
       const pushYaw = yaws.find((y) => [push.start, push.end].every((q) => reachable([q[0], q[1], PUSH_Z], y) && reachable([q[0], q[1], PUSH_Z + arm.approach], y)));
       if (pushYaw === undefined) {
         pushes.set(c.part.id, MAX_PUSHES); // 这颗拨不了，下一轮试别的

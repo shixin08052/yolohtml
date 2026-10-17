@@ -1096,7 +1096,8 @@ async function runDetect({ force = false } = {}) {
     boxEditor.setBoxes(detections);
     if (onnx) {
       const t = onnx;
-      panel.message(`推理完成（${t.info.backend === 'webgpu' ? 'WebGPU' : 'WASM'}）：${t.raw.length} 个框，同类去重后 ${t.dets.length} 个，推理 ${t.inferMs.toFixed(0)} ms${t.color ? `；颜色分割补上 ${t.color.added} 个` : ''}`, 'ok');
+      const nLow = t.dets.filter((d) => d.low).length;
+      panel.message(`推理完成（${t.info.backend === 'webgpu' ? 'WebGPU' : 'WASM'}）：保留 ${t.dets.length} 个框${nLow ? `（其中 ${nLow} 个置信度偏低、但与别的框不重叠，补上）` : ''}，推理 ${t.inferMs.toFixed(0)} ms${t.color ? `；颜色分割补上 ${t.color.added} 个` : ''}`, 'ok');
     }
   }
   $('#dets-toggle').hidden = false;
@@ -1331,7 +1332,8 @@ function renderDetControls() {
     html += `<dt>推理后端</dt><dd>${backend}</dd>`;
     html += `<dt>模型加载</dt><dd>${fmt(i.loadMs, 0)} ms <span class="muted">（下载 ${fmt(i.fetchMs, 0)} + 初始化 ${fmt(i.createMs, 0)}）</span></dd>`;
     html += `<dt>推理耗时</dt><dd>${fmt(t.prepMs + t.inferMs + t.postMs, 0)} ms <span class="muted">（前处理 ${fmt(t.prepMs, 0)} + 推理 ${fmt(t.inferMs, 0)} + 后处理 ${fmt(t.postMs, 0)}）</span></dd>`;
-    html += `<dt>检测数量</dt><dd>${t.raw.length} 个 → 同类去重后 ${t.dets.length} 个 <span class="muted">（置信度 ≥ ${DETECT.scoreThreshold}，IoU > ${DETECT.dedupIou} 视为重复）</span></dd>`;
+    const nLow = t.dets.filter((d) => d.low).length;
+    html += `<dt>检测数量</dt><dd>${t.raw.length} 个 → 保留 ${t.dets.length} 个${nLow ? `（含 ${nLow} 个低置信度补漏）` : ''} <span class="muted">（置信度 ≥ ${DETECT.scoreThreshold} 的同类去重，IoU > ${DETECT.dedupIou} 视为重复；${DETECT.lowThreshold}–${DETECT.scoreThreshold} 的只在与别的框重叠 ≤ ${DETECT.lowMaxIou} 时补上）</span></dd>`;
     if (t.color) {
       html += `<dt>颜色分割</dt><dd>${t.color.candidates} 个候选，补上 <b>${t.color.added}</b> 个 YOLO 漏掉的 <span class="muted">（${fmt(t.color.ms, 0)} ms，虚线框）</span></dd>`;
     }

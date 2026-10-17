@@ -68,10 +68,12 @@ export const BINS = [
   { id: 1, cls: 1, key: 'led', label: 'LED', hex: '#d94c4c', center: BIN_SLOTS.rightMid, size: BIN_SIZE },
 ];
 
-// 检测：输入尺寸、置信度阈值、NMS 阈值（只用于原始输出）、同类去重阈值
-// 去重：训练数据少，端到端模型偶尔对同一个零件出两个框（IoU 0.96–0.98，分数 0.5–0.75），同类 IoU 大于 dedupIou 的只留高分。
-// 阈值取 0.9：几颗 LED 斜着并排贴在一起时，轴对齐的框彼此重叠也很多（可到 0.7–0.85），阈值太低会把真的第二颗删掉
-export const DETECT = { imgsz: 1024, scoreThreshold: 0.4, iouThreshold: 0.5, dedupIou: 0.9 };
+// 检测：输入尺寸、置信度阈值、NMS 阈值（只用于原始输出）、同类去重阈值、低置信度补漏（yolo.js 的 selectDetections）
+// 去重：模型偶尔对同一个零件出两个框（第一版 IoU 0.96–0.98，分数 0.5–0.75），同类 IoU 大于 dedupIou 的只留高分。
+//   贴在一起的两颗 LED 的框重叠不多（并排紧贴、斜 45° 并排都约 0.2），0.7 不会误删
+// 低置信度补漏：透明 LED 反差小，分数常在 0.3 多（实测 0.38）；lowThreshold–scoreThreshold 之间的框只在与已保留的框都几乎不重叠
+//   （IoU ≤ lowMaxIou）时补上——低分框多半是同一零件的重复框（与高分框重叠约 0.8），这样不会多出来
+export const DETECT = { imgsz: 1024, scoreThreshold: 0.4, lowThreshold: 0.25, lowMaxIou: 0.3, iouThreshold: 0.5, dedupIou: 0.7 };
 
 // 模型文件（public/models/，步骤 13 导出）：parts 为零件模型，coco 为官方 COCO 模型（调试用）
 export const MODELS = {

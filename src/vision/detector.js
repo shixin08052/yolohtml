@@ -188,10 +188,10 @@ export function createOnnxDetector(modelUrl, { prefer = 'auto', names = null } =
      * @param {{ onPosted?: () => void }} [opts] onPosted：照片交给 Worker 后调用（主线程可以趁推理时做别的）
      * @returns {Promise<{ raw: object[], dets: import('../state.js').Detection[], prepMs: number, inferMs: number, postMs: number, dims: number[] }>}
      */
-    async detect(bitmap, { scoreThreshold = DETECT.scoreThreshold, iouThreshold = DETECT.iouThreshold, dedupIou = DETECT.dedupIou, onPosted = null } = {}) {
+    async detect(bitmap, { scoreThreshold = DETECT.scoreThreshold, lowThreshold = DETECT.lowThreshold, lowMaxIou = DETECT.lowMaxIou, iouThreshold = DETECT.iouThreshold, dedupIou = DETECT.dedupIou, onPosted = null } = {}) {
       await this.init();
       const copy = await createImageBitmap(bitmap);
-      const pending = call({ type: 'detect', bitmap: copy, scoreThreshold, iouThreshold, dedupIou }, [copy]);
+      const pending = call({ type: 'detect', bitmap: copy, scoreThreshold, lowThreshold, lowMaxIou, iouThreshold, dedupIou }, [copy]);
       onPosted?.(); // 照片已交给 Worker，主线程可以去做别的
       const r = await pending;
       // raw 保留模型自己的类别 ID 和类别名（与 predict_dump.py 的输出对照）；
@@ -199,7 +199,7 @@ export function createOnnxDetector(modelUrl, { prefer = 'auto', names = null } =
       const map = modelClassMap(names);
       const own = (d) => ({ cls: d.cls, name: names?.[d.cls] ?? String(d.cls), score: d.score, box: d.box });
       const dets = map
-        ? r.dets.filter((d) => map[d.cls] >= 0).map((d) => ({ ...own(d), cls: map[d.cls], name: CLASSES[map[d.cls]].name }))
+        ? r.dets.filter((d) => map[d.cls] >= 0).map((d) => ({ ...own(d), cls: map[d.cls], name: CLASSES[map[d.cls]].name, ...(d.low ? { low: true } : {}) }))
         : r.dets.map(own);
       return { ...r, raw: r.raw.map(own), dets };
     },

@@ -4,8 +4,9 @@
 //
 // 消息：
 //   { id, type: 'init', modelUrl, ortBase, prefer }  → { backend, loadMs, fetchMs, createMs, modelBytes, inputs, outputs }
-//   { id, type: 'detect', bitmap, scoreThreshold, iouThreshold, dedupIou } → { raw, dets, dims, width, height, prepMs, inferMs, postMs }
-import { preprocess, postprocess, nmsByClass } from './yolo.js';
+//   { id, type: 'detect', bitmap, scoreThreshold, lowThreshold, lowMaxIou, iouThreshold, dedupIou } → { raw, dets, dims, width, height, prepMs, inferMs, postMs }
+//   raw 为置信度 ≥ lowThreshold 的原始框；dets 按 yolo.js 的 selectDetections 选出
+import { preprocess, postprocess, selectDetections } from './yolo.js';
 
 let ort = null;
 let session = null;
@@ -62,7 +63,7 @@ function configure(ortBase) {
   ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(4, self.navigator.hardwareConcurrency || 1) : 1;
 }
 
-async function detect({ bitmap, scoreThreshold, iouThreshold, dedupIou }) {
+async function detect({ bitmap, scoreThreshold, lowThreshold = scoreThreshold, lowMaxIou, iouThreshold, dedupIou }) {
   const W = bitmap.width;
   const H = bitmap.height;
   const t0 = performance.now();
@@ -82,8 +83,8 @@ async function detect({ bitmap, scoreThreshold, iouThreshold, dedupIou }) {
   const out = (await session.run(feeds))[session.outputNames[0]];
   const t2 = performance.now();
   const data = out.data instanceof Float32Array ? out.data : Float32Array.from(out.data);
-  const raw = postprocess(data, out.dims, params, W, H, { scoreThreshold, iouThreshold });
-  const dets = nmsByClass(raw, dedupIou);
+  const raw = postprocess(data, out.dims, params, W, H, { scoreThreshold: Math.min(scoreThreshold, lowThreshold), iouThreshold });
+  const dets = selectDetections(raw, { scoreThreshold, lowThreshold, dedupIou, lowMaxIou });
   const t3 = performance.now();
   return { raw, dets, dims: out.dims, width: W, height: H, prepMs: t1 - t0, inferMs: t2 - t1, postMs: t3 - t2 };
 }
