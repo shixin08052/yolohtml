@@ -24,16 +24,6 @@ export function drawDetections(ctx, boxes, scale, dpr = 1, { selected = -1, draf
     const color = CLASSES[d.cls]?.color ?? '#c96442';
     const sel = i === selected;
     ctx.strokeStyle = color;
-    // 按尺寸修正过的框：原来的框画成细虚线
-    if (d.rawBox) {
-      const [r1, s1, r2, s2] = d.rawBox;
-      ctx.lineWidth = lw * 0.7;
-      ctx.setLineDash([3 * lw, 3 * lw]);
-      ctx.globalAlpha = 0.7;
-      ctx.strokeRect(r1, s1, r2 - r1, s2 - s1);
-      ctx.globalAlpha = 1;
-      ctx.setLineDash([]);
-    }
     ctx.lineWidth = sel ? lw * 1.8 : lw;
     // 颜色分割补上的框用虚线
     ctx.setLineDash(d.origin === 'color' ? [5 * lw, 3 * lw] : []);

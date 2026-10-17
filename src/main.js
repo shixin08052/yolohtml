@@ -1105,10 +1105,13 @@ async function runDetect({ force = false } = {}) {
     detResult = { bitmap: image.bitmap, detections, source, note, onnx, debugOnly, fit };
     boxEditor.setBoxes(detections);
     if (fit?.changes.length) {
-      const nSplit = fit.changes.filter((c) => c.kind === 'split').length;
-      const nTrim = fit.changes.length - nSplit;
+      const n = (k) => fit.changes.filter((c) => c.kind === k).length;
       panel.message(
-        `按 LED 的尺寸修正了 ${fit.changes.length} 个偏大的框：${[nTrim ? `${nTrim} 个伸进了旁边零件，裁掉挨着的那一头` : '', nSplit ? `${nSplit} 个是并排的几个 LED 合成了一个框，已拆开` : ''].filter(Boolean).join('；')}（虚线为原来的框）`,
+        `按 LED 的尺寸修正了 ${fit.changes.length} 个偏大的框：${[
+          n('trim') ? `${n('trim')} 个伸进了旁边零件，裁掉挨着的那一头` : '',
+          n('split') ? `${n('split')} 个是挨着的两个 LED 合成了一个框，已拆开（其中已单独框到的那个不重复算）` : '',
+          n('drop') ? `${n('drop')} 个与已有的框重复，去掉` : '',
+        ].filter(Boolean).join('；')}`,
         'info',
       );
     }
@@ -1384,8 +1387,8 @@ function renderDetControls() {
     const f = detResult.fit;
     if (f) {
       const sc = f.scale[1];
-      const nSplit = f.changes.filter((c) => c.kind === 'split').length;
-      html += `<dt>尺寸修正</dt><dd>${f.changes.length ? `${f.changes.length} 个偏大的框（裁短 ${f.changes.length - nSplit}、拆开 ${nSplit}）` : '框的大小都正常'} <span class="muted">（LED 本体按 8.5 × 5.8 mm、朝向看引脚推算框该多大${sc ? `，本张照片比例 ${fmt(sc, 2)}` : ''}；超过 ${SIZE.trim} 倍算偏大；${fmt(f.ms, 0)} ms）</span></dd>`;
+      const n = (k) => f.changes.filter((c) => c.kind === k).length;
+      html += `<dt>尺寸修正</dt><dd>${f.changes.length ? `${f.changes.length} 个偏大的框（裁短 ${n('trim')}、拆开 ${n('split')}、重复去掉 ${n('drop')}）` : '框的大小都正常'} <span class="muted">（LED 本体按 8.5 × 5.8 mm、朝向看引脚推算框该多大${sc ? `，本张照片比例 ${fmt(sc, 2)}` : ''}；超过 ${SIZE.trim} 倍算偏大；${fmt(f.ms, 0)} ms）</span></dd>`;
     }
     html += '</dl>';
     if (t.model !== 'parts') {

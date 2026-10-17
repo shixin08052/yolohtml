@@ -330,6 +330,9 @@ export function ledColor(patch, body, { others = [] } = {}) {
   // 纸面颜色：本体外 2–5 mm 一圈里、不属于其他零件的像素的中值
   const ring = [[], [], []];
   const inBody = [];
+  // 落在别的框里的也另记一份：框整个被别的框盖住时（多半是同一个零件的重复框）退回用它们
+  const inBodyAll = [];
+  const ringAll = [[], [], []];
   const xs = body.map((p) => p[0]);
   const ys = body.map((p) => p[1]);
   const m = 5 * k;
@@ -341,11 +344,16 @@ export function ledColor(patch, body, { others = [] } = {}) {
       const d = polyDistance(body, x, y);
       // 灯体像素：在自己框里、但不在别的零件框里（挨在一起时框会互相重叠，邻居的颜色不能算进来）
       if (d <= -0.3 * k) {
+        inBodyAll.push(i);
         if (!others.some((p) => polyDistance(p, x, y) < 0.3 * k)) inBody.push(i);
+      } else if (d >= 2 * k && d <= m) {
+        for (let c = 0; c < 3; c++) ringAll[c].push(data[i + c]);
+        if (!others.some((p) => polyDistance(p, x, y) < 0.8 * k)) for (let c = 0; c < 3; c++) ring[c].push(data[i + c]);
       }
-      else if (d >= 2 * k && d <= m && !others.some((p) => polyDistance(p, x, y) < 0.8 * k)) for (let c = 0; c < 3; c++) ring[c].push(data[i + c]);
     }
   }
+  if (inBody.length < 20) inBody.splice(0, inBody.length, ...inBodyAll);
+  if (ring[0].length < 20) ring.forEach((a, c) => a.splice(0, a.length, ...ringAll[c]));
   if (inBody.length < 20 || ring[0].length < 20) return null;
   const med = (a) => Float64Array.from(a).sort()[a.length >> 1];
   const paper = ring.map((a) => Math.max(40, med(a)));

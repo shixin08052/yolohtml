@@ -123,6 +123,23 @@ describe('fitBoxes 按 LED 尺寸修正检测框', () => {
     }
   });
 
+  it('大框是"已经单独框到的一个 + 没框到的一个"合成的：拆出的与已有框重合的那一半不要，不重复算', () => {
+    const pair = [{ X: 50, Y: 80, rot: 0 }, { X: 50, Y: 74.2, rot: 0 }];
+    const truth = [...refs, ...pair];
+    const a = boxOf(pair[0]);
+    const b = boxOf(pair[1]);
+    const merged = [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[2], b[2]), Math.max(a[3], b[3])];
+    const dets = [...refs.map((t) => det(boxOf(t))), det(merged, 0.6), det(b, 0.49)];
+    const r = fitBoxes(dets, { H, Hinv, dims: { 1: LED }, yawOf: yawFrom(truth) });
+    expect(r.dets).toHaveLength(5); // 3 个参考 + 拆出的上面那个 + 原来就有的下面那个
+    const subs = r.dets.filter((d) => d.fit === 'split');
+    expect(subs).toHaveLength(1);
+    expect(Math.hypot(center(subs[0].box)[0] - center(a)[0], center(subs[0].box)[1] - center(a)[1])).toBeLessThan(3);
+    expect(r.dets).toContain(dets[4]);
+    expect(r.changes).toHaveLength(1);
+    expect(r.changes[0].to).toHaveLength(1);
+  });
+
   it('拆开后看不到各自的引脚（例如其实是一个 LED 加一大块影子）：不拆，退回裁或不动', () => {
     const truth = [...refs, { X: 50, Y: 80, rot: 0 }];
     const a = boxOf(truth[3]);

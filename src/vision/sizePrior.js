@@ -15,6 +15,7 @@ export const SIZE = {
   splitArea: 1.5,    // 面积超过预期的 1.5 倍：试着拆成两个
   splitMaxIou: 0.35, // 拆出的两个框重叠不超过这个（重叠太多说明其实只有一个，只是框长了）
   splitMinCover: 0.6, // 拆出的两个框一起至少盖住大框的这么多
+  dupIou: 0.5,       // 修正出来的框与别的框重叠超过这个：那个零件已经有框，修正出来的不要
   slack: 1.05,       // 裁到预期大小的 1.05 倍
   refScore: 0.6,     // 置信度达到这个的才拿来定比例尺
   minRefs: 3,        // 参考框少于这个数时用默认比例
@@ -115,7 +116,8 @@ export function foreground(img, box, holes, paper, { step = 2, tol = 40 } = {}) 
  *   img?: { width: number, height: number, data: Uint8ClampedArray },  // 原照片：拆的时候用来挑两个对角里对的那一对
  * }} ctx
  * @param {Partial<typeof SIZE>} [opts]
- * @returns {{ dets: object[], changes: { index: number, kind: 'trim'|'split', from: number[], to: number[][] }[], scale: Record<number, number> }}
+ * @returns {{ dets: object[], changes: { index: number, kind: 'trim'|'split'|'drop', from: number[], to: number[][] }[], scale: Record<number, number> }}
+ *   drop：修正后与别的框重合，去掉
  *   dets：修正后的框（拆开的就地换成几个），改过的带 fit（'trim' / 'split'）和 rawBox（原来的框）
  */
 export function fitBoxes(dets, { H, Hinv, dims, yawOf, img = null }, opts = {}) {
@@ -265,5 +267,14 @@ export function fitBoxes(dets, { H, Hinv, dims, yawOf, img = null }, opts = {}) 
     out.push({ ...d, box, fit: 'trim', rawBox: d.box });
     changes.push({ index: i, kind: 'trim', from: d.box, to: [box] });
   });
-  return { dets: out, changes, scale };
+  // 4. 修正出来的框与别的框几乎重合（大框是"已经单独框到的一个 + 没框到的一个"合成的，拆出的一半就是那一个）：
+  //    那个零件已经有框了，修正出来的这个不要
+  const area = (b) => Math.max(0, b[2] - b[0]) * Math.max(0, b[3] - b[1]);
+  const iou = (a, b) => {
+    const i = area([Math.max(a[0], b[0]), Math.max(a[1], b[1]), Math.min(a[2], b[2]), Math.min(a[3], b[3])]);
+    return i / (area(a) + area(b) - i || 1);
+  };
+  const kept = out.filter((d) => !d.fit || !out.some((e) => e !== d && e.cls === d.cls && e.rawBox !== d.rawBox && iou(d.box, e.box) > o.dupIou));
+  for (const c of changes) c.to = c.to.filter((b) => kept.some((d) => d.box === b));
+  return { dets: kept, changes: changes.map((c) => (c.to.length ? c : { ...c, kind: 'drop' })), scale };
 }

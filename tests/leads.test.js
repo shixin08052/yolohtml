@@ -229,3 +229,11 @@ describe('LED 颜色：框与邻居重叠', () => {
     expect(ledColor(patchOf(img), box, { others: [red] }).color).toBe('clear');
   });
 });
+
+describe('LED 颜色：框被别的框整个盖住', () => {
+  it('同一颗的重复框（与自己重合）：不会因为像素全被排除而判不出颜色', () => {
+    const img = canvas(N, N);
+    const body = drawLed(img, K, N / 2, N / 2, 30, [40, 170, 70]);
+    expect(ledColor(patchOf(img), body, { others: [body] })?.color).toBe('green');
+  });
+});
