@@ -114,7 +114,7 @@ export function renderPartSheet({ front, toFront, photo, H, parts, classes, body
     const [u, v] = apply(toFront, X, Y);
     return [pad + u * k, headH + v * k];
   };
-  drawPartBoxes(ctx, { parts, classes, body, toScreen, width: W, scale: 1.8 });
+  drawPartBoxes(ctx, { parts, classes, body, toScreen, width: W, height: headH + frontH, scale: 1.8 });
 
   // 特写
   ctx.fillStyle = '#1f1e1d';

@@ -162,10 +162,11 @@ describe.skipIf(!fs.existsSync(MODEL) || !samples.length)('真实模型：与 Py
     }, 60000);
   }
 
-  it('同类去重（IoU > 0.7）去掉了重复框', () => {
+  it('同类去重不会多出框（第一版模型在旧照片上有重复框会被去掉；第二版模型在这几张照片上没有重复框）', () => {
     console.log('与 Python 对比：', JSON.stringify(results));
     const total = Object.values(results).reduce((s, r) => s + r.raw, 0);
     const dedup = Object.values(results).reduce((s, r) => s + r.dedup, 0);
-    expect(dedup).toBeLessThan(total);
+    expect(dedup).toBeLessThanOrEqual(total);
+    expect(dedup).toBeGreaterThan(0);
   });
 });

@@ -39,6 +39,53 @@ export function countByClass(parts, classes) {
   return [...out.values()];
 }
 
+/**
+ * 标签摆放：每个框的标签先试框的正上方，再试正下方、左侧、右侧、更上方；选第一个不与其他框、已放好的标签重叠的位置，
+ * 都重叠时选重叠面积最小的。（零件挨得近时标签不会互相盖住）
+ * @param {{ bbox: number[], w: number, h: number }[]} items bbox：框的外接矩形 [x0, y0, x1, y1]
+ * @param {number} width
+ * @param {number} height
+ * @param {number} [gap=6]
+ * @returns {number[][]} 每个标签左上角
+ */
+export function placeLabels(items, width, height, gap = 6) {
+  const placed = [];
+  const overlap = (a, b) => Math.max(0, Math.min(a[2], b[2]) - Math.max(a[0], b[0])) * Math.max(0, Math.min(a[3], b[3]) - Math.max(a[1], b[1]));
+  const clampX = (x, w) => Math.min(Math.max(x, 2), width - w - 2);
+  const clampY = (y, h) => Math.min(Math.max(y, 2), height - h - 2);
+  return items.map((it, i) => {
+    const [x0, y0, x1, y1] = it.bbox;
+    const cx = (x0 + x1) / 2;
+    const cy = (y0 + y1) / 2;
+    const { w, h } = it;
+    const cands = [
+      [cx - w / 2, y0 - gap - h],
+      [cx - w / 2, y1 + gap],
+      [x0 - gap - w, cy - h / 2],
+      [x1 + gap, cy - h / 2],
+      [cx - w / 2, y0 - 2 * gap - 2 * h],
+      [cx - w / 2, y1 + 2 * gap + h],
+    ].map(([x, y]) => [clampX(x, w), clampY(y, h)]);
+    let best = cands[0];
+    let bestCost = Infinity;
+    for (const [x, y] of cands) {
+      const r = [x, y, x + w, y + h];
+      let cost = 0;
+      items.forEach((o, j) => {
+        if (j !== i) cost += overlap(r, o.bbox);
+      });
+      for (const q of placed) cost += 2 * overlap(r, q);
+      if (cost < bestCost - 1e-9) {
+        best = [x, y];
+        bestCost = cost;
+        if (cost === 0) break;
+      }
+    }
+    placed.push([best[0], best[1], best[0] + w, best[1] + h]);
+    return best;
+  });
+}
+
 /** 零件的显示编号（从 1 开始，与导出的零件图片、分拣指令一致） */
 export const partNo = (p, i = 0) => (Number.isInteger(p.id) ? p.id : i) + 1;
 
@@ -46,11 +93,12 @@ export const partNo = (p, i = 0) => (Number.isInteger(p.id) ? p.id : i) + 1;
  * 在画布上框出元件（按类别颜色，编号 + 类别名的标签）
  * @param {CanvasRenderingContext2D} ctx
  * @param {{ parts: object[], classes: object[], body: (cls: number) => object, toScreen: (P: number[]) => number[],
- *           width: number, scale?: number, pad?: number }} o scale：线宽、字号的倍数
+ *           width: number, height?: number, scale?: number, pad?: number }} o scale：线宽、字号的倍数
  */
-export function drawPartBoxes(ctx, { parts, classes, body, toScreen, width, scale = 1, pad = 1.5 }) {
+export function drawPartBoxes(ctx, { parts, classes, body, toScreen, width, height, scale = 1, pad = 1.5 }) {
   ctx.save();
   ctx.lineJoin = 'round';
+  const boxes = [];
   parts.forEach((p, i) => {
     const color = partColor(p);
     const pts = outlineCorners(p, body(p.cls), pad).map(toScreen);
@@ -62,21 +110,26 @@ export function drawPartBoxes(ctx, { parts, classes, body, toScreen, width, scal
     ctx.lineWidth = 2.5 * scale;
     ctx.strokeStyle = color;
     ctx.stroke();
-    // 编号：放在轮廓最上面的角旁边
-    const top = pts.reduce((a, b) => (b[1] < a[1] ? b : a));
-    const label = `${partNo(p, i)} ${partName(p)}`;
-    ctx.font = `600 ${12 * scale}px system-ui, "PingFang SC", "Microsoft YaHei", sans-serif`;
-    const tw = ctx.measureText(label).width + 10 * scale;
-    const h = 18 * scale;
-    const lx = Math.min(Math.max(top[0] - tw / 2, 2), width - tw - 2);
-    const ly = Math.max(top[1] - 24 * scale, 2);
-    ctx.fillStyle = color;
+    boxes.push({ pts, color, label: `${partNo(p, i)} ${partName(p)}` });
+  });
+  // 标签：先量好大小，再避开别的框和已放好的标签摆放
+  ctx.font = `600 ${12 * scale}px system-ui, "PingFang SC", "Microsoft YaHei", sans-serif`;
+  const h = 18 * scale;
+  const items = boxes.map((b) => {
+    const xs = b.pts.map((q) => q[0]);
+    const ys = b.pts.map((q) => q[1]);
+    return { bbox: [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)], w: ctx.measureText(b.label).width + 10 * scale, h };
+  });
+  const pos = placeLabels(items, width, height ?? Infinity, 6 * scale);
+  boxes.forEach((b, i) => {
+    const [lx, ly] = pos[i];
+    ctx.fillStyle = b.color;
     ctx.beginPath();
-    ctx.roundRect(lx, ly, tw, h, 4 * scale);
+    ctx.roundRect(lx, ly, items[i].w, h, 4 * scale);
     ctx.fill();
     ctx.fillStyle = '#fff';
     ctx.textBaseline = 'middle';
-    ctx.fillText(label, lx + 5 * scale, ly + h / 2 + 0.5 * scale);
+    ctx.fillText(b.label, lx + 5 * scale, ly + h / 2 + 0.5 * scale);
   });
   ctx.restore();
 }
@@ -133,7 +186,7 @@ export function createConfirmView({ root, onConfirm, onEdit }) {
       const w = toTex[2][0] * X + toTex[2][1] * Y + toTex[2][2];
       return [ox + ((toTex[0][0] * X + toTex[0][1] * Y + toTex[0][2]) / w) * k, oy + ((toTex[1][0] * X + toTex[1][1] * Y + toTex[1][2]) / w) * k];
     };
-    drawPartBoxes(ctx, { parts, classes, body, toScreen, width: W });
+    drawPartBoxes(ctx, { parts, classes, body, toScreen, width: W, height: H });
   }
 
   new ResizeObserver(() => draw()).observe(canvas);
