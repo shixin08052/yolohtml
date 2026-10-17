@@ -28,13 +28,40 @@ function anglesDeg(P, arm, gripYaw) {
  * @param {object} arm
  */
 export function sortInstructions({ tasks, skipped }, parts, bins, classes, arm) {
-  const byId = new Map(parts.map((p) => [p.id, p]));
+  // 零件当前的位置（拨开后会变）
+  const byId = new Map(parts.map((p) => [p.id, { ...p }]));
   const steps = tasks.map((t, i) => {
     const p = byId.get(t.partId);
+    if (t.kind === 'push') {
+      const step = {
+        order: i + 1,
+        kind: 'push',
+        partId: t.partId,
+        number: t.partId + 1,
+        cls: p.cls,
+        name: partName(p),
+        color: p.color ?? null,
+        part: { x: r2(p.x), y: r2(p.y), rotDeg: r2(p.rotDeg), score: r2(p.score) },
+        push: {
+          hover: pt(t.hoverStart),
+          start: pt(t.start),
+          end: pt(t.end),
+          distMm: r2(t.dist),
+          gripYawDeg: r2(deg(t.gripYaw)),
+          startAngles: anglesDeg(t.start, arm, t.gripYaw),
+          endAngles: anglesDeg(t.end, arm, t.gripYaw),
+          partTo: { x: r2(t.partTo[0]), y: r2(t.partTo[1]) },
+        },
+      };
+      p.x = t.partTo[0];
+      p.y = t.partTo[1];
+      return step;
+    }
     const bin = bins.find((b) => b.id === t.binId);
     const placeYaw = t.placeYaw ?? t.gripYaw;
     return {
       order: i + 1,
+      kind: 'pick',
       partId: t.partId,
       number: t.partId + 1, // 显示编号（与零件图片一致）
       cls: p.cls,
@@ -46,6 +73,8 @@ export function sortInstructions({ tasks, skipped }, parts, bins, classes, arm) 
         point: pt(t.from),
         gripYawDeg: t.gripYaw == null ? null : r2(deg(t.gripYaw)),
         gripWidthMm: GRIP_WIDTH[p.cls] ?? null,
+        openMm: t.gap == null ? null : r2(t.gap), // 下爪时的张开量
+        offsetMm: r2(t.offset ?? 0), // 抓点沿长轴偏离本体中心
         angles: anglesDeg(t.from, arm, t.gripYaw),
       },
       place: {
@@ -70,7 +99,7 @@ export function sortInstructions({ tasks, skipped }, parts, bins, classes, arm) 
 export function instructionsJson(ins, { photo = '', time = '', arm }) {
   return JSON.stringify(
     {
-      说明: '分拣指令：按 steps 的顺序执行。每一步：移到 pick.hover → 竖直下降到 pick.point → 夹爪收到 gripWidthMm 夹紧 → 抬回 pick.hover → 移到 place.hover → 下降到 place.point → 松开 → 抬起。',
+      说明: '分拣指令：按 steps 的顺序执行。抓取放入（kind = pick）：夹爪张到 pick.openMm → 移到 pick.hover → 竖直下降到 pick.point → 夹爪收到 gripWidthMm 夹紧 → 抬回 pick.hover → 移到 place.hover → 下降到 place.point → 松开 → 抬起。拨开（kind = push，零件挤在一起、夹爪下不去时）：夹爪合拢 → 移到 push.hover → 竖直下到 push.start → 水平推到 push.end（零件被推到 push.partTo）→ 抬起。',
       坐标系: '底板坐标，mm：原点在底板左下角，X 向右、Y 向远处（离操作者）、Z 向上；point 为指尖位置。角度单位为度',
       关节: 'angles = [θ₀ 底座转角, θ₁ 大臂, θ₂ 小臂, θ₃ 腕部俯仰, θ₄ 腕部转动]（逆运动学结果）',
       照片: photo,
@@ -98,12 +127,23 @@ export function instructionsCsv(ins) {
     '料盒', '松开点 X', '松开点 Y', '松开点 Z', '放置夹爪方向 (°)', ...J.map((j) => `放置 ${j} (°)`),
     '预计落点 X', '预计落点 Y', '备注',
   ];
-  const rows = ins.steps.map((s) => [
-    s.order, s.number, s.name, s.part.x, s.part.y, s.part.rotDeg,
-    ...s.pick.point, s.pick.gripYawDeg, s.pick.gripWidthMm, ...ang(s.pick.angles),
-    s.place.bin?.name ?? '', ...s.place.point, s.place.gripYawDeg, ...ang(s.place.angles),
-    s.rest?.x ?? '', s.rest?.y ?? '', '',
-  ]);
+  const rows = ins.steps.map((s) =>
+    s.kind === 'push'
+      ? [
+          // 拨开：抓取点列填推的起点，松开点列填推的终点，预计落点列填零件被推到的位置
+          s.order, s.number, s.name, s.part.x, s.part.y, s.part.rotDeg,
+          ...s.push.start, s.push.gripYawDeg, 0, ...ang(s.push.startAngles),
+          '（拨开）', ...s.push.end, s.push.gripYawDeg, ...ang(s.push.endAngles),
+          s.push.partTo.x, s.push.partTo.y, `拨开：夹爪合拢，把零件推开 ${s.push.distMm} mm`,
+        ]
+      : [
+          s.order, s.number, s.name, s.part.x, s.part.y, s.part.rotDeg,
+          ...s.pick.point, s.pick.gripYawDeg, s.pick.gripWidthMm, ...ang(s.pick.angles),
+          s.place.bin?.name ?? '', ...s.place.point, s.place.gripYawDeg, ...ang(s.place.angles),
+          s.rest?.x ?? '', s.rest?.y ?? '',
+          s.pick.openMm == null ? '' : `下爪时张开 ${s.pick.openMm} mm${s.pick.offsetMm ? `，抓点偏离本体中心 ${s.pick.offsetMm} mm` : ''}`,
+        ],
+  );
   for (const k of ins.skipped) {
     rows.push(['跳过', k.number, k.name, k.x, k.y, ...Array(header.length - 6).fill(''), k.reason]);
   }

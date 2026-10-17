@@ -26,6 +26,7 @@ import { boxToTexture, erasePolygons } from './vision/erase.js';
 import { estimateYaw, expandPoly } from './vision/orientation.js';
 import { samplePatch, boardToPatch, leadDirection, ledColor, LEAD } from './vision/leads.js';
 import { binsFor, partName as displayName, partColor } from './robot/bins.js';
+import { separateBodies } from './robot/clearance.js';
 import { segmentParts, fuseDetections } from './vision/colorSeg.js';
 import { measurePaper, EDGE_NAMES, CHECK_LIMITS } from './vision/boardCheck.js';
 import { markerCornersWorld, markerRectOnPage, paperFrame, designFrame, frameMatrix } from './vision/boardLayout.js';
@@ -1130,7 +1131,13 @@ function applyDetections() {
   const cam = { Hinv: calib.Hinv, K, R: pose.R, position: pose.position };
   const mapped = mapDetections(detResult.debugOnly ? [] : detResult.detections, cam, { parallax: parallaxOn });
   const { dropped } = mapped;
-  const parts = refineFromPhoto(mapped.parts);
+  // 本体互相插进去的（零件挤在一起、实拍位置有零点几毫米的误差）各推开一点，3D 里不穿模
+  const sep = separateBodies(refineFromPhoto(mapped.parts), partFootprints());
+  const parts = sep.parts;
+  if (sep.moved.size) {
+    const mx = Math.max(...sep.moved.values());
+    panel.message(`${sep.moved.size} 个零件的模型与旁边的互相插进去了，已各推开一点（最多 ${fmt(mx, 1)} mm）`, 'info');
+  }
   timeStep('map', now() - t0);
   const t1 = now();
   stopSorting();
@@ -1412,6 +1419,8 @@ const sortPlayer = createSortPlayer({
   onProgress: ({ task, phase }) => updateSortProgress(task, phase),
   onState: (state) => onSortState(state),
 });
+/** 各类零件的占地（scene/parts.js 的 partFootprint） */
+const partFootprints = () => Object.fromEntries(CLASSES.map((c) => [c.id, partFootprint(c.id)]));
 /** 当前规划：{ tasks, skipped, segs } */
 let sortPlan = null;
 /** 分拣是否动过场景（零件被拿走、机械臂离开初始姿态） */
@@ -1440,7 +1449,7 @@ function refreshPlan() {
   const { parts } = store.state;
   if (!parts) return;
   const start = fkWorld(arm.homeAngles, ARM);
-  const footprints = Object.fromEntries(CLASSES.map((c) => [c.id, partFootprint(c.id)]));
+  const footprints = partFootprints();
   // 料盒按需生成：电阻一个，LED 按颜色各一个
   const binList = binsFor(parts);
   bins.setBins(binList);
@@ -1481,7 +1490,9 @@ function renderSortSection() {
   const { tasks, skipped } = sortPlan;
   const byId = new Map(store.state.parts.map((p) => [p.id, p]));
   const body = panel.setCustom('sort', '分拣');
-  let html = `<p class="summary">共 <b>${tasks.length}</b> 个零件待分拣${skipped.length ? `，<span class="bad">${skipped.length} 个够不到</span>` : ''}</p>`;
+  const nPick = tasks.filter((t) => t.kind !== 'push').length;
+  const nPush = tasks.length - nPick;
+  let html = `<p class="summary">共 <b>${nPick}</b> 个零件待分拣${nPush ? `<span class="muted">（零件挤在一起，要先拨开 ${nPush} 次）</span>` : ''}${skipped.length ? `，<span class="bad">${skipped.length} 个跳过</span>` : ''}</p>`;
   html += `<div class="sort-controls">
     <button type="button" class="btn btn-primary btn-small" id="sort-start">开始</button>
     <button type="button" class="btn btn-small" id="sort-pause" disabled>暂停</button>
@@ -1491,6 +1502,9 @@ function renderSortSection() {
   <p class="muted small" id="sort-phase">等待开始</p>`;
   html += '<ol class="task-list">' + tasks.map((t, i) => {
     const p = byId.get(t.partId);
+    if (t.kind === 'push') {
+      return `<li data-i="${i}" class="push"><span class="dot" style="--c:${partColor(p)}"></span>拨开 ${displayName(p)}<span class="muted"> · 夹爪下不去，先推开 ${fmt(t.dist, 0)} mm</span></li>`;
+    }
     const bin = sortPlan.bins.find((b) => b.id === t.binId);
     return `<li data-i="${i}"><span class="dot" style="--c:${partColor(p)}"></span>${partName(p)}<span class="muted"> → ${bin.label}盒</span></li>`;
   }).join('') + '</ol>';
@@ -1523,7 +1537,8 @@ function updateSortProgress(task, phase) {
   });
   const ph = body.querySelector('#sort-phase');
   if (ph) {
-    ph.textContent = !sortTouched ? '等待开始' : task == null ? (finished ? `全部完成（${n} 个）` : phase) : `第 ${task + 1} / ${n} 个 · ${phase}`;
+    const nPick = sortPlan.tasks.filter((t) => t.kind !== 'push').length;
+    ph.textContent = !sortTouched ? '等待开始' : task == null ? (finished ? `全部完成（${nPick} 个）` : phase) : `第 ${task + 1} / ${n} 步 · ${phase}`;
   }
 }
 

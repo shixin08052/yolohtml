@@ -1,10 +1,11 @@
 // 分拣动作序列（纯函数，不碰 DOM）：把规划好的任务展开成一段段可播放的动作。
 // 每个零件：张开夹爪 → 移到零件正上方 → 竖直下降到夹取高度 → 夹紧 → 挂到夹爪上 → 竖直抬起
 //         → 移到料盒上方（途中转动夹爪，长条零件转成沿料盒长边）→ 竖直下降 → 松开 → 零件落下、散开 → 竖直抬起
+// 拨开（零件挤在一起、夹爪下不去时）：合拢夹爪 → 移到零件背后上方 → 竖直下到板面 → 推着零件平移 → 竖直抬起
 // 全部完成后回到初始姿态。
 // 段的类型：
 //   move   关节空间插值（θ₃ 由 θ₁、θ₂ 推出，途中夹爪竖直向下）
-//   line   指尖走直线（每帧解一次逆运动学），用于竖直下降 / 抬起
+//   line   指尖走直线（每帧解一次逆运动学），用于竖直下降 / 抬起；带 push 字段时零件跟着平移（拨开）
 //   grip   夹爪开口变化（两指内侧间距，mm）
 //   attach / detach  零件挂到夹爪上 / 放回场景（瞬间完成）
 //   drop   零件从松开处落到盒里（robot/drop.js 的 dropPose）；带 grip 字段时夹爪同时张开
@@ -61,8 +62,8 @@ export function buildSequence(tasks, parts, arm, { startAngles, homeAngles, star
     if (!s.reachable) throw new Error(`动作序列中的位置不可达：${P.map((x) => x.toFixed(1))}（${s.reason}）`);
     return s.angles;
   };
-  const line = (from, to, gripYaw, task, phase) => {
-    segs.push({ type: 'line', task, phase, from, to, gripYaw, ms: lineMs(from, to) });
+  const line = (from, to, gripYaw, task, phase, extra = {}) => {
+    segs.push({ type: 'line', task, phase, from, to, gripYaw, ms: lineMs(from, to), ...extra });
     cur = solve(to, gripYaw);
   };
   const grip = (to, task, phase) => {
@@ -71,10 +72,19 @@ export function buildSequence(tasks, parts, arm, { startAngles, homeAngles, star
   };
 
   tasks.forEach((t, i) => {
+    if (t.kind === 'push') {
+      if (gap > 0) grip(0, i, '合拢夹爪');
+      move(solve(t.hoverStart, t.gripYaw), i, '移到要拨开的零件旁');
+      line(t.hoverStart, t.start, t.gripYaw, i, '下到板面');
+      line(t.start, t.end, t.gripYaw, i, '拨开', { push: { partId: t.partId, from: t.partFrom, to: t.partTo } });
+      line(t.end, t.hoverEnd, t.gripYaw, i, '抬起');
+      return;
+    }
     const part = byId.get(t.partId);
     const width = GRIP_WIDTH[part.cls] ?? 5;
-    const open = Math.min(GRIP_MAX, width + 12);
-    if (gap < open) grip(open, i, '张开夹爪');
+    // 张开量按规划（零件挤在一起时张小一点）；开口不对（太小，或比规划的大、会碰到旁边的零件）先调好再下去
+    const open = Math.min(GRIP_MAX, t.gap ?? width + 12);
+    if (Math.abs(gap - open) > 1e-6) grip(open, i, gap < open ? '张开夹爪' : '收小夹爪开口');
     move(solve(t.hoverFrom, t.gripYaw), i, '移到零件上方');
     line(t.hoverFrom, t.from, t.gripYaw, i, '下降');
     grip(width, i, '夹紧');

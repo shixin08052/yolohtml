@@ -37,6 +37,16 @@ export function createSortPlayer({ arm, partsLayer, requestRender, onProgress = 
       const e = easeInOutCubic(k);
       const P = s.from.map((x, i) => x + (s.to[i] - x) * e);
       arm.setAngles(ikWorld(P, ARM, { gripYaw: s.gripYaw, check: false }).angles);
+      if (s.push) {
+        // 拨开：零件跟着指尖平移（与指尖同样的缓动）
+        if (!s.push.started) {
+          s.push.started = true;
+          partsLayer.finishMethodAnimation();
+          partsLayer.setMoved(s.push.partId);
+        }
+        const { from, to } = s.push;
+        partsLayer.setPose(s.push.partId, from.map((v, i) => v + (to[i] - v) * e));
+      }
     } else if (s.type === 'grip') {
       arm.setGap(s.from + (s.to - s.from) * k);
     } else if (s.type === 'drop') {

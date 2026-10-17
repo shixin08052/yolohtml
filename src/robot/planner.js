@@ -6,10 +6,12 @@
 // 2. 放进对应类别的料盒：长条零件搬运途中转动夹爪，转成沿料盒长边（Y）；夹爪在盒底上方松开（左右交替），
 //    零件落下后按 drop.js 散开到不与盒里已有零件重叠的位置。松开点和盒口上方悬停点都要可达
 // 3. 顺序：贪心最近邻——从当前夹爪位置出发，每次选水平距离最近的零件；放下后从料盒上方继续
-import { BIN_WALL } from '../config.js';
+// 4. 零件挤在一起：只挑手指下得去的；一颗都下不去时先拨开一颗（robot/clearance.js）
+import { BIN_WALL, BOARD } from '../config.js';
 import { ikWorld } from './ik.js';
 import { DROP, settle } from './drop.js';
 import { binKey } from './bins.js';
+import { findGrasp, planPush } from './clearance.js';
 
 /** 每类零件被夹住处的宽度（mm）：电阻本体中部 Φ2.0（两头的端帽 Φ2.4）、LED 灯体 Φ5 */
 export const GRIP_WIDTH = { 0: 2, 1: 5 };
@@ -64,21 +66,33 @@ function placeFor(part, pickAngles, slot, z, arm) {
   return { to, placeYaw, partYawDeg: ((rot + delta) * 180) / Math.PI };
 }
 
+/** 拨开时合拢的指尖离板面的高度（mm）：低于所有零件本体的顶面，推得到 */
+export const PUSH_Z = 1;
+/** 每个零件最多拨几次 */
+const MAX_PUSHES = 2;
+
 /**
  * 分拣规划
+ * 零件挤在一起时（robot/clearance.js）：每一步只在"手指下得去"的零件里挑最近的（张开小一点、抓点沿长轴挪一点也算）；
+ * 外侧的拿走后，被挡住的往往就空出来了。一颗都下不去时先拨开一颗（夹爪合拢、推着它滑到空处），再接着规划。
  * @param {import('../state.js').Part[]} parts
  * @param {{id:number, cls:number, center:number[], size:number[]}[]} bins
  * @param {import('./ik.js').ArmDims & { base: number[], approach: number }} arm
- * @param {{ start?: number[], footprints?: Record<number, { rects: object[], height: number }> }} [opts]
+ * @param {{ start?: number[], footprints?: Record<number, { rects: object[], height: number }>, board?: { width: number, height: number } }} [opts]
  *   start：夹爪当前位置（底板坐标），默认机械臂底座正上方；footprints：各类零件的占地（scene/parts.js 的 partFootprint）
- * @returns {{ tasks: (import('../state.js').PickTask & { gripYaw: number|null, placeYaw: number|null, graspZ: number,
- *                     hoverFrom: number[], hoverTo: number[], partYawDeg: number,
- *                     drop: { from: number[], to: number[] } })[],
- *             skipped: (import('../state.js').Part & { skipReason: string })[] }}
+ * @returns {{ tasks: object[], skipped: (import('../state.js').Part & { skipReason: string })[] }}
+ *   tasks 按执行顺序，两种：
+ *   - 抓取放入（kind 'pick'）：PickTask + { gripYaw, placeYaw, graspZ, gap, offset, hoverFrom, hoverTo, partYawDeg, drop: { from, to } }
+ *     gap：下爪时的张开量；offset：抓点沿长轴偏离本体中心多少（mm）
+ *   - 拨开（kind 'push'）：{ partId, gripYaw, start, end, hoverStart, hoverEnd, partFrom, partTo, dist }
+ *     start / end：合拢的指尖推的起止点；partFrom / partTo：零件的 [x, y, z, 朝向°]
  */
-export function plan(parts, bins, arm, { start = [arm.base[0], arm.base[1], 0], footprints = {} } = {}) {
+export function plan(parts, bins, arm, { start = [arm.base[0], arm.base[1], 0], footprints = {}, board = BOARD } = {}) {
   const skipped = [];
   const candidates = [];
+  const fps = {};
+  for (const p of parts) fps[p.cls] = footprints[p.cls] ?? DEFAULT_FOOTPRINT;
+  const reachable = (P, gripYaw) => ikWorld(P, arm, { gripYaw }).reachable;
   for (const p of parts) {
     // 料盒按 binKey 对应（LED 按颜色）；没有 key 的旧式料盒按类别对应
     const bin = bins.find((b) => (b.key ? b.key === binKey(p) : b.cls === p.cls));
@@ -95,31 +109,103 @@ export function plan(parts, bins, arm, { start = [arm.base[0], arm.base[1], 0], 
       skipped.push({ ...p, reachable: false, skipReason: (a.reachable ? b : a).reason });
       continue;
     }
-    candidates.push({ part: p, bin, gripYaw, from, hoverFrom, pickAngles: a.angles });
+    candidates.push({ part: p, bin });
   }
 
-  // 贪心最近邻；距离相同按零件 id 排
+  // 板上还没拿走的零件（够不到、没有料盒的也一直留在板上，挡着别人）；拨开后位置会变
+  const onBoard = new Map(parts.map((p) => [p.id, { ...p }]));
+  const others = (id) => [...onBoard.values()].filter((o) => o.id !== id);
+  const width = (p) => GRIP_WIDTH[p.cls] ?? 5;
+  // 抓点及其正上方都要够得着
+  const graspOk = (pt, gripYaw) => reachable([pt[0], pt[1], GRASP_Z], gripYaw) && reachable([pt[0], pt[1], GRASP_Z + arm.approach], gripYaw);
+  const graspOf = (id) => {
+    const part = onBoard.get(id);
+    return findGrasp(part, others(id), { width: width(part), fps, ok: (pt) => graspOk(pt, gripYawFor(part)) });
+  };
+
+  // 贪心最近邻（只在下得去的零件里挑）；距离相同按零件 id 排
   const tasks = [];
   const fill = new Map(); // binId → 已落在盒里的零件 [{ fp, x, y, yaw, z, height }]
+  const pushes = new Map(); // 零件 id → 拨过几次
   let cur = start;
   const left = [...candidates].sort((a, b) => a.part.id - b.part.id);
   while (left.length) {
-    let best = 0;
+    let best = -1;
     let bestD = Infinity;
+    let grasp = null;
     left.forEach((c, i) => {
-      const d = Math.hypot(c.from[0] - cur[0], c.from[1] - cur[1]);
+      const g = graspOf(c.part.id);
+      if (!g) return;
+      const d = Math.hypot(g.point[0] - cur[0], g.point[1] - cur[1]);
       if (d < bestD - 1e-9) {
         bestD = d;
         best = i;
+        grasp = g;
       }
     });
+    if (best < 0) {
+      // 一颗都下不去：拨开推得最短的那颗（一样短时离夹爪近的）
+      let push = null;
+      let pushI = -1;
+      left.forEach((c, i) => {
+        if ((pushes.get(c.part.id) ?? 0) >= MAX_PUSHES) return;
+        const part = onBoard.get(c.part.id);
+        const pp = planPush(part, others(part.id), {
+          width: width(part),
+          fps,
+          board,
+          ok: (pt) => graspOk(pt, gripYawFor(part)),
+          reach: (q) => [PUSH_Z, PUSH_Z + arm.approach].every((z) => reachable([q[0], q[1], z], 0) || reachable([q[0], q[1], z], Math.PI / 2)),
+        });
+        if (!pp) return;
+        const key = pp.dist + 1e-3 * Math.hypot(pp.start[0] - cur[0], pp.start[1] - cur[1]);
+        if (!push || key < push.key) {
+          push = { ...pp, key };
+          pushI = i;
+        }
+      });
+      if (!push) {
+        for (const c of left) skipped.push({ ...onBoard.get(c.part.id), reachable: false, skipReason: '与旁边的零件挤在一起，夹爪下不去，也拨不开' });
+        break;
+      }
+      const c = left[pushI];
+      const before = onBoard.get(c.part.id);
+      // 合拢的两指连线沿推的方向；腕部能转的范围有限，取够得着的那个方向（两指对称，转 180° 也一样）
+      const yaws = [push.pushYaw, push.pushYaw + Math.PI, push.pushYaw + Math.PI / 2, push.pushYaw - Math.PI / 2];
+      const pushYaw = yaws.find((y) => [push.start, push.end].every((q) => reachable([q[0], q[1], PUSH_Z], y) && reachable([q[0], q[1], PUSH_Z + arm.approach], y)));
+      if (pushYaw === undefined) {
+        pushes.set(c.part.id, MAX_PUSHES); // 这颗拨不了，下一轮试别的
+        continue;
+      }
+      tasks.push({
+        kind: 'push',
+        partId: c.part.id,
+        gripYaw: pushYaw,
+        start: [push.start[0], push.start[1], PUSH_Z],
+        end: [push.end[0], push.end[1], PUSH_Z],
+        hoverStart: [push.start[0], push.start[1], PUSH_Z + arm.approach],
+        hoverEnd: [push.end[0], push.end[1], PUSH_Z + arm.approach],
+        partFrom: [before.x, before.y, 0, before.rotDeg ?? 0],
+        partTo: [push.part.x, push.part.y, 0, before.rotDeg ?? 0],
+        dist: push.dist,
+      });
+      onBoard.set(c.part.id, { ...before, x: push.part.x, y: push.part.y });
+      pushes.set(c.part.id, (pushes.get(c.part.id) ?? 0) + 1);
+      cur = [push.end[0], push.end[1], PUSH_Z + arm.approach];
+      continue;
+    }
     const c = left.splice(best, 1)[0];
+    const part = onBoard.get(c.part.id);
+    const gripYaw = gripYawFor(part);
+    const from = [grasp.point[0], grasp.point[1], GRASP_Z];
+    const hoverFrom = [from[0], from[1], from[2] + arm.approach];
+    const pickAngles = ikWorld(from, arm, { gripYaw }).angles;
     const placed = fill.get(c.bin.id) ?? [];
     const [ox, oy] = RELEASE_OFFSETS[placed.length % RELEASE_OFFSETS.length];
     const slot = { x: c.bin.center[0] + ox, y: c.bin.center[1] + oy };
     // 松开时零件底面在盒里最高的零件上方 DROP.height
     const releaseZ = Math.max(BIN_WALL, ...placed.map((o) => o.z + o.height)) + DROP.height;
-    const pl = placeFor(c.part, c.pickAngles, slot, releaseZ + GRASP_Z, arm);
+    const pl = placeFor(part, pickAngles, slot, releaseZ + GRASP_Z, arm);
     let reason = pl.error;
     let hoverTo = null;
     if (!reason) {
@@ -128,26 +214,33 @@ export function plan(parts, bins, arm, { start = [arm.base[0], arm.base[1], 0], 
       if (!h.reachable) reason = h.reason;
     }
     if (reason) {
-      skipped.push({ ...c.part, reachable: false, skipReason: `料盒里够不到：${reason}` });
+      skipped.push({ ...part, reachable: false, skipReason: `料盒里够不到：${reason}` });
       continue;
     }
+    // 抓点偏离本体中心 offset 时，松开那一刻零件中心在指尖下方沿零件长轴反方向 offset 处
+    const ya = (pl.partYawDeg * Math.PI) / 180;
+    const center = { x: slot.x - grasp.offset * Math.cos(ya), y: slot.y - grasp.offset * Math.sin(ya) };
     // 落下后散开到哪（随机偏移按零件 id 取种子，结果可复现）
-    const fp = footprints[c.part.cls] ?? DEFAULT_FOOTPRINT;
-    const rest = settle(c.bin, placed, fp, { x: slot.x, y: slot.y, yaw: pl.partYawDeg }, { seed: c.part.id * 7919 + c.bin.id * 104729 + 1 });
+    const fp = fps[part.cls];
+    const rest = settle(c.bin, placed, fp, { x: center.x, y: center.y, yaw: pl.partYawDeg }, { seed: part.id * 7919 + c.bin.id * 104729 + 1 });
     fill.set(c.bin.id, [...placed, { fp, x: rest.x, y: rest.y, yaw: rest.yaw, z: rest.z, height: fp.height }]);
     tasks.push({
-      partId: c.part.id,
+      kind: 'pick',
+      partId: part.id,
       binId: c.bin.id,
-      from: c.from,
+      from,
       to: pl.to,
-      gripYaw: c.gripYaw,
+      gripYaw,
       placeYaw: pl.placeYaw,
       graspZ: GRASP_Z,
-      hoverFrom: c.hoverFrom,
+      gap: grasp.gap,
+      offset: grasp.offset,
+      hoverFrom,
       hoverTo,
       partYawDeg: pl.partYawDeg,
-      drop: { from: [slot.x, slot.y, releaseZ, pl.partYawDeg], to: [rest.x, rest.y, rest.z, rest.yaw] },
+      drop: { from: [center.x, center.y, releaseZ, pl.partYawDeg], to: [rest.x, rest.y, rest.z, rest.yaw] },
     });
+    onBoard.delete(part.id);
     cur = hoverTo;
   }
   return { tasks, skipped };
