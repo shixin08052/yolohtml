@@ -412,7 +412,7 @@ body.demo .only-normal { display: none; }
 .tab:disabled { opacity: 0.45; cursor: default; }
 .tab:disabled:hover { color: var(--text-2); }
 #btn-demo[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
-body.demo .info-panel > .panel-section:not([data-key="status"]):not([data-key="sort"]):not([data-key="export"]) { display: none; }
+body.demo .info-panel > .panel-section:not([data-key="status"]):not([data-key="sort"]) { display: none; }
 body.demo-wait .info-panel > .panel-section[data-key="sort"] { display: none; }
 body.demo #view-debug .view-tools > :not(#btn-boxedit):not(.zoom-btns) { display: none; }
 body.demo #view-debug .view-tools #btn-boxedit:disabled { display: none; }
@@ -460,3 +460,4 @@ body.demo #view-three .view-tools > :not(#three-reset):not(#btn-transition) { di
 /* 导出 */
 .export-grid { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; align-items: center; font-size: 13px; color: var(--text-2); }
 .export-grid .btn-small { min-width: 52px; }
+.export-grid .check.small { display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; font-size: 12px; cursor: pointer; }

@@ -1607,7 +1607,8 @@ const exportBody = panel.setCustom('export', '导出');
 exportBody.innerHTML = `
   <p class="muted small">交付材料：流程图按"识别—定位—执行"分段；零件图片为正视图框选 + 每个零件的特写；分拣指令含抓取点、夹爪方向和开口、关节角。</p>
   <div class="export-grid">
-    <span>流程图</span><span><button type="button" class="btn btn-small" data-exp="flow-png">PNG</button> <button type="button" class="btn btn-small" data-exp="flow-svg">SVG</button></span>
+    <span>流程图</span><span><button type="button" class="btn btn-small" data-exp="flow-png">PNG</button> <button type="button" class="btn btn-small" data-exp="flow-svg">SVG</button>
+      <label class="check small"><input type="checkbox" id="exp-flow-demo" checked /> 含"正视图确认"（演示流程）</label></span>
     <span>零件图片</span><span><button type="button" class="btn btn-small" data-exp="parts-png">PNG</button></span>
     <span>分拣指令</span><span><button type="button" class="btn btn-small" data-exp="plan-csv">CSV</button> <button type="button" class="btn btn-small" data-exp="plan-json">JSON</button></span>
   </div>`;
@@ -1620,8 +1621,10 @@ function updateExportButtons() {
 store.on('change', updateExportButtons);
 
 async function exportFlow(kind) {
-  const { svg, width, height } = flowSvgStandalone({ demo: demoMode });
-  const name = `流程图_识别-定位-执行${demoMode ? '_演示' : ''}`;
+  // 演示模式不显示导出分区；是否画上演示流程的"确认"一步由勾选决定
+  const demo = $('#exp-flow-demo').checked;
+  const { svg, width, height } = flowSvgStandalone({ demo });
+  const name = `流程图_识别-定位-执行${demo ? '_含确认' : ''}`;
   if (kind === 'svg') downloadText(svg, `${name}.svg`, 'image/svg+xml;charset=utf-8');
   else await downloadCanvas(await svgToCanvas(svg, width, height, 4), `${name}.png`);
 }
