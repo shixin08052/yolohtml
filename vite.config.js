@@ -1,8 +1,11 @@
 import { defineConfig, defaultClientConditions } from 'vite';
 import { resolve } from 'node:path';
 import { execSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 
-/** 版本号：git 提交短哈希 + 构建时间（显示在页面上，便于确认浏览器拿到的是不是最新版） */
+const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'));
+
+/** 版本号：package.json 的版本 + git 提交短哈希 + 构建时间（显示在页面上，便于确认浏览器拿到的是不是最新版） */
 function buildVersion() {
   let sha = 'dev';
   try {
@@ -11,7 +14,7 @@ function buildVersion() {
     // 不在 git 仓库里时用 dev
   }
   const t = new Date(Date.now() + 8 * 3600e3).toISOString().slice(5, 16).replace('T', ' '); // 北京时间
-  return `${sha} · ${t}`;
+  return `v${pkg.version} · ${sha} · ${t}`;
 }
 
 /**

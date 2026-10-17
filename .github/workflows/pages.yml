@@ -3,7 +3,7 @@ name: Pages
 
 on:
   push:
-    branches: [claude/stoic-dijkstra-21en1i]
+    branches: [main, claude/stoic-dijkstra-21en1i]
   workflow_dispatch:
 
 permissions:
