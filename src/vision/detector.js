@@ -4,6 +4,7 @@
 // 另外提供 .detections.json 的读写（手动框选工具保存 / 载入用）。
 import { CLASSES, DETECT, MODELS } from '../config.js';
 import { nmsByClass } from './yolo.js';
+import { fetchResource } from './request.js';
 
 /** 没有 mock 检测结果 */
 export class MockMissingError extends Error {
@@ -94,14 +95,25 @@ export function parseDetections(json, { width, height }) {
       throw new Error(`第 ${i + 1} 个检测的 box 无效`);
     }
     const [a, b, c, e] = d.box;
+    const box = [Math.max(0, Math.min(a, c) * sx), Math.max(0, Math.min(b, e) * sy), Math.min(width, Math.max(a, c) * sx), Math.min(height, Math.max(b, e) * sy)];
+    if (box[2] <= box[0] || box[3] <= box[1]) throw new Error(`第 ${i + 1} 个检测框没有有效面积或超出照片范围`);
     out.push({
       cls,
       name: CLASSES[cls].name,
       score: Number.isFinite(d.score) ? d.score : 1,
-      box: [Math.min(a, c) * sx, Math.min(b, e) * sy, Math.max(a, c) * sx, Math.max(b, e) * sy],
+      box,
     });
   });
   return out;
+}
+
+/** 读取期间换图或启动了其他检测时，旧导入作废。 */
+export async function readDetectionsFile(file, image, isCurrent) {
+  if (file.size > 2 * 1024 * 1024) throw new Error('检测文件不能超过 2 MB');
+  const text = await file.text();
+  if (!isCurrent()) return null;
+  const json = JSON.parse(text);
+  return { json, detections: parseDetections(json, image) };
 }
 
 /** 合成图真值 → 检测结果（置信度 1）；跳过当前没有的类别（例如旧真值文件里已删除的类别） */
@@ -120,67 +132,106 @@ export function detectionsFromTruth(truth) {
  * @param {string} modelUrl
  * @param {{ prefer?: 'auto'|'wasm', names?: string[] }} [opts] prefer = 'wasm' 时不尝试 WebGPU；names 为模型类别名
  */
-export function createOnnxDetector(modelUrl, { prefer = 'auto', names = null } = {}) {
+export function createOnnxDetector(modelUrl, { prefer = 'auto', names = null, initTimeoutMs = 300000, detectTimeoutMs = 90000 } = {}) {
   let worker = null;
   let seq = 0;
   const pending = new Map();
   let ready = null;
+  let generation = 0;
+  let loadingController = null;
+  let progress = null;
+  const listeners = new Set();
+  const report = (value) => {
+    progress = value;
+    for (const listener of listeners) listener(value);
+  };
 
   /** 丢掉当前 Worker（出错后 onnxruntime 不能再初始化，只能换一个新的 Worker 重来），等待中的请求都以出错结束 */
   function reset(err) {
+    generation++;
+    loadingController?.abort(err);
+    loadingController = null;
     worker?.terminate();
     worker = null;
     ready = null;
-    for (const p of pending.values()) p.reject(err);
+    progress = null;
+    for (const p of pending.values()) {
+      clearTimeout(p.timer);
+      p.reject(err);
+    }
     pending.clear();
   }
 
   function ensureWorker() {
     if (worker) return worker;
     worker = new Worker(new URL('./detector.worker.js', import.meta.url), { type: 'module' });
+    const activeWorker = worker;
     worker.onmessage = (e) => {
+      if (worker !== activeWorker) return;
       const { id, result, error } = e.data;
       const p = pending.get(id);
       if (!p) return;
+      if (e.data.progress) {
+        report(e.data.progress);
+        return;
+      }
       pending.delete(id);
+      clearTimeout(p.timer);
       if (error) p.reject(new Error(error));
       else p.resolve(result);
     };
     // Worker 脚本加载失败、Worker 内未捕获的错误：换一个新的 Worker，不让等待中的请求永远挂着
-    worker.onerror = (e) => reset(new Error(e.message || 'Worker 出错'));
+    worker.onerror = (e) => {
+      if (worker === activeWorker) reset(new Error(e.message || 'Worker 出错'));
+    };
     return worker;
   }
 
   const call = (msg, transfer = []) =>
     new Promise((resolve, reject) => {
       const id = ++seq;
-      pending.set(id, { resolve, reject });
+      const timer = setTimeout(() => reset(new Error(msg.type === 'init' ? '模型准备超时，请重试或改用仅 WASM。' : '模型推理超时，请重试、改用仅 WASM或手动框选。')), msg.type === 'init' ? initTimeoutMs : detectTimeoutMs);
+      pending.set(id, { resolve, reject, timer });
       try {
         ensureWorker().postMessage({ id, ...msg }, transfer);
       } catch (err) {
+        clearTimeout(timer);
         pending.delete(id);
+        if (msg.type !== 'init') reset(err);
         reject(err);
       }
     });
 
   return {
     /** 加载模型（只加载一次），返回后端、耗时、输入输出形状；类别名从模型旁边的 .json（export.py 生成）读 */
-    init() {
-      ready ??= (async () => {
-        if (!names) {
-          // 类别名是必需的：没有它就不知道模型的类别 ID 对应哪个零件（不能按顺序猜）
-          const res = await fetch(modelUrl.replace(/\.onnx$/, '.json'));
-          const meta = res.ok ? await res.json().catch(() => null) : null;
-          if (!meta?.names) throw new Error(`读取模型的类别名失败（${res.status}）`);
-          names = Object.values(meta.names);
-        }
-        return call({ type: 'init', modelUrl, ortBase: new URL('ort/', document.baseURI).href, prefer });
-      })().catch((err) => {
-        // 失败（例如网络断了）：onnxruntime 在同一个 Worker 里不能再初始化，换新 Worker，下次重试
-        reset(err);
-        throw err;
-      });
-      return ready;
+    init({ onProgress } = {}) {
+      if (onProgress) {
+        listeners.add(onProgress);
+        if (progress) onProgress(progress);
+      }
+      if (!ready) {
+        const token = generation;
+        loadingController = new AbortController();
+        const signal = loadingController.signal;
+        ready = (async () => {
+          report({ stage: 'metadata' });
+          if (!names) {
+            // 类别名是必需的，不能按顺序猜。
+            const meta = await fetchResource(modelUrl.replace(/\.onnx$/, '.json'), { signal });
+            if (!meta?.names) throw new Error('读取模型的类别名失败');
+            names = Object.values(meta.names);
+          }
+          if (signal.aborted) throw signal.reason;
+          const info = await call({ type: 'init', modelUrl, ortBase: new URL('ort/', document.baseURI).href, prefer });
+          report({ stage: 'ready' });
+          return info;
+        })().catch((err) => {
+          // 换新 Worker 重试；旧初始化失败不能关闭新会话。
+          if (token === generation) reset(err);
+          throw err;
+        });
+      }
+      return onProgress ? ready.finally(() => listeners.delete(onProgress)) : ready;
     },
     /**
      * 检测一张照片（ImageBitmap 会被复制一份交给 Worker）
@@ -189,8 +240,13 @@ export function createOnnxDetector(modelUrl, { prefer = 'auto', names = null } =
      * @returns {Promise<{ raw: object[], dets: import('../state.js').Detection[], prepMs: number, inferMs: number, postMs: number, dims: number[] }>}
      */
     async detect(bitmap, { scoreThreshold = DETECT.scoreThreshold, lowThreshold = DETECT.lowThreshold, lowMaxIou = DETECT.lowMaxIou, iouThreshold = DETECT.iouThreshold, dedupIou = DETECT.dedupIou, onPosted = null } = {}) {
+      const token = generation;
       await this.init();
       const copy = await createImageBitmap(bitmap);
+      if (token !== generation) {
+        copy.close();
+        throw new Error('检测已取消');
+      }
       const pending = call({ type: 'detect', bitmap: copy, scoreThreshold, lowThreshold, lowMaxIou, iouThreshold, dedupIou }, [copy]);
       onPosted?.(); // 照片已交给 Worker，主线程可以去做别的
       const r = await pending;
@@ -203,8 +259,10 @@ export function createOnnxDetector(modelUrl, { prefer = 'auto', names = null } =
         : r.dets.map(own);
       return { ...r, raw: r.raw.map(own), dets };
     },
-    terminate() {
-      reset(new Error('检测器已关闭'));
+    terminate(message = '检测器已关闭') {
+      const err = new Error(message);
+      err.name = 'AbortError';
+      reset(err);
     },
   };
 }

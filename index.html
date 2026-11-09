@@ -26,7 +26,7 @@
           <button type="button" class="btn btn-ghost" id="btn-demo" aria-pressed="false" title="演示模式：只显示流程图；识别后先给出正视图请你确认，再转场建模">演示模式</button>
           <a class="btn btn-ghost" href="./board.html" target="_blank">标定板</a>
           <label class="btn btn-primary" for="file-input">上传照片</label>
-          <input id="file-input" type="file" accept="image/*,.heic,.heif" hidden />
+          <input id="file-input" type="file" accept="image/jpeg,image/png,.jpg,.jpeg,.png" hidden />
           <select id="sample-select" class="select" aria-label="加载示例">
             <option value="" selected>加载示例…</option>
           </select>
@@ -35,6 +35,9 @@
 
       <!-- 中间主区域：两个视图标签页 -->
       <main class="main">
+        <p class="capture-guide">请使用 iPhone 13 Pro 主摄 1×、4:3 拍摄。支持 JPEG、PNG，不支持 HEIC/HEIF。</p>
+        <div id="capture-notices" class="capture-notices" role="status" hidden></div>
+        <div id="model-progress" class="model-progress" hidden><span role="status"></span><button type="button" class="btn btn-small" id="cancel-detection">取消识别</button></div>
         <div class="tabs" role="tablist">
           <button class="tab active" role="tab" data-view="debug" aria-selected="true"><span class="only-normal">调试视图</span><span class="only-demo">照片</span></button>
           <button class="tab only-demo" role="tab" data-view="confirm" aria-selected="false" id="tab-confirm">正视图</button>
@@ -92,6 +95,14 @@
               <span class="hint hint-touch">单指旋转 · 双指缩放 / 平移</span>
             </div>
           </section>
+        </div>
+        <div id="sort-dock" class="sort-dock" aria-label="分拣控制" hidden>
+          <div class="sort-dock-actions">
+            <button type="button" class="btn btn-primary btn-small" id="dock-start">开始分拣</button>
+            <button type="button" class="btn btn-small" id="dock-pause" disabled>暂停</button>
+            <button type="button" class="btn btn-small" id="dock-reset">重置</button>
+          </div>
+          <p id="dock-phase" role="status">等待开始</p>
         </div>
       </main>
 

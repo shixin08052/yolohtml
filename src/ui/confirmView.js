@@ -147,7 +147,7 @@ export function createConfirmView({ root, onConfirm, onEdit }) {
   root.innerHTML = `
     <canvas class="confirm-canvas"></canvas>
     <div class="confirm-bar">
-      <div class="confirm-text"><b>请确认识别结果</b><span class="confirm-sum"></span></div>
+      <div class="confirm-text"><b>请确认识别结果</b><span class="confirm-source"></span><span class="confirm-sum"></span></div>
       <div class="confirm-actions">
         <button type="button" class="btn" data-act="edit">修改框选</button>
         <label class="btn" for="file-input">重新选照片</label>
@@ -198,6 +198,7 @@ export function createConfirmView({ root, onConfirm, onEdit }) {
      */
     show(d) {
       data = d;
+      root.querySelector('.confirm-source').textContent = d.source ? `来源：${d.source}` : '';
       const counts = countByClass(d.parts, d.classes);
       sum.innerHTML = d.parts.length
         ? `识别到 <b>${d.parts.length}</b> 个元件：` + counts.map((c) => `<span class="confirm-chip" style="--c:${c.color}">${esc(c.name)} × ${c.n}</span>`).join('')
@@ -208,6 +209,7 @@ export function createConfirmView({ root, onConfirm, onEdit }) {
     clear() {
       data = null;
       sum.textContent = '';
+      root.querySelector('.confirm-source').textContent = '';
       draw();
     },
     redraw: draw,

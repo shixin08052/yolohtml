@@ -7,6 +7,7 @@
 //   { id, type: 'detect', bitmap, scoreThreshold, lowThreshold, lowMaxIou, iouThreshold, dedupIou } → { raw, dets, dims, width, height, prepMs, inferMs, postMs }
 //   raw 为置信度 ≥ lowThreshold 的原始框；dets 按 yolo.js 的 selectDetections 选出
 import { preprocess, postprocess, selectDetections } from './yolo.js';
+import { fetchResource } from './request.js';
 
 let ort = null;
 let session = null;
@@ -21,19 +22,21 @@ async function hasWebGPU() {
   }
 }
 
-async function init({ modelUrl, ortBase, prefer = 'auto' }) {
+async function init({ id, modelUrl, ortBase, prefer = 'auto' }) {
+  const report = (progress) => self.postMessage({ id, progress });
   const t0 = performance.now();
-  const res = await fetch(modelUrl);
-  if (!res.ok) throw new Error(`读取模型失败（${res.status}）：${modelUrl}`);
-  const buf = new Uint8Array(await res.arrayBuffer());
+  report({ stage: 'download', loaded: 0 });
+  const buf = await fetchResource(modelUrl, { type: 'bytes', onProgress: (p) => report({ stage: 'download', ...p }) });
   const t1 = performance.now();
 
   const tryGPU = prefer !== 'wasm' && (await hasWebGPU());
   let backend = 'wasm';
   if (tryGPU) {
     try {
+      report({ stage: 'runtime', backend: 'webgpu' });
       ort = await import('onnxruntime-web');
       configure(ortBase);
+      report({ stage: 'initialize', backend: 'webgpu' });
       session = await ort.InferenceSession.create(buf, { executionProviders: ['webgpu', 'wasm'], graphOptimizationLevel: 'all' });
       backend = 'webgpu';
     } catch (err) {
@@ -42,8 +45,10 @@ async function init({ modelUrl, ortBase, prefer = 'auto' }) {
     }
   }
   if (!session) {
+    report({ stage: 'runtime', backend: 'wasm' });
     ort = await import('onnxruntime-web/wasm');
     configure(ortBase);
+    report({ stage: 'initialize', backend: 'wasm' });
     session = await ort.InferenceSession.create(buf, { executionProviders: ['wasm'], graphOptimizationLevel: 'all' });
   }
   const t2 = performance.now();

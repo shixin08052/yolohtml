@@ -90,6 +90,24 @@ body { background: var(--bg); overflow: hidden; -webkit-font-smoothing: antialia
 .step.error .dot { background: var(--err); border-color: var(--err); color: #fff; }
 
 .actions { display: flex; gap: 8px; align-items: center; }
+.capture-guide { margin: 0; color: var(--text-2); font-size: 12px; line-height: 1.5; }
+.capture-notices { padding: 8px 12px; background: var(--accent-soft); border-radius: 8px; font-size: 12px; line-height: 1.5; max-height: 160px; overflow: auto; flex-shrink: 0; }
+.capture-notices p { margin: 2px 0; }
+.capture-source { color: var(--text-2); }
+.model-progress { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; font-size: 13px; }
+.model-progress button { flex-shrink: 0; }
+.detection-source, .confirm-source { color: var(--text-2); font-size: 12px; }
+.sort-dock { padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); flex-shrink: 0; }
+.sort-dock-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.sort-dock p { margin: 6px 0 0; font-size: 12px; color: var(--text-2); }
+.panel-section > summary { cursor: pointer; font-weight: 600; font-size: 14px; padding: 4px 0; }
+.panel-section[open] > summary { margin-bottom: 10px; }
+.webgl-notice { padding: 20px; line-height: 1.7; }
+@media (max-width: 900px) {
+  body { padding-bottom: 116px; }
+  .sort-dock { position: fixed; z-index: 30; left: 12px; right: 12px; bottom: max(12px, env(safe-area-inset-bottom)); box-shadow: var(--shadow); }
+  .capture-notices { max-height: 115px; }
+}
 /* ---------------- 主区域 ---------------- */
 .main {
   grid-area: main;

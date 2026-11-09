@@ -53,7 +53,13 @@ function createAxes() {
  * @param {HTMLElement} container
  */
 export function createWorld(container) {
-  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  let renderer;
+  try {
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+  } catch (err) {
+    console.warn('3D 初始化失败，保留照片识别功能：', err);
+    return unavailableWorld(container);
+  }
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.shadowMap.enabled = true;
@@ -374,6 +380,7 @@ export function createWorld(container) {
   applyTheme();
 
   return {
+    available: true,
     renderer,
     scene,
     camera,
@@ -395,5 +402,25 @@ export function createWorld(container) {
       axes.visible = on;
       requestRender();
     },
+  };
+}
+
+/** 无 WebGL 时保留几何对象及识别流程，不启动渲染或分拣动画。 */
+function unavailableWorld(container) {
+  const notice = document.createElement('p');
+  notice.className = 'webgl-notice';
+  notice.setAttribute('role', 'status');
+  notice.textContent = '当前浏览器无法启动 3D。照片上传、识别和结果查看仍可使用，请换用支持 WebGL 的浏览器观看分拣。';
+  container.appendChild(notice);
+  const canvas = document.createElement('canvas');
+  const noop = () => {};
+  return {
+    available: false,
+    renderer: { domElement: canvas },
+    scene: new THREE.Scene(),
+    camera: new THREE.PerspectiveCamera(),
+    resize: noop, render: noop, setFrame: noop, requestRender: noop,
+    setDefaultView: noop, setFocusPoints: noop, setBasePoints: noop,
+    setAxesVisible: noop, setControlsActive: noop, pickPlane: () => null,
   };
 }

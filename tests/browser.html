@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>浏览器回归检查</title>
+<style>body{font:14px system-ui;margin:20px;line-height:1.7}button{padding:8px 16px}iframe{display:block;width:100%;height:844px;border:1px solid #ccc;margin-top:16px}li[data-result=pass]{color:#196b36}li[data-result=fail]{color:#b42318}</style>
+<h1>浏览器回归检查</h1>
+<p>在 npm run dev 启动后打开本页。检查真实页面的合成演示、窄屏控制、格式限制，以及 WebGL 创建失败后的照片流程。测试页不包含在生产构建中。</p>
+<button id="run">运行回归检查</button>
+<ol id="results" aria-live="polite"></ol>
+<div id="fixture"></div>
+<script type="module" src="./browserRegression.js"></script>
+</html>

@@ -105,6 +105,19 @@ export function lensWarning(focal35) {
   return null;
 }
 
+/** 指定设备演示的拍摄条件提示，只提醒，不改变内参选择。 */
+export function captureWarnings(image, calib) {
+  const e = image.exif ?? {};
+  const notes = [];
+  if (!e.model) notes.push('照片缺少机型信息，无法核验是否为指定设备 iPhone 13 Pro。');
+  else if (e.model.trim().toLowerCase() !== 'iphone 13 pro') notes.push(`当前机型为 ${e.model}，与演示指定的 iPhone 13 Pro 不符，可能影响位姿和高度估计。`);
+  if (!(e.focal35 > 0)) notes.push('照片缺少有效焦距信息，无法核验镜头。将按现有内参策略继续处理。');
+  else if (lensWarning(e.focal35)) notes.push(`当前照片等效焦距为 ${e.focal35} mm，与演示要求的主摄 ${CAMERA.expectedFocal35} mm 不符，可能影响位姿和高度估计。建议使用主摄 1× 重拍。`);
+  const aspect = calibAspectWarning(calib ?? {}, image.width, image.height);
+  if (aspect) notes.push(aspect);
+  return notes;
+}
+
 /**
  * 按来源计算当前照片的内参
  * @param {'exif'|'calib'|'truth'|'self'} source

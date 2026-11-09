@@ -28,10 +28,13 @@ export const CONFIRM_NODE = { id: 'confirm', label: '正视图 · 确认识别�
  * 主流程节点
  * @param {{ demo?: boolean }} [opts]
  */
-export function flowNodes({ demo = false } = {}) {
-  if (!demo) return MAIN_NODES;
-  const i = MAIN_NODES.findIndex((n) => n.id === 'transition');
-  return [...MAIN_NODES.slice(0, i), CONFIRM_NODE, ...MAIN_NODES.slice(i)];
+export function flowNodes({ demo = false, detectionSource = null } = {}) {
+  const labels = { truth: '读取合成真值框', mock: '读取检测文件', file: '导入检测文件', manual: '手动框选零件' };
+  const nodes = MAIN_NODES.map((n) => n.id === 'detect' && labels[detectionSource]
+    ? { ...n, label: labels[detectionSource], hint: '使用当前来源的检测框进行定位与重建' } : n);
+  if (!demo) return nodes;
+  const i = nodes.findIndex((n) => n.id === 'transition');
+  return [...nodes.slice(0, i), CONFIRM_NODE, ...nodes.slice(i)];
 }
 
 /** 出错 / 分支节点：from 为所在主流程节点（与它同一行）；at 为放在哪个主流程节点那一行（默认 = from） */
@@ -127,8 +130,8 @@ export function flowStatuses(s) {
 }
 
 /** 当前要提示的节点：出错的、否则进行中的 */
-export function currentNode(statuses) {
-  const nodes = flowNodes({ demo: 'confirm' in statuses });
+export function currentNode(statuses, options = {}) {
+  const nodes = flowNodes({ ...options, demo: 'confirm' in statuses });
   return nodes.find((n) => statuses[n.id] === 'error') ?? nodes.find((n) => statuses[n.id] === 'active') ?? null;
 }
 
@@ -170,8 +173,8 @@ function phaseBands(nodes) {
  * 流程图 SVG（颜色用 CSS 类，跟随主题）
  * @param {ReturnType<typeof flowStatuses>} st
  */
-export function flowSvg(st) {
-  const nodes = flowNodes({ demo: 'confirm' in st });
+export function flowSvg(st, options = {}) {
+  const nodes = flowNodes({ ...options, demo: 'confirm' in st });
   const H = rowY(nodes.length - 1) + NH + TOP;
   const parts = phaseBands(nodes);
   const edge = (d, cls, marker = 'arrow') => parts.push(`<path class="fc-edge ${cls}" d="${d}" marker-end="url(#fc-${marker}-${cls.split(' ')[0]})"/>`);
@@ -257,11 +260,11 @@ text { font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", "Sourc
  * @param {{ demo?: boolean, title?: string }} [opts]
  * @returns {{ svg: string, width: number, height: number }}
  */
-export function flowSvgStandalone({ demo = false, title = '视觉分拣系统流程（识别 — 定位 — 执行）' } = {}) {
+export function flowSvgStandalone({ demo = false, detectionSource = null, title = '视觉分拣系统流程（识别 — 定位 — 执行）' } = {}) {
   const st = {};
   for (const n of flowNodes({ demo })) st[n.id] = 'todo';
   for (const n of SIDE_NODES) st[n.id] = 'idle';
-  const inner = flowSvg(st).replace(/^<svg[^>]*>/, '').replace(/<\/svg>$/, '');
+  const inner = flowSvg(st, { detectionSource }).replace(/^<svg[^>]*>/, '').replace(/<\/svg>$/, '');
   const head = 34;
   const body = rowY(flowNodes({ demo }).length - 1) + NH + TOP;
   const foot = 26;

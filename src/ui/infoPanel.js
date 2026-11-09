@@ -10,6 +10,8 @@ export function createInfoPanel(el) {
   el.innerHTML = '';
   /** @type {Map<string, HTMLElement>} */
   const sections = new Map();
+  const collapsed = new Map();
+  const advanced = new Set(['timing', 'intrinsics', 'markers', 'detect', 'pose', 'experiment', 'truth', 'arm']);
 
   const msgSection = document.createElement('section');
   msgSection.className = 'panel-section';
@@ -20,7 +22,12 @@ export function createInfoPanel(el) {
   function getSection(key, title, { last = false } = {}) {
     let sec = sections.get(key);
     if (!sec) {
-      sec = document.createElement('section');
+      const foldable = advanced.has(key);
+      sec = document.createElement(foldable ? 'details' : 'section');
+      if (foldable) {
+        sec.open = collapsed.has(key) ? !collapsed.get(key) : !window.matchMedia('(max-width: 900px)').matches;
+        sec.addEventListener('toggle', () => collapsed.set(key, !sec.open));
+      }
       sec.className = 'panel-section';
       sec.dataset.key = key;
       el.insertBefore(sec, msgSection);
@@ -28,7 +35,7 @@ export function createInfoPanel(el) {
     } else if (last && sec.nextElementSibling !== msgSection) {
       el.insertBefore(sec, msgSection); // 放回到最后（消息区之前）
     }
-    sec.innerHTML = `<h3>${esc(title)}</h3><div class="body"></div>`;
+    sec.innerHTML = `${sec.tagName === 'DETAILS' ? `<summary>${esc(title)}</summary>` : `<h3>${esc(title)}</h3>`}<div class="body"></div>`;
     return sec.querySelector('.body');
   }
 

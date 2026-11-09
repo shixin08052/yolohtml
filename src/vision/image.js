@@ -7,7 +7,16 @@ import exifr from 'exifr';
 /** 照片格式不支持等预期内的错误：直接把 message 展示给用户 */
 export class ImageFormatError extends Error {}
 
-export const HEIC_MESSAGE = '不支持 HEIC/HEIF 格式。请在 iPhone 设置 → 相机 → 格式中选择"兼容性最佳"后重新拍摄。';
+export const HEIC_MESSAGE = '不支持 HEIC/HEIF，请先将照片转存为 JPEG 或 PNG 后上传。后续拍摄可在 iPhone 设置 → 相机 → 格式中选择“兼容性最佳”。';
+
+/** 按实际文件头限制上传格式，不能仅依赖文件选择器或扩展名。 */
+export async function validateImageFile(file) {
+  if (await isHeic(file)) throw new ImageFormatError(HEIC_MESSAGE);
+  const h = new Uint8Array(await file.slice(0, 8).arrayBuffer());
+  const jpeg = h[0] === 0xff && h[1] === 0xd8 && h[2] === 0xff;
+  const png = [137, 80, 78, 71, 13, 10, 26, 10].every((v, i) => h[i] === v);
+  if (!jpeg && !png) throw new ImageFormatError('仅支持 JPEG 或 PNG，请转换图片格式后上传。');
+}
 
 /**
  * 是否为 HEIC/HEIF：看 MIME、扩展名，以及文件头（ISO BMFF 的 ftyp 品牌）
@@ -53,7 +62,7 @@ export async function readExif(input) {
  * @returns {Promise<import('../state.js').ImageInput>}
  */
 export async function loadImageFile(file) {
-  if (await isHeic(file)) throw new ImageFormatError(HEIC_MESSAGE);
+  await validateImageFile(file);
   let bitmap;
   try {
     // 按 EXIF 方向转正（竖拍照片的像素是横着存的）；不做色彩空间转换：训练时（PIL）读的就是原始像素值，
