@@ -245,7 +245,9 @@ export function createOnnxDetector(modelUrl, { prefer = 'auto', names = null, in
       const copy = await createImageBitmap(bitmap);
       if (token !== generation) {
         copy.close();
-        throw new Error('检测已取消');
+        const err = new Error('检测已取消');
+        err.name = 'AbortError';
+        throw err;
       }
       const pending = call({ type: 'detect', bitmap: copy, scoreThreshold, lowThreshold, lowMaxIou, iouThreshold, dedupIou }, [copy]);
       onPosted?.(); // 照片已交给 Worker，主线程可以去做别的
@@ -297,7 +299,7 @@ export function getOnnxDetector(key = 'parts', { prefer = 'auto' } = {}) {
  * @returns {Promise<import('../state.js').Detection[]>}
  * @throws {MockMissingError} mock 模式下既没有真值也没有检测结果文件
  */
-export async function detect(image, { mode = 'mock', truth = null, model = 'parts', prefer = 'auto', onPosted = null } = {}) {
+export async function detect(image, { mode = 'mock', truth = null, model = 'parts', prefer = 'auto', onPosted = null, signal } = {}) {
   if (mode === 'onnx') {
     const d = getOnnxDetector(model, { prefer });
     const info = await d.init();
@@ -309,10 +311,14 @@ export async function detect(image, { mode = 'mock', truth = null, model = 'part
   // 文件名里可能有 #、? 等字符：逐段编码（示例的 real/xxx 保留斜杠）
   const path = detectionsFileName(image.fileName).split('/').map(encodeURIComponent).join('/');
   const url = new URL(`samples/${path}`, document.baseURI);
-  const res = await fetch(url).catch(() => null);
-  // 开发服务器找不到文件时会返回 index.html，所以还要确认是 JSON
-  const json = res?.ok ? await res.json().catch(() => null) : null;
-  if (!json) throw new MockMissingError(image.fileName);
+  let json;
+  try {
+    json = await fetchResource(url, { timeoutMs: 30000, signal });
+  } catch (err) {
+    // 开发服务器找不到文件时会返回 index.html。
+    if (err.status === 404 || err instanceof SyntaxError) throw new MockMissingError(image.fileName);
+    throw err;
+  }
   // mock 文件可能是 predict_dump.py 的推理结果（没有去重），这里同样做同类去重
   return nmsByClass(parseDetections(json, image), DETECT.dedupIou);
 }

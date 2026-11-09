@@ -7,8 +7,13 @@ export async function fetchResource(url, { timeoutMs = 120000, signal, onProgres
   const timer = setTimeout(() => controller.abort(new Error('下载超时，请检查网络后重试。')), timeoutMs);
   try {
     const res = await fetch(url, { signal: controller.signal });
-    if (!res.ok) throw new Error(`读取资源失败（${res.status}）`);
+    if (!res.ok) {
+      const err = new Error(`读取资源失败（${res.status}）`);
+      err.status = res.status;
+      throw err;
+    }
     if (type === 'json') return await res.json();
+    if (type === 'blob') return await res.blob();
     const total = Number(res.headers.get('content-length')) || null;
     if (!res.body) return new Uint8Array(await res.arrayBuffer());
     const reader = res.body.getReader();

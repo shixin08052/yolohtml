@@ -163,7 +163,7 @@ describe('Worker 截止时间与重新初始化', () => {
     workers[0].reply({ backend: 'wasm' });
     await ready;
     const inference = detector.detect({});
-    const failed = expect(inference).rejects.toThrow(/已取消/);
+    const failed = expect(inference).rejects.toMatchObject({ name: 'AbortError', message: '检测已取消' });
     await Promise.resolve();
     detector.terminate();
     finishCopy(copy);

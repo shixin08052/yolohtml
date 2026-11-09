@@ -110,6 +110,7 @@ export function createSortPlayer({ arm, partsLayer, requestRender, onProgress = 
   function run() {
     last = performance.now();
     setState('running');
+    report(); // 立即显示当前步骤，不等到第一段运动结束。
     raf = requestAnimationFrame(frame);
   }
 

@@ -11,7 +11,7 @@ async function until(predicate, timeout = 30000) {
   }
   throw new Error('等待页面状态超时');
 }
-async function mount(noWebGL) {
+async function mount(noWebGL, missingMock = false) {
   localStorage.setItem('yolohtml.demo', '0');
   const html = await (await fetch('../index.html')).text();
   const frame = document.createElement('iframe');
@@ -20,7 +20,11 @@ async function mount(noWebGL) {
     window.__regressionErrors=[]; window.__regressionRequests=[];
     addEventListener('error',e=>window.__regressionErrors.push(e.message));
     const fetchOriginal=window.fetch;
-    window.fetch=(url,...args)=>{window.__regressionRequests.push(String(url));return fetchOriginal(url,...args)};
+    window.fetch=(url,...args)=>{
+      window.__regressionRequests.push(String(url));
+      if(${missingMock} && String(url).includes('real/IMG_9899.detections.json')) return Promise.resolve(new Response('',{status:404}));
+      return fetchOriginal(url,...args);
+    };
     ${noWebGL ? `const original=HTMLCanvasElement.prototype.getContext;
     HTMLCanvasElement.prototype.getContext=function(kind,...args){return /webgl/i.test(kind)?null:original.call(this,kind,...args)};` : ''}
   <\/script>`;
@@ -29,13 +33,13 @@ async function mount(noWebGL) {
   await until(() => frame.contentDocument?.querySelector('.msgs')?.textContent.includes('页面已就绪'));
   return { frame, doc: frame.contentDocument, win: frame.contentWindow };
 }
-async function selectSample(ctx, label, expected) {
+async function selectSample(ctx, label, expected, source = '合成图真值框') {
   const select = ctx.doc.querySelector('#sample-select');
   await until(() => [...select.options].some((o) => o.textContent.includes(label)));
   select.value = [...select.options].find((o) => o.textContent.includes(label)).value;
   select.dispatchEvent(new ctx.win.Event('change', { bubbles: true }));
   await until(() => ctx.doc.querySelector('#info-panel [data-key="image"]')?.textContent.includes(expected));
-  await until(() => ctx.doc.querySelector('.detection-source')?.textContent.includes('合成图真值框'));
+  if (source) await until(() => ctx.doc.querySelector('.detection-source')?.textContent.includes(source));
 }
 async function upload(ctx, file) {
   const transfer = new ctx.win.DataTransfer();
@@ -69,6 +73,7 @@ button.addEventListener('click', async () => {
     assert(doc.querySelector('.flowchart').textContent.includes('读取合成真值框'), '流程图未标记真值');
     doc.querySelector('#dock-start').click();
     await until(() => !doc.querySelector('#dock-pause').disabled);
+    assert(!doc.querySelector('#dock-phase').textContent.includes('等待开始'), '开始后仍显示等待开始');
     doc.querySelector('#dock-pause').click();
     assert(doc.querySelector('#dock-pause').textContent === '继续', '无法暂停');
     doc.querySelector('#dock-pause').click();
@@ -104,6 +109,55 @@ button.addEventListener('click', async () => {
     doc.querySelector('#tab-three').click();
     assert(doc.querySelector('#btn-transition').disabled, '无 WebGL 时转场未禁用');
     assert(doc.querySelector('.detection-source').textContent.includes('真值'), '识别结果不可用');
+    doc.querySelector('#btn-demo').click();
+    await until(() => doc.querySelector('#view-confirm').classList.contains('active'));
+    assert(doc.querySelector('.confirm-canvas').width > 0, '无 WebGL 时正视图为空');
+    assert(doc.querySelector('[data-act="ok"]').textContent.includes('查看照片'), '降级确认仍承诺启动 3D');
+    doc.querySelector('[data-act="ok"]').click();
+    assert(doc.querySelector('#view-debug').classList.contains('active'), '降级确认后未回到照片');
+    assert(win.__regressionErrors.length === 0, win.__regressionErrors.join('; '));
+  });
+  await runCase('mock 失败后真正切换到 WASM，清除旧错误并可取消', async () => {
+    const ctx = await mount(false, true);
+    const { doc, win } = ctx;
+    await selectSample(ctx, '45°', 'synth_45.png');
+    const mode = doc.querySelector('#det-mode');
+    mode.value = 'mock';
+    mode.dispatchEvent(new win.Event('change', { bubbles: true }));
+    await selectSample(ctx, 'IMG_9899', 'real/IMG_9899.jpg', null);
+    await until(() => doc.querySelector('[data-recover="wasm"]'));
+    doc.querySelector('[data-recover="wasm"]').click();
+    assert(doc.querySelector('#det-mode').value === 'onnx', '仍在读取 mock 文件');
+    assert(doc.querySelector('#det-prefer').value === 'wasm', '没有切换 WASM');
+    assert(!doc.querySelector('[data-recover]'), '重试时仍显示上次的失败入口');
+    assert(!doc.querySelector('#model-progress').hidden, '重试没有显示准备阶段');
+    doc.querySelector('#cancel-detection').click();
+    await until(() => doc.querySelector('[data-recover="retry"]'));
+    assert(doc.querySelector('#model-progress').hidden, '取消后仍然忙碌');
+    assert(doc.querySelector('#info-panel [data-key="status"]').textContent.includes('识别已取消'), '取消信息不正确');
+    assert(win.__regressionErrors.length === 0, win.__regressionErrors.join('; '));
+  });
+  await runCase('模型识别后改框及导入文件，不残留旧模型统计', async () => {
+    const ctx = await mount(false);
+    const { doc, win } = ctx;
+    await selectSample(ctx, 'IMG_9899', 'real/IMG_9899.jpg', null);
+    await until(() => doc.querySelector('#info-panel [data-key="detect"]')?.textContent.includes('推理后端'), 120000);
+    doc.querySelector('#btn-det-edit').click();
+    doc.querySelector('#box-clear').click();
+    assert(doc.querySelector('.detection-source').textContent.includes('手动'), '手动结果来源不正确');
+    assert(!doc.querySelector('#info-panel [data-key="detect"]').textContent.includes('推理后端'), '手动结果残留模型统计');
+    doc.querySelector('#box-done').click();
+    doc.querySelector('#btn-det-rerun').click();
+    assert(doc.querySelector('#dock-start').disabled, '重新识别时仍允许启动旧场景');
+    await until(() => doc.querySelector('#info-panel [data-key="detect"]')?.textContent.includes('推理后端'), 120000);
+    const json = await (await fetch('../samples/real/IMG_9899.detections.json')).text();
+    const transfer = new win.DataTransfer();
+    transfer.items.add(new win.File([json], 'detections.json', { type: 'application/json' }));
+    const input = doc.querySelector('#det-file');
+    input.files = transfer.files;
+    input.dispatchEvent(new win.Event('change', { bubbles: true }));
+    await until(() => doc.querySelector('.detection-source').textContent.includes('载入的检测文件'));
+    assert(!doc.querySelector('#info-panel [data-key="detect"]').textContent.includes('推理后端'), '导入结果残留模型统计');
     assert(win.__regressionErrors.length === 0, win.__regressionErrors.join('; '));
   });
   if (savedMode == null) localStorage.removeItem('yolohtml.demo');

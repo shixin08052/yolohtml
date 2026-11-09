@@ -203,7 +203,7 @@ export function createConfirmView({ root, onConfirm, onEdit }) {
       sum.innerHTML = d.parts.length
         ? `识别到 <b>${d.parts.length}</b> 个元件：` + counts.map((c) => `<span class="confirm-chip" style="--c:${c.color}">${esc(c.name)} × ${c.n}</span>`).join('')
         : '没有识别到元件，可以"修改框选"手动框出来';
-      okBtn.textContent = d.parts.length ? '确认，开始建模' : '仍然继续';
+      okBtn.textContent = d.canBuild === false ? '确认，查看照片' : d.parts.length ? '确认，开始建模' : '仍然继续';
       draw();
     },
     clear() {
