@@ -1,120 +1,27 @@
-/* 通用控件和玻璃面（主页面、标定板页面、合成图页面共用） */
-
-/* ---------- 玻璃面 ---------- */
-/* 静止的玻璃：下面是不动的底色，不需要实时模糊 */
-.topbar, .toolbar, .panel-section, .card, .sort-dock, .confirm-bar, .model-progress {
-  background: linear-gradient(180deg, var(--glass-hi), var(--glass));
-  border: 1px solid var(--glass-rim);
-  box-shadow: inset 0 1px 0 var(--glass-edge), 0 0 0 0.5px var(--glass-shade), var(--shadow);
-}
-/* 浮在画面上的玻璃：下面的内容会动，实时模糊（只有这几小块） */
-.view-tools, .box-tools, .inset, .toolbar {
-  background: var(--glass-float);
-  border: 1px solid var(--glass-rim);
-  box-shadow: inset 0 1px 0 var(--glass-edge), 0 0 0 0.5px var(--glass-shade), var(--shadow-float);
-  -webkit-backdrop-filter: var(--blur);
-  backdrop-filter: var(--blur);
-}
-/* 浏览器不支持模糊，或系统设置了"降低透明度"：换成几乎不透明的底，保证看得清 */
-@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .view-tools, .box-tools, .inset, .toolbar, .sort-dock { background: var(--glass-solid); }
-}
-@media (prefers-reduced-transparency: reduce) {
-  .topbar, .toolbar, .panel-section, .card, .sort-dock, .confirm-bar, .model-progress, .view-tools, .box-tools, .inset {
-    background: var(--glass-solid);
-    -webkit-backdrop-filter: none;
-    backdrop-filter: none;
-  }
-  body::before { display: none; }
-}
-
-/* ---------- 按钮、下拉框 ---------- */
+/* 按钮、下拉框等通用控件（主页面和标定板页面共用） */
 .btn, .select {
-  height: 36px;
-  padding: 0 16px;
-  border-radius: 999px;
-  border: 1px solid var(--glass-rim);
-  background: linear-gradient(180deg, var(--glass-hi), var(--glass));
-  box-shadow: inset 0 1px 0 var(--glass-edge), 0 0 0 0.5px var(--glass-shade), 0 1px 2px rgba(31, 30, 29, 0.05);
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 8px;
+  border: 1px solid var(--line-strong);
+  background: var(--card);
   color: var(--text);
   font: inherit;
-  font-weight: 500;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
   white-space: nowrap;
-  user-select: none;
-  -webkit-tap-highlight-color: transparent;
-  transition: transform 0.12s ease, background-color 0.15s, color 0.15s, opacity 0.15s;
+  transition: background 0.15s, border-color 0.15s;
 }
-.btn:hover, .select:hover { background-color: var(--hover); }
-.btn:active:not(:disabled), .icon-btn:active:not(:disabled), .tab:active:not(:disabled) { transform: scale(0.96); }
-.btn:focus-visible, .select:focus-visible, .tab:focus-visible, .icon-btn:focus-visible {
+.btn:hover, .select:hover { background: var(--hover); }
+.btn:focus-visible, .select:focus-visible, .tab:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
-.btn-primary {
-  background: linear-gradient(180deg, var(--accent-hi), var(--accent));
-  border-color: transparent;
-  color: #fff;
-  font-weight: 600;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.38), 0 0 0 0.5px rgba(120, 50, 25, 0.35), 0 6px 16px -6px var(--accent-glow);
-}
-.btn-primary:hover { background: linear-gradient(180deg, var(--accent-hi), var(--accent-hover)); }
-.select {
-  -webkit-appearance: none;
-  appearance: none;
-  justify-content: flex-start;
-  padding-right: 32px;
-  background-image: var(--chev), linear-gradient(180deg, var(--glass-hi), var(--glass));
-  background-repeat: no-repeat;
-  background-position: right 12px center, 0 0;
-  text-overflow: ellipsis;
-}
+.btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 500; }
+.btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.select { padding-right: 10px; }
 a.btn { text-decoration: none; }
-.btn:disabled { opacity: 0.5; cursor: default; }
-.btn-ghost { background: transparent; border-color: transparent; box-shadow: none; color: var(--text-2); }
+.btn:disabled { opacity: 0.55; cursor: default; }
+.btn-ghost { background: transparent; border-color: transparent; color: var(--text-2); }
 .btn-ghost:hover { background: var(--hover); color: var(--text); }
-.btn-small { height: 30px; padding: 0 12px; font-size: 13px; }
-input[type='checkbox'], input[type='range'] { accent-color: var(--accent); }
-
-/* ---------- 分段控件（标签页） ---------- */
-.tabs {
-  display: inline-flex;
-  align-self: flex-start;
-  gap: 2px;
-  padding: 3px;
-  border-radius: 999px;
-  background: var(--tab-track);
-  box-shadow: inset 0 1px 2px rgba(31, 30, 29, 0.06);
-}
-.tab {
-  padding: 6px 16px;
-  border: none;
-  border-radius: 999px;
-  background: transparent;
-  color: var(--text-2);
-  font: inherit;
-  font-weight: 500;
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
-  transition: transform 0.12s ease, background-color 0.18s, color 0.18s;
-}
-.tab:hover { color: var(--text); }
-.tab.active {
-  background: var(--tab-on);
-  color: var(--text);
-  box-shadow: inset 0 1px 0 var(--glass-edge), 0 0 0 0.5px var(--glass-shade), 0 2px 6px rgba(31, 30, 29, 0.10);
-}
-.tab:disabled { opacity: 0.45; cursor: default; }
-.tab:disabled:hover { color: var(--text-2); }
-
-@media (pointer: coarse) {
-  .btn, .select { height: 40px; }
-  .btn-small { height: 34px; }
-  .tab { padding: 8px 16px; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .btn, .select, .tab, .icon-btn { transition: none; }
-}

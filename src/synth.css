@@ -5,6 +5,7 @@
 [hidden] { display: none !important; }
 html, body { margin: 0; }
 body {
+  background: var(--bg);
   color: var(--text);
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
@@ -13,17 +14,17 @@ code { font-size: 12px; background: var(--hover); padding: 1px 4px; border-radiu
 
 .toolbar {
   position: sticky;
-  top: 12px;
-  z-index: 3;
+  top: 0;
+  z-index: 1;
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 56px;
-  margin: 12px 12px 0;
-  padding: 8px 10px 8px 18px;
-  border-radius: var(--radius-lg);
+  height: 60px;
+  padding: 0 20px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
 }
-.title { font-size: 17px; font-weight: 650; letter-spacing: -0.01em; }
+.title { font-family: var(--serif); font-size: 18px; font-weight: 500; }
 .spacer { flex: 1; }
 
 .layout {
@@ -34,15 +35,22 @@ code { font-size: 12px; background: var(--hover); padding: 1px 4px; border-radiu
   align-items: start;
 }
 .card {
+  background: var(--card);
+  border: 1px solid var(--line);
   border-radius: var(--radius);
+  box-shadow: var(--shadow);
   padding: 14px 16px;
   margin-bottom: 14px;
 }
-.card h3 { margin: 0 0 8px; font-size: 15px; font-weight: 650; letter-spacing: -0.01em; }
+.card h3 { margin: 0 0 8px; font-family: var(--serif); font-size: 15px; font-weight: 500; }
 .card p { margin: 0 0 8px; line-height: 1.55; }
 .muted { color: var(--text-2); }
 
 .preview-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.tabs { display: inline-flex; gap: 2px; padding: 3px; border-radius: 10px; background: var(--tab-track); }
+.tab { padding: 5px 14px; border: none; border-radius: 8px; background: transparent; color: var(--text-2); font: inherit; cursor: pointer; }
+.tab:hover { color: var(--text); }
+.tab.active { background: var(--tab-on); color: var(--text); box-shadow: 0 1px 3px rgba(31, 30, 29, 0.10); }
 .check { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); cursor: pointer; }
 
 .preview-wrap { position: relative; }
@@ -67,5 +75,6 @@ code { font-size: 12px; background: var(--hover); padding: 1px 4px; border-radiu
 .kv-box .bad { color: var(--err); }
 
 @media (max-width: 900px) {
-  .layout { grid-template-columns: minmax(0, 1fr); padding: 16px 12px; }
+  .layout { grid-template-columns: minmax(0, 1fr); padding: 16px; }
+  .toolbar { padding: 0 16px; }
 }

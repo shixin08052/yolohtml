@@ -38,7 +38,6 @@ export async function loadSample(entry, { signal, timeoutMs = 30000 } = {}) {
         width: bitmap.width,
         height: bitmap.height,
         fileName: entry.image,
-        sample: true, // 自带示例：拍摄条件已核对过，不再提示机型 / 焦距缺失
         exif: { focal35: null, focalMm: null, lensModel: null, make: null, model: null },
       },
       truth,

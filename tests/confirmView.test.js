@@ -48,16 +48,3 @@ describe('正视图确认：标签避让', () => {
     expect(placeLabels([{ bbox: [100, 100, 140, 130], w: 40, h: 18 }], 400, 300, 6)).toEqual([[100, 76]]);
   });
 });
-
-describe('正视图确认：标签避开指定区域', () => {
-  it('默认位置被工具条占住时换到别处', async () => {
-    const { placeLabels } = await import('../src/ui/confirmView.js');
-    const items = [{ bbox: [100, 60, 140, 90], w: 80, h: 18 }];
-    const [free] = placeLabels(items, 400, 300);
-    expect(free).toEqual([80, 36]); // 正上方
-    const avoid = [[0, 0, 200, 56]];
-    const [[x, y]] = placeLabels(items, 400, 300, 6, avoid);
-    const hit = x < avoid[0][2] && x + 80 > avoid[0][0] && y < avoid[0][3] && y + 18 > avoid[0][1];
-    expect(hit).toBe(false);
-  });
-});

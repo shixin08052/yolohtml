@@ -1,56 +1,32 @@
-/* 整体风格：液态玻璃（Liquid Glass）。
-   - 底层是暖米色底 + 几块很淡的环境色（固定不动，只画一次）；
-   - 内容区（照片、3D 画面）是不透明的"内容层"；
-   - 导航和控件是浮在上面的半透明玻璃：上亮下暗的渐变、顶部一道高光、柔和的投影。
-   性能约定：只有真正盖在会动的内容上的小块控件（画面上的工具条、手机底部的分拣条、
-   子页面的吸顶栏）才用 backdrop-filter 实时模糊；其余玻璃面下面是静止的底色，
-   用半透明渐变就够，不触发逐帧模糊。动画只改 transform / opacity / 颜色。
+/* 整体风格：暖米色底、陶土橙强调色、衬线标题、柔和圆角卡片。
    跟随系统自动切换浅色 / 深色。 */
 :root {
-  --bg: #f2f0e9;          /* 页面底色（暖米色） */
-  --surface: #fbfaf6;     /* 视图区（内容层，不透明） */
-  --card: #ffffff;        /* 输入框、流程图节点等不透明小块 */
-  --hover: rgba(31, 30, 29, 0.06);
-  --line: rgba(31, 30, 29, 0.10);
-  --line-strong: rgba(31, 30, 29, 0.20);
-  --text: #1d1c1b;
-  --text-2: #66625a;
-  --text-3: #96928a;
+  --bg: #f5f4ed;          /* 页面底色（暖米色） */
+  --surface: #faf9f5;     /* 视图区 */
+  --card: #ffffff;        /* 卡片 */
+  --hover: #ecebe3;
+  --line: rgba(31, 30, 29, 0.12);
+  --line-strong: rgba(31, 30, 29, 0.22);
+  --text: #1f1e1d;
+  --text-2: #6f6b62;
+  --text-3: #9a968c;
   --accent: #c96442;      /* 陶土橙 */
   --accent-hover: #b4583a;
-  --accent-hi: #de8263;   /* 主按钮渐变的亮端 */
-  --accent-soft: rgba(201, 100, 66, 0.13);
-  --accent-glow: rgba(201, 100, 66, 0.34);
-  --ok: #4f8436;
-  --warn: #a86a12;
+  --accent-soft: rgba(201, 100, 66, 0.12);
+  --ok: #5a8a3c;
+  --warn: #b7791f;
   --err: #c0392b;
-  --tab-track: rgba(31, 30, 29, 0.06);  /* 分段控件的底槽 */
-  --tab-on: #ffffff;                    /* 选中的那一段 */
-  --canvas-bg: #fbfaf6;   /* 调试画布 / 3D 画布底色，由 JS 读取 */
-  --canvas-hint: #96928a;
+  --tab-track: #ecebe3;   /* 标签页底槽 */
+  --tab-on: #ffffff;      /* 选中的标签 */
+  --canvas-bg: #faf9f5;   /* 调试画布 / 3D 画布底色，由 JS 读取 */
+  --canvas-hint: #9a968c;
+  --shadow: 0 1px 2px rgba(31, 30, 29, 0.04), 0 4px 16px rgba(31, 30, 29, 0.04);
 
-  /* 玻璃 */
-  --glass: rgba(255, 255, 255, 0.52);      /* 渐变下端 */
-  --glass-hi: rgba(255, 255, 255, 0.80);   /* 渐变上端 */
-  --glass-float: rgba(255, 255, 255, 0.60);/* 浮在画面上的控件（配合实时模糊） */
-  --glass-solid: rgba(252, 251, 248, 0.94);/* 不支持模糊 / 要求降低透明度时的替代 */
-  --glass-edge: rgba(255, 255, 255, 0.95); /* 顶部高光 */
-  --glass-rim: rgba(255, 255, 255, 0.60);  /* 边 */
-  --glass-shade: rgba(31, 30, 29, 0.07);   /* 外圈一道很淡的暗线，白底上也分得出边界 */
-  --blur: blur(18px) saturate(180%);
-  --shadow: 0 1px 1px rgba(31, 30, 29, 0.03), 0 10px 28px -10px rgba(70, 50, 30, 0.16);
-  --shadow-float: 0 2px 6px rgba(31, 30, 29, 0.06), 0 14px 36px -10px rgba(70, 50, 30, 0.30);
-  --ambient:
-    radial-gradient(60vmax 46vmax at 4% -8%, rgba(222, 130, 99, 0.26), transparent 62%),
-    radial-gradient(52vmax 44vmax at 104% 2%, rgba(96, 146, 226, 0.18), transparent 62%),
-    radial-gradient(64vmax 48vmax at 58% 112%, rgba(96, 176, 128, 0.16), transparent 62%);
-  --chev: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 4.5 6 8l3.5-3.5' fill='none' stroke='%2366625a' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-
-  --panel-w: 348px;
-  --radius: 18px;      /* 卡片 */
-  --radius-lg: 22px;   /* 顶栏、视图区 */
+  --panel-w: 340px;
+  --topbar-h: 60px;
+  --radius: 12px;
   --serif: 'Tiempos Text', 'Iowan Old Style', Georgia, 'Songti SC', 'Noto Serif CJK SC', 'Source Han Serif SC', serif;
-  --sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif;
+  --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif;
 
   color-scheme: light;
   font-family: var(--sans);
@@ -62,56 +38,26 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #161514;
-    --surface: #1e1d1c;
-    --card: #302f2d;
-    --hover: rgba(250, 249, 245, 0.08);
+    --bg: #262624;
+    --surface: #1f1e1d;
+    --card: #30302e;
+    --hover: #3a3936;
     --line: rgba(250, 249, 245, 0.10);
-    --line-strong: rgba(250, 249, 245, 0.22);
-    --text: #f1efe8;
-    --text-2: #b3b0a7;
+    --line-strong: rgba(250, 249, 245, 0.20);
+    --text: #f0eee6;
+    --text-2: #b0aea5;
     --text-3: #8a877f;
-    --accent: #dc7b5b;
-    --accent-hover: #e58d70;
-    --accent-hi: #ee9a7d;
-    --accent-soft: rgba(220, 123, 91, 0.18);
-    --accent-glow: rgba(220, 123, 91, 0.30);
+    --accent: #d97757;
+    --accent-hover: #e08a6d;
+    --accent-soft: rgba(217, 119, 87, 0.16);
     --ok: #8bbf6a;
     --warn: #e0a84a;
     --err: #e57361;
-    --tab-track: rgba(0, 0, 0, 0.28);
-    --tab-on: rgba(255, 255, 255, 0.14);
-    --canvas-bg: #1e1d1c;
+    --tab-track: #1f1e1d;
+    --tab-on: #3a3936;
+    --canvas-bg: #1f1e1d;
     --canvas-hint: #8a877f;
-
-    --glass: rgba(48, 46, 44, 0.50);
-    --glass-hi: rgba(76, 73, 69, 0.56);
-    --glass-float: rgba(44, 42, 40, 0.58);
-    --glass-solid: rgba(40, 39, 37, 0.95);
-    --glass-edge: rgba(255, 255, 255, 0.16);
-    --glass-rim: rgba(255, 255, 255, 0.09);
-    --glass-shade: rgba(0, 0, 0, 0.45);
-    --shadow: 0 10px 28px -10px rgba(0, 0, 0, 0.55);
-    --shadow-float: 0 2px 6px rgba(0, 0, 0, 0.3), 0 14px 36px -10px rgba(0, 0, 0, 0.7);
-    --ambient:
-      radial-gradient(60vmax 46vmax at 4% -8%, rgba(220, 123, 91, 0.24), transparent 62%),
-      radial-gradient(52vmax 44vmax at 104% 2%, rgba(86, 132, 214, 0.20), transparent 62%),
-      radial-gradient(64vmax 48vmax at 58% 112%, rgba(76, 150, 108, 0.16), transparent 62%);
-    --chev: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 4.5 6 8l3.5-3.5' fill='none' stroke='%23b3b0a7' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    --shadow: none;
     color-scheme: dark;
   }
-}
-
-/* 环境色：固定在视口上的一层，单独合成，页面滚动时不重画 */
-body::before {
-  content: '';
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  background: var(--ambient);
-  pointer-events: none;
-  transform: translateZ(0);
-}
-@media print {
-  body::before { display: none; }
 }
