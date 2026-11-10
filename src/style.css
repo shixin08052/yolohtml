@@ -1,5 +1,6 @@
 @import './theme.css';
 @import './controls.css';
+@import './extras.css';
 
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -376,6 +377,28 @@ body { overflow: hidden; -webkit-font-smoothing: antialiased; text-rendering: op
 .msg.warn { color: var(--warn); }
 .msg.error { color: var(--err); }
 
+/* ---------------- 步骤条自适应 ----------------
+   宽屏：六步全部带文字；中等宽度（常见投影 / 笔记本）：只有当前步骤带文字，其余收成圆点，连接线平分剩余宽度；
+   再窄：顶栏换成两行，步骤条独占第二行、文字全显示。手机（≤ 900 px）的规则在后面。 */
+@media (min-width: 1101px) and (max-width: 1360px) {
+  .topbar { gap: 14px; }
+  .stepper { overflow: visible; }
+  .step + .step { flex: 1 1 auto; }
+  .step + .step::before { flex: 1 1 0; width: auto; min-width: 6px; margin: 0 4px; }
+  .step .label { display: none; }
+  .step.active .label, .step.error .label { display: inline; }
+  .step .pill { padding: 3px; }
+  .step.active .pill, .step.error .pill { padding-right: 11px; }
+  .actions .select { max-width: 150px; }
+}
+@media (min-width: 901px) and (max-width: 1100px) {
+  .topbar { flex-wrap: wrap; gap: 8px 12px; padding-bottom: 10px; }
+  .brand { flex: 1 1 auto; }
+  .stepper { order: 2; flex: 1 1 100%; overflow: visible; }
+  .step + .step { flex: 1 1 auto; }
+  .step + .step::before { flex: 1 1 0; width: auto; min-width: 10px; margin: 0 6px; }
+}
+
 /* ---------------- 窄屏（手机）：单列，信息面板放到下方 ---------------- */
 @media (max-width: 900px) {
   body { overflow: auto; }
@@ -541,7 +564,7 @@ body { overflow: hidden; -webkit-font-smoothing: antialiased; text-rendering: op
 body.demo .only-demo { display: revert; }
 body.demo .tab.only-demo { display: inline-block; }
 body.demo .only-normal { display: none; }
-body.demo .info-panel > .panel-section:not([data-key="status"]):not([data-key="sort"]) { display: none; }
+body.demo .info-panel > .panel-section:not([data-key="status"]):not([data-key="sort"]):not([data-key="order"]) { display: none; }
 body.demo-wait .info-panel > .panel-section[data-key="sort"] { display: none; }
 body.demo #view-debug .view-tools > :not(#btn-boxedit):not(.zoom-btns) { display: none; }
 body.demo #view-debug .view-tools #btn-boxedit:disabled { display: none; }

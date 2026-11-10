@@ -69,7 +69,8 @@ export function createSortPlayer({ arm, partsLayer, requestRender, onProgress = 
       const node = partsLayer.nodeOf(s.partId);
       if (node) {
         partsLayer.group.attach(node); // 保持世界位置不变，接下来的 drop 段让它落下（夹爪同时张开）
-        partsLayer.setMoved(s.partId, { hideLabel: true });
+        partsLayer.setMoved(s.partId, { hideLabel: !s.keepLabel });
+        if (s.pose) partsLayer.setPose(s.partId, s.pose);
       }
     }
   }

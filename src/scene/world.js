@@ -133,9 +133,19 @@ export function createWorld(container) {
    * @returns {{position: THREE.Vector3, target: THREE.Vector3, fov: number}}
    */
   function getDefaultView(aspect = camera.aspect) {
-    const pts = [...basePoints, ...(focusPoints ?? [])];
-    const az = ((focusPoints ? focusAzimuth : 0) * Math.PI) / 180;
-    const el = ((focusPoints ? 28 : 50) * Math.PI) / 180;
+    return viewFor([...basePoints, ...(focusPoints ?? [])], focusPoints ? focusAzimuth : 0, focusPoints ? 28 : 50, aspect);
+  }
+
+  /**
+   * 从给定方位角 / 仰角看、把这些点（底板坐标）都装进画面的相机位置与目标点（不应用）
+   * @param {number[][]} pts
+   * @param {number} azimuthDeg 0 = 从操作者一侧看，正值往 +X 一侧转
+   * @param {number} elevationDeg
+   * @param {number} [aspect]
+   */
+  function viewFor(pts, azimuthDeg, elevationDeg, aspect = camera.aspect) {
+    const az = (azimuthDeg * Math.PI) / 180;
+    const el = (elevationDeg * Math.PI) / 180;
     // 目标点：所有点包围盒的中心
     const lo = [0, 1, 2].map((i) => Math.min(...pts.map((p) => p[i])));
     const hi = [0, 1, 2].map((i) => Math.max(...pts.map((p) => p[i])));
@@ -201,6 +211,7 @@ export function createWorld(container) {
 
   /** 应用默认视角 */
   function setDefaultView() {
+    cancelFly();
     // 先清掉阻尼留下的旋转 / 平移惯性，否则复位后还会继续漂移
     const damping = controls.enableDamping;
     controls.enableDamping = false;
@@ -215,6 +226,42 @@ export function createWorld(container) {
     controls.update();
     controls.enableDamping = damping;
     requestRender();
+  }
+
+  /** 正在进行的视角过渡（requestAnimationFrame 句柄） */
+  let flyRaf = 0;
+  function cancelFly() {
+    cancelAnimationFrame(flyRaf);
+    flyRaf = 0;
+  }
+  controls.addEventListener('start', cancelFly); // 用户自己拖动视角时，过渡让位
+
+  /**
+   * 平滑移到"把这些点装进画面"的视角（分拣时拉近到底板和料盒；之后仍可自由旋转，"默认视角"回到全景）
+   * @param {number[][]} points 底板坐标
+   * @param {{ azimuthDeg?: number, elevationDeg?: number, ms?: number }} [opts]
+   */
+  function flyToPoints(points, { azimuthDeg = 0, elevationDeg = 50, ms = 700 } = {}) {
+    cancelFly();
+    if (!controlsActive || frame || !points?.length) return;
+    const to = viewFor(points, azimuthDeg, elevationDeg, camera.aspect);
+    const p0 = camera.position.clone();
+    const t0 = controls.target.clone();
+    const start = performance.now();
+    const damping = controls.enableDamping;
+    const step = (now) => {
+      const k = ms > 0 ? Math.min(1, (now - start) / ms) : 1;
+      const e = k < 0.5 ? 4 * k * k * k : 1 - (-2 * k + 2) ** 3 / 2;
+      controls.enableDamping = false;
+      camera.position.lerpVectors(p0, to.position, e);
+      controls.target.lerpVectors(t0, to.target, e);
+      camera.lookAt(controls.target);
+      controls.update();
+      controls.enableDamping = damping;
+      requestRender();
+      flyRaf = k < 1 && controlsActive && !frame ? requestAnimationFrame(step) : 0;
+    };
+    step(start);
   }
 
   /**
@@ -259,6 +306,7 @@ export function createWorld(container) {
   /** 是否由轨道控制器接管相机（转场、对比时关闭） */
   let controlsActive = true;
   function setControlsActive(on) {
+    if (!on) cancelFly();
     controlsActive = on;
     controls.enabled = on;
   }
@@ -391,6 +439,7 @@ export function createWorld(container) {
     requestRender,
     setDefaultView,
     getDefaultView,
+    flyToPoints,
     setFocusPoints,
     setBasePoints,
     pickPlane,
@@ -420,7 +469,7 @@ function unavailableWorld(container) {
     scene: new THREE.Scene(),
     camera: new THREE.PerspectiveCamera(),
     resize: noop, render: noop, setFrame: noop, requestRender: noop,
-    setDefaultView: noop, setFocusPoints: noop, setBasePoints: noop,
+    setDefaultView: noop, flyToPoints: noop, setFocusPoints: noop, setBasePoints: noop,
     setAxesVisible: noop, setControlsActive: noop, pickPlane: () => null,
   };
 }

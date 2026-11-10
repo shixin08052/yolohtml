@@ -92,8 +92,8 @@ export function buildSequence(tasks, parts, arm, { startAngles, homeAngles, star
     segs.push({ type: 'attach', task: i, phase: '夹起', partId: t.partId, ms: 0 });
     line(t.from, t.hoverFrom, t.gripYaw, i, '抬起');
     const placeYaw = t.placeYaw === undefined ? t.gripYaw : t.placeYaw;
-    move(solve(t.hoverTo, placeYaw), i, '移到料盒上方');
-    line(t.hoverTo, t.to, placeYaw, i, '放入料盒');
+    move(solve(t.hoverTo, placeYaw), i, t.kind === 'relocate' ? '移到板上空位上方' : '移到料盒上方');
+    line(t.hoverTo, t.to, placeYaw, i, t.kind === 'relocate' ? '放回板上空位' : '放入料盒');
     if (t.drop) {
       // 先放开零件，再在零件下落的同时张开夹爪
       segs.push({ type: 'detach', task: i, phase: '松开', partId: t.partId, ms: 0 });
@@ -101,7 +101,7 @@ export function buildSequence(tasks, parts, arm, { startAngles, homeAngles, star
       gap = open;
     } else {
       grip(open, i, '松开');
-      segs.push({ type: 'detach', task: i, phase: '放下', partId: t.partId, ms: 0 });
+      segs.push({ type: 'detach', task: i, phase: '放下', partId: t.partId, pose: t.partTo, keepLabel: t.kind === 'relocate', ms: 0 });
     }
     line(t.to, t.hoverTo, placeYaw, i, '离开');
   });

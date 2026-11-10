@@ -87,25 +87,35 @@ const anyOverlap = (as, bs) => as.some((a) => bs.some((b) => polysOverlap(a, b))
  *   width：夹取处宽度；ok：额外检查（例如逆运动学可达）
  * @returns {{ point: number[], gap: number, offset: number, gripYaw: number }|null}
  */
-export function findGrasp(part, others, { width, fps, ok = () => true }) {
+export function findGrasp(part, others, opts) {
+  const access = assessGrasp(part, others, opts);
+  return access?.blockers.length === 0 ? access.grasp : null;
+}
+
+/** 最佳抓法及实际挡住该抓法的元件 id；数量最少优先。无可达抓点时返回 null。 */
+export function assessGrasp(part, others, { width, fps, ok = () => true }) {
   const a = rad(part.rotDeg ?? 0);
   const gripYaw = a + Math.PI / 2;
   const body = fps[part.cls].rects[0];
   const maxOff = Math.max(0, Math.min(-body.minX, body.maxX) - GRASP_END);
   // 手指不能压到旁边零件的本体和引脚，也不能压到自己的引脚
-  const obst = [...others.map((o) => partPolys(o, fps)), leadPolys(part, fps)];
+  const obst = others.map((o) => ({ id: o.id, polys: partPolys(o, fps) }));
+  const ownLeads = leadPolys(part, fps);
+  let best = null;
   for (const s of OFFSETS) {
     if (Math.abs(s) > maxOff + 1e-9) continue;
     const point = [part.x + s * Math.cos(a), part.y + s * Math.sin(a)];
     for (const c of GRIP_CLEARANCE) {
       const gap = width + c;
       const fingers = fingerPolys(point, gripYaw, gap);
-      if (obst.some((ob) => anyOverlap(fingers, ob))) continue;
+      if (anyOverlap(fingers, ownLeads)) continue;
       if (!ok(point, gripYaw)) continue;
-      return { point, gap, offset: s, gripYaw };
+      const blockers = obst.filter((ob) => anyOverlap(fingers, ob.polys)).map((ob) => ob.id).sort((a, b) => a - b);
+      if (!best || blockers.length < best.blockers.length) best = { grasp: { point, gap, offset: s, gripYaw }, blockers };
+      if (!blockers.length) return best;
     }
   }
-  return null;
+  return best;
 }
 
 /**

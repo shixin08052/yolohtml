@@ -26,7 +26,7 @@ import { boxToTexture, erasePolygons } from './vision/erase.js';
 import { estimateYaw, expandPoly } from './vision/orientation.js';
 import { samplePatch, boardToPatch, leadDirection, ledColor, bodyAxis, LEAD } from './vision/leads.js';
 import { fitBoxes, SIZE } from './vision/sizePrior.js';
-import { binsFor, partName as displayName, partColor } from './robot/bins.js';
+import { partName as displayName, partColor } from './robot/bins.js';
 import { separateBodies } from './robot/clearance.js';
 import { segmentParts, fuseDetections } from './vision/colorSeg.js';
 import { measurePaper, EDGE_NAMES, CHECK_LIMITS } from './vision/boardCheck.js';
@@ -42,7 +42,6 @@ import { CLASSES, WORK_AREA, ARM, BIN_SLOTS, BIN_SIZE, MODELS, DETECT } from './
 import { createArm } from './scene/arm.js';
 import { createBins } from './scene/bins.js';
 import { ikWorld, fkWorld, fkChain, fromBase, pathClear } from './robot/ik.js';
-import { plan } from './robot/planner.js';
 import { buildSequence, GRIP_MAX } from './robot/sequence.js';
 import { createSortPlayer } from './scene/sortPlayer.js';
 import { createRun, recordStep, finishRun, summarizeRun, RUN_KINDS } from './timing.js';
@@ -53,6 +52,9 @@ import { downloadText, downloadCanvas, svgToCanvas } from './ui/download.js';
 import { sortInstructions, instructionsCsv, instructionsJson } from './robot/export.js';
 import * as THREE from 'three';
 import { toThree } from './math/coords.js';
+import { createOrderPanel } from './ui/orderPanel.js';
+import { planForOrder } from './robot/order.js';
+import { createHero, createResultCard, createInstructionsDialog } from './ui/sortExtras.js';
 
 const $ = (sel) => document.querySelector(sel);
 const fmt = (x, d = 1) => (x == null || Number.isNaN(x) ? '—' : Number(x).toFixed(d));
@@ -61,6 +63,9 @@ const panel = createInfoPanel($('#info-panel'));
 createStepper($('#stepper'), store);
 const debugView = createDebugView($('#debug-canvas'));
 const world = createWorld($('#three-container'));
+// 首页引导：还没有照片时盖在视图上
+const hero = createHero($('.views'), { onDemo: () => loadSampleByKey(DEMO_SAMPLE) });
+hero.setReady(false);
 /* ------------------------------------------------------------------ */
 /* 3D 场景：底板                                                        */
 /* ------------------------------------------------------------------ */
@@ -477,6 +482,7 @@ function renderStatus() {
   });
   renderCaptureNotices();
   syncSortControls();
+  hero.setVisible(!store.state.image && !loadingPhoto);
 }
 
 function renderCaptureNotices() {
@@ -1577,6 +1583,27 @@ const sortPlayer = createSortPlayer({
   onProgress: ({ task, phase }) => updateSortProgress(task, phase),
   onState: (state) => onSortState(state),
 });
+/** 元件清单（清点 + 自选清单 + AI 帮填）：清单变了就重新规划 */
+const orderPanel = createOrderPanel({
+  panel,
+  getParts: () => (stageIndex(store.state.stage) >= stageIndex('sceneBuilt') ? store.state.parts : null),
+  getPlanningOptions: () => ({ footprints: partFootprints(), arm: ARM }),
+  onChange: () => (sortTouched ? resetSorting({ fromOrder: true }) : refreshPlan({ fromOrder: true })),
+  fileStem: () => photoStem(),
+  message: (text, level) => panel.message(text, level),
+});
+store.on('change', () => {
+  if (stageIndex(store.state.stage) < stageIndex('sceneBuilt')) panel.remove('order');
+});
+/** 分拣结果卡：盖在 3D 画面上 */
+const resultCard = createResultCard($('#view-three'), {
+  onInstructions: () => showInstructions(),
+  onExport: () => {
+    exportPlan('csv');
+    panel.message('已导出分拣指令', 'ok');
+  },
+  onAgain: () => resetSorting(),
+});
 /** 各类零件的占地（scene/parts.js 的 partFootprint） */
 const partFootprints = () => Object.fromEntries(CLASSES.map((c) => [c.id, partFootprint(c.id)]));
 /** 当前规划：{ tasks, skipped, segs } */
@@ -1603,9 +1630,11 @@ function stopSorting() {
 }
 
 /** 重新规划（零件变化后），载入动作序列，刷新"分拣"分区 */
-function refreshPlan() {
+function refreshPlan({ fromOrder = false } = {}) {
   const { parts } = store.state;
   if (!parts) return;
+  // 清单分区按当前零件重建；清单自己引起的重新规划不重建（免得输入框丢焦点）
+  if (!fromOrder) orderPanel.render();
   if (!world.available) {
     sortPlan = null;
     $('#sort-dock').hidden = true;
@@ -1617,14 +1646,15 @@ function refreshPlan() {
   const start = fkWorld(arm.homeAngles, ARM);
   const footprints = partFootprints();
   // 料盒按需生成：电阻一个，LED 按颜色各一个
-  const binList = binsFor(parts);
+  // 自选清单：只拣选中的零件，料盒也只为它们生成；没选中的留在板上
+  const picked = orderPanel.selection();
+  const { tasks, skipped, bins: binList, moved } = planForOrder(parts, picked, ARM, { start, footprints });
   bins.setBins(binList);
-  const { tasks, skipped } = plan(parts, binList, ARM, { start, footprints });
   const skippedIds = new Set(skipped.map((p) => p.id));
   store.state.parts = parts.map((p) => ({ ...p, reachable: !skippedIds.has(p.id) }));
   partsLayer.markUnreachable([...skippedIds]);
   const segs = buildSequence(tasks, store.state.parts, ARM, { startAngles: arm.homeAngles, homeAngles: arm.homeAngles });
-  sortPlan = { tasks, skipped, segs, bins: binList };
+  sortPlan = { tasks, skipped, segs, bins: binList, order: picked, moved };
   sortPlayer.load(segs);
   renderSortSection();
   renderStatus();
@@ -1632,9 +1662,21 @@ function refreshPlan() {
 }
 
 /** 重置：零件回到原位，机械臂回到初始姿态 */
-function resetSorting() {
+function resetSorting(opts) {
   if (stopSorting()) partsLayer.setParts(store.state.parts, parallaxOn);
-  refreshPlan();
+  refreshPlan(opts);
+}
+
+/** 分拣时的视角：拉近到底板、用到的料盒和机械臂（默认的全景要把手机也装进去，零件太小看不清） */
+function sortViewPoints() {
+  const pts = [[0, 0, 0], [BOARD.width, 0, 0], [BOARD.width, BOARD.height, 0], [0, BOARD.height, 0]];
+  for (const b of sortPlan?.bins ?? []) {
+    const [sx, sy, h] = b.size;
+    for (const dx of [-1, 1]) for (const dy of [-1, 1]) pts.push([b.center[0] + (dx * sx) / 2, b.center[1] + (dy * sy) / 2, h]);
+  }
+  const [bx, by] = ARM.base;
+  pts.push([bx - 40, by, 0], [bx + 40, by, 0], [bx, by, ARM.L0 + 120]);
+  return pts;
 }
 
 function startSorting() {
@@ -1648,6 +1690,10 @@ function startSorting() {
   // 手机上滚到标签页处：3D 画面正好落在顶部和底部控制条之间
   if (window.matchMedia('(max-width: 900px)').matches) $('.tabs').scrollIntoView({ block: 'start', behavior: 'smooth' });
   sortTouched = true;
+  resultCard.hide();
+  // 手机悬在底板上方会挡住视线：分拣时先隐藏，重置后恢复
+  phone.setOpacity(0);
+  world.flyToPoints(sortViewPoints(), { azimuthDeg: 18, elevationDeg: 46 });
   sortPlayer.start();
 }
 
@@ -1657,7 +1703,7 @@ function toggleSortPause() {
 }
 $('#dock-start').addEventListener('click', startSorting);
 $('#dock-pause').addEventListener('click', toggleSortPause);
-$('#dock-reset').addEventListener('click', resetSorting);
+$('#dock-reset').addEventListener('click', () => resetSorting());
 
 const partName = (p) => `${displayName(p)} (${fmt(p.x, 1)}, ${fmt(p.y, 1)})`;
 
@@ -1667,20 +1713,26 @@ function renderSortSection() {
   const { tasks, skipped } = sortPlan;
   const byId = new Map(store.state.parts.map((p) => [p.id, p]));
   const body = panel.setCustom('sort', '分拣');
-  const nPick = tasks.filter((t) => t.kind !== 'push').length;
-  const nPush = tasks.length - nPick;
-  let html = `<p class="summary">共 <b>${nPick}</b> 个零件待分拣${nPush ? `<span class="muted">（零件挤在一起，要先拨开 ${nPush} 次）</span>` : ''}${skipped.length ? `，<span class="bad">${skipped.length} 个跳过</span>` : ''}</p>`;
+  const nPick = tasks.filter((t) => t.kind === 'pick').length;
+  const nPush = tasks.filter((t) => t.kind === 'push').length;
+  const nRelocate = tasks.filter((t) => t.kind === 'relocate').length;
+  const ord = sortPlan.order;
+  let html = `<p class="summary">${ord?.custom ? '按清单' : '共'} <b>${nPick}</b> 个零件待分拣${sortPlan.moved.size ? `<span class="muted">；${sortPlan.moved.size} 个挡路元件会挪开并留在板上</span>` : ''}${ord?.totalShort ? `<span class="bad">（清单还缺 ${ord.totalShort} 个）</span>` : ''}${nPush ? `<span class="muted">（拨开 ${nPush} 次）</span>` : ''}${nRelocate ? `<span class="muted">（夹起挪位 ${nRelocate} 次）</span>` : ''}${skipped.length ? `，<span class="bad">${skipped.length} 个跳过</span>` : ''}</p>`;
   html += `<div class="sort-controls">
     <button type="button" class="btn btn-primary btn-small" id="sort-start">开始</button>
     <button type="button" class="btn btn-small" id="sort-pause" disabled>暂停</button>
     <button type="button" class="btn btn-small" id="sort-reset">重置</button>
     <label class="speed">速度 <input type="range" id="sort-speed" min="0.5" max="3" step="0.25" value="${sortPlayer.speed}" /> <span id="sort-speed-val">${sortPlayer.speed.toFixed(2)}×</span></label>
   </div>
-  <p class="muted small" id="sort-phase">等待开始</p>`;
+  <p class="muted small" id="sort-phase">等待开始</p>
+  <p class="ins-entry"><button type="button" class="btn btn-small" id="sort-ins">查看机械臂指令</button><span class="muted small">每一步的抓取点、夹爪、关节角，可导出给真实机械臂</span></p>`;
   html += '<ol class="task-list">' + tasks.map((t, i) => {
     const p = byId.get(t.partId);
     if (t.kind === 'push') {
       return `<li data-i="${i}" class="push"><span class="dot" style="--c:${partColor(p)}"></span>拨开 ${displayName(p)}<span class="muted"> · 夹爪下不去，先${t.gap > 0 ? '用一根手指' : ''}推开 ${fmt(t.dist, 0)} mm</span></li>`;
+    }
+    if (t.kind === 'relocate') {
+      return `<li data-i="${i}" class="push"><span class="dot" style="--c:${partColor(p)}"></span>挪开 ${displayName(p)}<span class="muted"> → 板上空位 (${fmt(t.partTo[0], 1)}, ${fmt(t.partTo[1], 1)})，不入盒</span></li>`;
     }
     const bin = sortPlan.bins.find((b) => b.id === t.binId);
     return `<li data-i="${i}"><span class="dot" style="--c:${partColor(p)}"></span>${partName(p)}<span class="muted"> → ${bin.label}盒</span></li>`;
@@ -1691,7 +1743,8 @@ function renderSortSection() {
   body.innerHTML = html;
   body.querySelector('#sort-start').addEventListener('click', startSorting);
   body.querySelector('#sort-pause').addEventListener('click', toggleSortPause);
-  body.querySelector('#sort-reset').addEventListener('click', resetSorting);
+  body.querySelector('#sort-reset').addEventListener('click', () => resetSorting());
+  body.querySelector('#sort-ins').addEventListener('click', showInstructions);
   body.querySelector('#sort-speed').addEventListener('input', (e) => {
     sortPlayer.setSpeed(Number(e.target.value));
     body.querySelector('#sort-speed-val').textContent = `${Number(e.target.value).toFixed(2)}×`;
@@ -1711,7 +1764,7 @@ function updateSortProgress(task, phase) {
   });
   const ph = body.querySelector('#sort-phase');
   if (ph) {
-    const nPick = sortPlan.tasks.filter((t) => t.kind !== 'push').length;
+    const nPick = sortPlan.tasks.filter((t) => t.kind === 'pick').length;
     ph.textContent = !sortTouched ? '等待开始' : task == null ? (finished ? `全部完成（${nPick} 个）` : phase) : `第 ${task + 1} / ${n} 步 · ${phase}`;
     $('#dock-phase').textContent = ph.textContent;
   }
@@ -1736,14 +1789,58 @@ function syncSortControls(state = sortPlayer.state) {
   }
 }
 
+/** 分拣实际播放了多久（ms，不含暂停） */
+let sortElapsed = 0;
+let sortRunFrom = null;
+let jointsRaf = 0;
+
+/** 分拣时在控制条上实时显示关节角（机械臂真的在按指令走，不只是动画） */
+function showJoints() {
+  const a = arm.angles.map((r) => `${((r * 180) / Math.PI).toFixed(0)}°`);
+  $('#dock-joints').textContent = `关节角 θ₀–θ₄：${a.join(' / ')} · 夹爪 ${arm.gap.toFixed(1)} mm`;
+}
+function jointsLoop() {
+  showJoints();
+  jointsRaf = sortPlayer.state === 'running' ? requestAnimationFrame(jointsLoop) : 0;
+}
+
 function onSortState(state) {
+  if (state === 'running') {
+    sortRunFrom = now();
+    $('#dock-joints').hidden = false;
+    if (!jointsRaf) jointsLoop();
+  } else {
+    if (sortRunFrom != null) sortElapsed += now() - sortRunFrom;
+    sortRunFrom = null;
+    if (state === 'idle') {
+      sortElapsed = 0;
+      $('#dock-joints').hidden = true;
+      resultCard.hide();
+      if (store.state.pose && transition.mode === 'idle') phone.setOpacity(1);
+    }
+  }
   renderStatus();
   if (state === 'done') {
     updateSortProgress(null, '完成');
     if (store.state.stage === 'sorting') store.advance('done');
-    const nPick = sortPlan.tasks.filter((t) => t.kind !== 'push').length;
-    const nPush = sortPlan.tasks.length - nPick;
-    panel.message(`分拣完成：${nPick} 个零件${nPush ? `，拨开 ${nPush} 次` : ''}${sortPlan.skipped.length ? `，跳过 ${sortPlan.skipped.length} 个` : ''}`, 'ok');
+    const nPick = sortPlan.tasks.filter((t) => t.kind === 'pick').length;
+    const nPush = sortPlan.tasks.filter((t) => t.kind === 'push').length;
+    const nRelocate = sortPlan.tasks.filter((t) => t.kind === 'relocate').length;
+    panel.message(`分拣完成：${nPick} 个零件${nPush ? `，拨开 ${nPush} 次` : ''}${nRelocate ? `，挪位 ${nRelocate} 次` : ''}${sortPlan.skipped.length ? `，跳过 ${sortPlan.skipped.length} 个` : ''}`, 'ok');
+    showJoints();
+    const ord = sortPlan.order;
+    resultCard.show({
+      bins: sortPlan.bins.map((b) => ({ label: b.label, hex: b.hex, n: sortPlan.tasks.filter((t) => t.kind === 'pick' && t.binId === b.id).length })),
+      picked: nPick,
+      pushes: nPush,
+      relocations: nRelocate,
+      moved: sortPlan.moved.size,
+      skipped: sortPlan.skipped.map((p) => ({ name: partName(p), reason: p.skipReason })),
+      seconds: sortElapsed / 1000,
+      speed: sortPlayer.speed,
+      short: ord?.custom ? ord.lines.filter((l) => l.short > 0) : [],
+      left: ord?.custom ? store.state.parts.length - ord.ids.size : 0,
+    });
   }
 }
 
@@ -1787,12 +1884,21 @@ loadSampleIndex()
   .then((list) => {
     samples = list;
     for (const s of list) sampleSelect.add(new Option(s.label, s.key));
+    hero.setReady(list.length > 0);
   })
   .catch((err) => panel.message(`示例列表读取失败：${err.message}`, 'warn'));
 
-sampleSelect.addEventListener('change', async (e) => {
-  const entry = samples.find((s) => s.key === e.target.value);
+sampleSelect.addEventListener('change', (e) => {
+  const key = e.target.value;
   e.target.value = '';
+  loadSampleByKey(key);
+});
+
+/** "一键看演示"用的示例：一张实拍照片；没有时退回列表里的第一张 */
+const DEMO_SAMPLE = 'IMG_9899';
+
+async function loadSampleByKey(key) {
+  const entry = samples.find((s) => s.key === key) ?? (key === DEMO_SAMPLE ? samples.find((s) => !s.key.startsWith('synth')) ?? samples[0] : null);
   if (!entry) return;
   sampleLoadController?.abort();
   const controller = new AbortController();
@@ -1821,7 +1927,7 @@ sampleSelect.addEventListener('change', async (e) => {
   } finally {
     if (sampleLoadController === controller) sampleLoadController = null;
   }
-});
+}
 
 /* ------------------------------------------------------------------ */
 /* 实验记录（步骤 16）                                                   */
@@ -1922,6 +2028,18 @@ function exportPlan(kind) {
   if (kind === 'csv') downloadText(instructionsCsv(ins), `分拣指令_${photoStem()}.csv`, 'text/csv;charset=utf-8');
   else downloadText(instructionsJson(ins, { photo: store.state.image.fileName, time: stamp(), arm: ARM }), `分拣指令_${photoStem()}.json`, 'application/json;charset=utf-8');
 }
+
+/** 弹窗显示机械臂指令（和导出的是同一份数据） */
+function showInstructions() {
+  if (!sceneReady() || !sortPlan) return;
+  insDialog.show(sortInstructions(sortPlan, store.state.parts, sortPlan.bins, CLASSES, ARM), { photo: store.state.image.fileName });
+}
+const insDialog = createInstructionsDialog({
+  onExport: (kind) => {
+    exportPlan(kind);
+    panel.message('已导出分拣指令', 'ok');
+  },
+});
 
 exportBody.addEventListener('click', (e) => {
   const b = e.target.closest('[data-exp]');
