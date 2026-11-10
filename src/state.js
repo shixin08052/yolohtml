@@ -12,6 +12,7 @@
  * @property {number} width
  * @property {number} height
  * @property {string} fileName
+ * @property {boolean} [sample] 自带示例（不提示机型 / 焦距缺失）
  * @property {{ focal35: number|null, focalMm: number|null, lensModel: string|null,
  *              make: string|null, model: string|null, orientation?: number|null }} exif
  *   orientation 为 EXIF 原始方向值（1 / 3 / 6 / 8），fromCalib 用它判断竖拍方向
