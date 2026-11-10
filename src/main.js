@@ -482,11 +482,9 @@ function renderStatus() {
 function renderCaptureNotices() {
   const root = $('#capture-notices');
   const { image, truth, intrinsics } = store.state;
-  // 自带示例（去掉了 EXIF）不提示机型 / 焦距缺失：只有用户上传的照片才需要核对拍摄条件
-  const warnings = image && !truth && !image.sample ? captureWarnings(image, calib) : [];
+  const warnings = image && !truth ? captureWarnings(image, calib) : [];
   if (!world.available) warnings.unshift('当前浏览器无法启动 3D，仍可上传照片并查看识别结果。');
   root.hidden = !warnings.length && !image;
-  root.classList.toggle('has-warn', warnings.length > 0);
   root.innerHTML = warnings.map((text) => `<p>${escHtml(text)}</p>`).join('');
   if (image && intrinsics) {
     const source = { calib: '固定内参', exif: 'EXIF 估算', self: '照片估计', truth: '合成真值' }[intrinsics.source];
@@ -1645,8 +1643,7 @@ function startSorting() {
   transition.cancel();
   if (store.state.stage === 'sceneBuilt') store.advance('sorting', { tasks: sortPlan.tasks, skipped: sortPlan.skipped });
   tabs.select('three');
-  // 手机上滚到标签页处：3D 画面正好落在顶部和底部控制条之间
-  if (window.matchMedia('(max-width: 900px)').matches) $('.tabs').scrollIntoView({ block: 'start', behavior: 'smooth' });
+  if (window.matchMedia('(max-width: 900px)').matches) $('.main').scrollIntoView({ block: 'start', behavior: 'smooth' });
   sortTouched = true;
   sortPlayer.start();
 }
