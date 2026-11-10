@@ -11,7 +11,8 @@ export function createStepper(el, store) {
     const li = document.createElement('li');
     li.className = 'step';
     li.dataset.key = s.key;
-    li.innerHTML = `<span class="dot">${i + 1}</span><span class="label">${s.label}</span>`;
+    // 圆点和文字包在 .pill 里：当前步骤的高亮只罩住它，不罩住前面的连接线
+    li.innerHTML = `<span class="pill"><span class="dot">${i + 1}</span><span class="label">${s.label}</span></span>`;
     el.appendChild(li);
     return li;
   });

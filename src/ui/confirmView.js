@@ -2,6 +2,7 @@
 // 下方一条确认栏：确认后开始转场建模；也可以回到照片上修改框，或重新选照片。
 // outlineCorners、countByClass 是纯函数（便于测试）；createConfirmView 负责画布和按钮。
 import { partName, partColor } from '../robot/bins.js';
+import { createPanZoom } from './panZoom.js';
 
 /**
  * 元件在底板上的轮廓（只框本体，不含引脚）：四个角，底板坐标 mm
@@ -46,10 +47,11 @@ export function countByClass(parts, classes) {
  * @param {number} width
  * @param {number} height
  * @param {number} [gap=6]
+ * @param {number[][]} [avoid] 标签要避开的区域 [x0, y0, x1, y1]（例如浮在画面上的工具条）
  * @returns {number[][]} 每个标签左上角
  */
-export function placeLabels(items, width, height, gap = 6) {
-  const placed = [];
+export function placeLabels(items, width, height, gap = 6, avoid = []) {
+  const placed = avoid.map((r) => [...r]);
   const overlap = (a, b) => Math.max(0, Math.min(a[2], b[2]) - Math.max(a[0], b[0])) * Math.max(0, Math.min(a[3], b[3]) - Math.max(a[1], b[1]));
   const clampX = (x, w) => Math.min(Math.max(x, 2), width - w - 2);
   const clampY = (y, h) => Math.min(Math.max(y, 2), height - h - 2);
@@ -86,6 +88,9 @@ export function placeLabels(items, width, height, gap = 6) {
   });
 }
 
+/** 标签（字号、线宽）的倍数：画布窄于 560 px 时按比例缩小，最小 0.78 */
+export const labelScale = (width) => Math.min(1, Math.max(0.78, width / 560));
+
 /** 零件的显示编号（从 1 开始，与导出的零件图片、分拣指令一致） */
 export const partNo = (p, i = 0) => (Number.isInteger(p.id) ? p.id : i) + 1;
 
@@ -93,9 +98,9 @@ export const partNo = (p, i = 0) => (Number.isInteger(p.id) ? p.id : i) + 1;
  * 在画布上框出元件（按类别颜色，编号 + 类别名的标签）
  * @param {CanvasRenderingContext2D} ctx
  * @param {{ parts: object[], classes: object[], body: (cls: number) => object, toScreen: (P: number[]) => number[],
- *           width: number, height?: number, scale?: number, pad?: number }} o scale：线宽、字号的倍数
+ *           width: number, height?: number, scale?: number, pad?: number, avoid?: number[][] }} o scale：线宽、字号的倍数；avoid：标签要避开的区域
  */
-export function drawPartBoxes(ctx, { parts, classes, body, toScreen, width, height, scale = 1, pad = 1.5 }) {
+export function drawPartBoxes(ctx, { parts, classes, body, toScreen, width, height, scale = 1, pad = 1.5, avoid = [] }) {
   ctx.save();
   ctx.lineJoin = 'round';
   const boxes = [];
@@ -115,21 +120,24 @@ export function drawPartBoxes(ctx, { parts, classes, body, toScreen, width, heig
   // 标签：先量好大小，再避开别的框和已放好的标签摆放
   ctx.font = `600 ${12 * scale}px system-ui, "PingFang SC", "Microsoft YaHei", sans-serif`;
   const h = 18 * scale;
-  const items = boxes.map((b) => {
+  const all = boxes.map((b) => {
     const xs = b.pts.map((q) => q[0]);
     const ys = b.pts.map((q) => q[1]);
-    return { bbox: [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)], w: ctx.measureText(b.label).width + 10 * scale, h };
+    return { b, bbox: [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)], w: ctx.measureText(b.label).width + 10 * scale, h };
   });
-  const pos = placeLabels(items, width, height ?? Infinity, 6 * scale);
-  boxes.forEach((b, i) => {
+  // 放大后整个框都在画面外的零件不画标签（不然标签会被挤到画面边上堆成一排）
+  const H = height ?? Infinity;
+  const items = all.filter(({ bbox }) => bbox[2] > 0 && bbox[0] < width && bbox[3] > 0 && bbox[1] < H);
+  const pos = placeLabels(items, width, H, 6 * scale, avoid);
+  items.forEach((it, i) => {
     const [lx, ly] = pos[i];
-    ctx.fillStyle = b.color;
+    ctx.fillStyle = it.b.color;
     ctx.beginPath();
-    ctx.roundRect(lx, ly, items[i].w, h, 4 * scale);
+    ctx.roundRect(lx, ly, it.w, h, 5 * scale);
     ctx.fill();
     ctx.fillStyle = '#fff';
     ctx.textBaseline = 'middle';
-    ctx.fillText(b.label, lx + 5 * scale, ly + h / 2 + 0.5 * scale);
+    ctx.fillText(it.b.label, lx + 5 * scale, ly + h / 2 + 0.5 * scale);
   });
   ctx.restore();
 }
@@ -145,7 +153,18 @@ const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&l
  */
 export function createConfirmView({ root, onConfirm, onEdit }) {
   root.innerHTML = `
-    <canvas class="confirm-canvas"></canvas>
+    <div class="confirm-stage">
+      <canvas class="confirm-canvas"></canvas>
+      <div class="view-tools confirm-tools">
+        <span class="zoom-btns">
+          <button type="button" class="icon-btn" data-zoom="out" aria-label="缩小">−</button>
+          <button type="button" class="icon-btn" data-zoom="in" aria-label="放大">＋</button>
+          <button type="button" class="icon-btn text" data-zoom="reset">复位</button>
+        </span>
+        <span class="hint hint-mouse">滚轮缩放 · 拖动平移 · 双击放大</span>
+        <span class="hint hint-touch">双指缩放 · 单指拖动 · 双击放大</span>
+      </div>
+    </div>
     <div class="confirm-bar">
       <div class="confirm-text"><b>请确认识别结果</b><span class="confirm-source"></span><span class="confirm-sum"></span></div>
       <div class="confirm-actions">
@@ -155,6 +174,7 @@ export function createConfirmView({ root, onConfirm, onEdit }) {
       </div>
     </div>`;
   const canvas = root.querySelector('canvas');
+  const ctx = canvas.getContext('2d');
   const sum = root.querySelector('.confirm-sum');
   const okBtn = root.querySelector('[data-act="ok"]');
   okBtn.addEventListener('click', () => onConfirm());
@@ -162,34 +182,78 @@ export function createConfirmView({ root, onConfirm, onEdit }) {
 
   /** 当前内容：{ image, toTex, parts, classes, body } */
   let data = null;
+  /** 缩放按钮条在画布里占的位置 [x0, y0, x1, y1]（画布大小变化时更新，画的时候不读布局） */
+  const tools = root.querySelector('.confirm-tools');
+  let toolsBox = [0, 0, 0, 0];
+  const measureTools = () => {
+    toolsBox = [tools.offsetLeft, tools.offsetTop, tools.offsetLeft + tools.offsetWidth, tools.offsetTop + tools.offsetHeight];
+  };
+
+  /** 正射图按比例放进画布（四周留白）：{ ox, oy, w, h, k }，CSS 像素 */
+  function fitRect() {
+    const W = canvas.clientWidth;
+    const H = canvas.clientHeight;
+    if (!data || !W || !H) return null;
+    const { image } = data;
+    const pad = Math.min(16, W / 24);
+    const k = Math.min((W - 2 * pad) / image.width, (H - 2 * pad) / image.height);
+    if (!(k > 0)) return null;
+    const h = image.height * k;
+    // 上下有空余时把图往下让一让，尽量不被左上角的缩放按钮挡住
+    const oy = Math.max((H - h) / 2, Math.min(toolsBox[3] + 6, H - h - pad));
+    return { ox: (W - image.width * k) / 2, oy, w: image.width * k, h, k };
+  }
+
+  // 拖动 / 捏合时指针事件比屏幕刷新快：每帧最多画一次
+  let queued = false;
+  const schedule = () => {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => {
+      queued = false;
+      draw();
+    });
+  };
+  const panZoom = createPanZoom(canvas, { getFit: fitRect, onChange: schedule });
+  root.querySelector('[data-zoom="in"]').addEventListener('click', () => panZoom.zoomBy(1.5));
+  root.querySelector('[data-zoom="out"]').addEventListener('click', () => panZoom.zoomBy(1 / 1.5));
+  root.querySelector('[data-zoom="reset"]').addEventListener('click', () => panZoom.reset());
 
   function draw() {
     const dpr = window.devicePixelRatio || 1;
     const W = canvas.clientWidth;
     const H = canvas.clientHeight;
     if (!W || !H) return;
-    canvas.width = Math.round(W * dpr);
-    canvas.height = Math.round(H * dpr);
-    const ctx = canvas.getContext('2d');
+    const pw = Math.round(W * dpr);
+    const ph = Math.round(H * dpr);
+    if (canvas.width !== pw || canvas.height !== ph) {
+      canvas.width = pw; // 只在大小变了时重新分配画布
+      canvas.height = ph;
+    }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, W, H);
-    if (!data) return;
+    const fit = fitRect();
+    if (!fit) return;
+    panZoom.refit();
+    const { z, tx, ty } = panZoom.view;
     const { image, toTex, parts, classes, body } = data;
-    // 正射图按比例放进画布（四周留白）
-    const pad = 16;
-    const k = Math.min((W - 2 * pad) / image.width, (H - 2 * pad) / image.height);
-    const ox = (W - image.width * k) / 2;
-    const oy = (H - image.height * k) / 2;
+    const k = fit.k * z;
+    const ox = fit.ox * z + tx;
+    const oy = fit.oy * z + ty;
     ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(image, ox, oy, image.width * k, image.height * k);
     const toScreen = ([X, Y]) => {
       const w = toTex[2][0] * X + toTex[2][1] * Y + toTex[2][2];
       return [ox + ((toTex[0][0] * X + toTex[0][1] * Y + toTex[0][2]) / w) * k, oy + ((toTex[1][0] * X + toTex[1][1] * Y + toTex[1][2]) / w) * k];
     };
-    drawPartBoxes(ctx, { parts, classes, body, toScreen, width: W, height: H });
+    // 标签在屏幕上大小不变（放大后零件分开、标签不再互相挤）；窄屏上整体小一号
+    drawPartBoxes(ctx, { parts, classes, body, toScreen, width: W, height: H, scale: labelScale(W), avoid: [toolsBox] });
   }
 
-  new ResizeObserver(() => draw()).observe(canvas);
+  new ResizeObserver(() => {
+    measureTools();
+    draw();
+  }).observe(canvas);
 
   return {
     /**
@@ -197,6 +261,7 @@ export function createConfirmView({ root, onConfirm, onEdit }) {
      *           classes: object[], body: (cls: number) => {minX:number, maxX:number, halfW:number} }} d
      */
     show(d) {
+      if (data?.image !== d.image) panZoom.reset(); // 换了照片：回到整图
       data = d;
       root.querySelector('.confirm-source').textContent = d.source ? `来源：${d.source}` : '';
       const counts = countByClass(d.parts, d.classes);
