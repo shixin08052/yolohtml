@@ -6,6 +6,7 @@ import layout from './synth/layout.json';
 import { SYNTH_PRESETS } from './synth/presets.js';
 import { makeGroundTruth } from './synth/truth.js';
 import { createPartMesh } from './scene/parts.js';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { toThree, cameraQuaternionFromR } from './math/coords.js';
 import { buildBoardSVG, renderBoardToCanvas } from './ui/boardSheet.js';
 import { drawTruth } from './ui/truthOverlay.js';
@@ -53,8 +54,14 @@ async function buildScene(renderer) {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color('#2a2724');
 
-  // 光照：半球光 + 一盏带阴影的平行光（从左上方照下）
-  scene.add(new THREE.HemisphereLight('#ffffff', '#4a4640', 1.6));
+  // 环境反射：零件的引脚是金属材质，没有环境可反射时会是一片死黑（与主页面 3D 场景同一套环境）
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+  scene.environmentIntensity = 0.25;
+  pmrem.dispose();
+
+  // 光照：半球光 + 一盏带阴影的平行光（从左上方照下）；环境反射也带来一部分底光，半球光相应调低
+  scene.add(new THREE.HemisphereLight('#ffffff', '#4a4640', 1.2));
   const sun = new THREE.DirectionalLight('#ffffff', 1.4);
   sun.position.copy(toThree(BOARD.width / 2 - 250, BOARD.height / 2 + 200, 600));
   sun.target.position.copy(toThree(BOARD.width / 2, BOARD.height / 2, 0));

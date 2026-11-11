@@ -53,8 +53,12 @@ import { sortInstructions, instructionsCsv, instructionsJson } from './robot/exp
 import * as THREE from 'three';
 import { toThree } from './math/coords.js';
 import { createOrderPanel } from './ui/orderPanel.js';
-import { planForOrder } from './robot/order.js';
+import { planForOrder, inventory } from './robot/order.js';
 import { createHero, createResultCard, createInstructionsDialog } from './ui/sortExtras.js';
+import { createViewLoader } from './ui/loading.js';
+
+// 动画默认始终显示；地址带 ?motion=system 时才跟随系统的"减少动态效果"（样式里按 data-motion 判断）
+if (new URLSearchParams(location.search).get('motion') === 'system') document.documentElement.dataset.motion = 'system';
 
 const $ = (sel) => document.querySelector(sel);
 const fmt = (x, d = 1) => (x == null || Number.isNaN(x) ? '—' : Number(x).toFixed(d));
@@ -66,6 +70,8 @@ const world = createWorld($('#three-container'));
 // 首页引导：还没有照片时盖在视图上
 const hero = createHero($('.views'), { onDemo: () => loadSampleByKey(DEMO_SAMPLE) });
 hero.setReady(false);
+// 读取照片时盖在视图上的加载遮罩
+const viewLoader = createViewLoader($('.views'));
 /* ------------------------------------------------------------------ */
 /* 3D 场景：底板                                                        */
 /* ------------------------------------------------------------------ */
@@ -437,6 +443,8 @@ const tabs = createTabs($('.main'), (view) => {
 
 /** 正在读取照片（选好照片、还没进入 imageLoaded） */
 let loadingPhoto = false;
+/** 正在读取的是哪张（显示在加载遮罩上） */
+let loadingName = '';
 /** 读取照片的代号：读取期间又选了别的照片时，先选的那张作废 */
 let loadSeq = 0;
 let sampleLoadController = null;
@@ -483,6 +491,8 @@ function renderStatus() {
   renderCaptureNotices();
   syncSortControls();
   hero.setVisible(!store.state.image && !loadingPhoto);
+  if (loadingPhoto) viewLoader.show({ title: '正在读取照片', sub: loadingName });
+  else viewLoader.hide();
 }
 
 function renderCaptureNotices() {
@@ -960,7 +970,14 @@ const detSettings = { mode: null, model: 'parts', prefer: 'auto', colorAssist: t
 function updateModelProgress(progress) {
   const root = $('#model-progress');
   root.hidden = !progress || !detResult?.pending;
+  // 识别进行中：照片上有一道扫描的光
+  $('.views').classList.toggle('is-detecting', !root.hidden);
   if (root.hidden) return;
+  // 下载知道总大小时显示真实比例，其余阶段进度条来回滑
+  const bar = root.querySelector('.progress');
+  const ratio = progress.stage === 'download' && progress.total && progress.loaded <= progress.total ? progress.loaded / progress.total : null;
+  bar.classList.toggle('indeterminate', ratio == null);
+  bar.style.setProperty('--p', ratio ?? 0);
   const labels = { metadata: '读取模型信息…', download: '下载模型…', runtime: '准备运行时…', initialize: '初始化模型（含运行时准备）…', ready: '模型已就绪', infer: '正在识别零件…' };
   let text = labels[progress.stage] ?? '准备识别…';
   if (progress.stage === 'download' && progress.loaded) {
@@ -1580,7 +1597,10 @@ const sortPlayer = createSortPlayer({
   arm,
   partsLayer,
   requestRender: world.requestRender,
-  onProgress: ({ task, phase }) => updateSortProgress(task, phase),
+  onProgress: ({ task, phase, seg, total }) => {
+    updateSortProgress(task, phase);
+    $('#sort-dock').style.setProperty('--p', total ? Math.min(1, seg / total) : 0);
+  },
   onState: (state) => onSortState(state),
 });
 /** 元件清单（清点 + 自选清单 + AI 帮填）：清单变了就重新规划 */
@@ -1588,7 +1608,8 @@ const orderPanel = createOrderPanel({
   panel,
   getParts: () => (stageIndex(store.state.stage) >= stageIndex('sceneBuilt') ? store.state.parts : null),
   getPlanningOptions: () => ({ footprints: partFootprints(), arm: ARM }),
-  onChange: () => (sortTouched ? resetSorting({ fromOrder: true }) : refreshPlan({ fromOrder: true })),
+  getStuck: () => inventory(sortPlan?.skipped ?? []),
+  onChange: () => scheduleOrderPlan(),
   fileStem: () => photoStem(),
   message: (text, level) => panel.message(text, level),
 });
@@ -1629,8 +1650,31 @@ function stopSorting() {
   return touched;
 }
 
+/**
+ * 清单改了：稍后重新规划。
+ * 元件挤在一起时规划要 0.2–0.5 秒，直接算会让加减按钮每点一下卡一下；这里先让数字和界面更新，
+ * 连续点几下只算最后一次。等待期间"分拣"分区的旧结果变淡、标题旁转圈。
+ */
+let planTimer = 0;
+function scheduleOrderPlan() {
+  if (sortTouched && stopSorting()) partsLayer.setParts(store.state.parts, parallaxOn);
+  document.querySelector('#info-panel [data-key="sort"]')?.classList.add('is-planning');
+  clearTimeout(planTimer);
+  planTimer = setTimeout(flushPlan, PLAN_DELAY_MS);
+}
+/** 等一帧画出来再算，也给连续点击留出合并的时间 */
+const PLAN_DELAY_MS = 90;
+/** 有还没算的规划就立刻算完（开始分拣、看指令、导出之前都要用最新的） */
+function flushPlan() {
+  if (!planTimer) return;
+  refreshPlan({ fromOrder: true });
+}
+
 /** 重新规划（零件变化后），载入动作序列，刷新"分拣"分区 */
 function refreshPlan({ fromOrder = false } = {}) {
+  clearTimeout(planTimer);
+  planTimer = 0;
+  document.querySelector('#info-panel [data-key="sort"]')?.classList.remove('is-planning');
   const { parts } = store.state;
   if (!parts) return;
   // 清单分区按当前零件重建；清单自己引起的重新规划不重建（免得输入框丢焦点）
@@ -1655,6 +1699,7 @@ function refreshPlan({ fromOrder = false } = {}) {
   partsLayer.markUnreachable([...skippedIds]);
   const segs = buildSequence(tasks, store.state.parts, ARM, { startAngles: arm.homeAngles, homeAngles: arm.homeAngles });
   sortPlan = { tasks, skipped, segs, bins: binList, order: picked, moved };
+  orderPanel.sync();
   sortPlayer.load(segs);
   renderSortSection();
   renderStatus();
@@ -1680,6 +1725,7 @@ function sortViewPoints() {
 }
 
 function startSorting() {
+  flushPlan();
   if (!world.available || needConfirm() || loadingPhoto || detResult?.pending || !sortPlan?.tasks.length) return;
   if (sortPlayer.state === 'done') resetSorting();
   setArmDebug(false);
@@ -1805,6 +1851,11 @@ function jointsLoop() {
 }
 
 function onSortState(state) {
+  // 控制条底边的进度线：没开始时不显示，完成时拉满
+  const dock = $('#sort-dock');
+  dock.dataset.state = state;
+  if (state === 'idle') dock.style.setProperty('--p', 0);
+  else if (state === 'done') dock.style.setProperty('--p', 1);
   if (state === 'running') {
     sortRunFrom = now();
     $('#dock-joints').hidden = false;
@@ -1858,6 +1909,7 @@ $('#file-input').addEventListener('change', async (e) => {
   const tok = ++loadSeq;
   beginRun('upload');
   loadingPhoto = true;
+  loadingName = file.name;
   renderStatus();
   try {
     const t0 = now();
@@ -1907,6 +1959,7 @@ async function loadSampleByKey(key) {
   const tok = ++loadSeq;
   beginRun('sample');
   loadingPhoto = true;
+  loadingName = entry.label;
   renderStatus();
   try {
     const t0 = now();
@@ -2023,6 +2076,7 @@ async function exportParts() {
 }
 
 function exportPlan(kind) {
+  flushPlan();
   if (!sceneReady() || !sortPlan) return;
   const ins = sortInstructions(sortPlan, store.state.parts, sortPlan.bins, CLASSES, ARM);
   if (kind === 'csv') downloadText(instructionsCsv(ins), `分拣指令_${photoStem()}.csv`, 'text/csv;charset=utf-8');
@@ -2031,6 +2085,7 @@ function exportPlan(kind) {
 
 /** 弹窗显示机械臂指令（和导出的是同一份数据） */
 function showInstructions() {
+  flushPlan();
   if (!sceneReady() || !sortPlan) return;
   insDialog.show(sortInstructions(sortPlan, store.state.parts, sortPlan.bins, CLASSES, ARM), { photo: store.state.image.fileName });
 }

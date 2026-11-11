@@ -210,6 +210,19 @@ export function plan(parts, bins, arm, { start = [arm.base[0], arm.base[1], 0], 
           for (const id of seen) tryPush(id);
           if (push) break;
         }
+        // 还是没有出路：目标之间互相挡着（没有"直接挡住夹爪"的障碍可挪），而旁边不在清单里的零件占着拨开要走的地方。
+        // 全部分拣时这些零件会先被拿走，目标才拨得动；这里把它们挪到远处的空位，效果一样。离目标最近的先挪。
+        if (!relocation && !push) {
+          const targets = left.map((c) => onBoard.get(c.part.id));
+          const gapTo = (o) => Math.min(...targets.map((t) => Math.hypot(t.x - o.x, t.y - o.y)));
+          const nearby = [...onBoard.values()]
+            .filter((o) => !only.has(o.id) && !parked.has(o.id) && gapTo(o) <= BLOCKER_RANGE && access(o)?.blockers.length === 0)
+            .sort((a, b) => gapTo(a) - gapTo(b) || a.id - b.id);
+          for (const o of nearby) {
+            relocation = planRelocation(o, others(o.id), targets, access(o).grasp, { fps, arm, board, graspZ: GRASP_Z, clearance: BLOCKER_RANGE });
+            if (relocation) break;
+          }
+        }
       } else {
         // 全部分拣时沿用原来的最短拨开距离策略。
         for (const c of left) tryPush(c.part.id);

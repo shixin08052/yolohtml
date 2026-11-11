@@ -3,6 +3,8 @@
 // 长条形零件（电阻、LED，都是躺平放的）沿局部 X 方向放置，绕 Z 轴旋转 rotDeg 后摆到板上。
 // 检测框只框零件本体（不含电阻、LED 的引脚）：引脚是模型里固定的部分，知道本体中心和朝向就能摆出整个零件。
 // 引脚网格带 userData.lead = true，计算本体包围盒时排除。
+// 只为好看的细节（LED 灯体里的支架和芯片、引脚根部的焊点等）带 userData.deco = true：既不算本体也不算引脚，
+// 包围盒、占地、夹爪避让都不看它——所以加细节不会改变规划结果。
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import { CLASSES, LED_COLORS } from '../config.js';
@@ -27,7 +29,7 @@ export function bodyBox(obj) {
   obj.updateMatrixWorld(true);
   const box = new THREE.Box3();
   obj.traverse((o) => {
-    if (o.isMesh && !o.userData.lead) box.expandByObject(o);
+    if (o.isMesh && !o.userData.lead && !o.userData.deco) box.expandByObject(o);
   });
   return box;
 }
@@ -87,7 +89,7 @@ export function partFootprint(cls) {
     const parts = [];
     m.traverse((o) => {
       if (o.isMesh && o.userData.lead) leads.expandByObject(o);
-      else if (o.isMesh) parts.push(...meshProfile(o));
+      else if (o.isMesh && !o.userData.deco) parts.push(...meshProfile(o));
       if (o.isMesh) o.geometry.dispose();
     });
     const rects = [rect(body)];
@@ -199,23 +201,37 @@ function lathe(radius, x0, x1, n, lift, mat) {
 /** 两点之间的细圆柱（引脚） */
 function rod(p0, p1, r, mat) {
   const d = new THREE.Vector3().subVectors(p1, p0);
-  const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, d.length(), 8), mat);
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, d.length(), 12), mat); // 12 段：外接范围与原来的 8 段一样（都过 ±r）
   m.position.copy(p0).addScaledVector(d, 0.5);
   m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.normalize());
   return m;
 }
 
 /**
- * LED 灯体材质：按识别出的颜色；透明的用近乎无色、半透明、高光强的材质
+ * LED 灯体材质：环氧树脂——表面很光（清漆层 + 环境反射），略微透明，能看见里面的支架。
+ * 透明的用近乎无色、更透的材质；有颜色的带一点自发光，颜色更饱满。
  * @param {string} [color] LED_COLORS 的键
  */
 function ledMaterial(color) {
   if (color === 'clear') {
-    return new THREE.MeshPhysicalMaterial({ color: '#f4f8fa', roughness: 0.05, metalness: 0, transparent: true, opacity: 0.38, clearcoat: 1, clearcoatRoughness: 0.05, depthWrite: false });
+    return new THREE.MeshPhysicalMaterial({
+      color: '#f2f7fa', roughness: 0.04, metalness: 0, transparent: true, opacity: 0.34,
+      clearcoat: 1, clearcoatRoughness: 0.03, ior: 1.52, envMapIntensity: 3, depthWrite: false,
+    });
   }
   const hex = LED_COLORS[color]?.hex ?? CLASSES[1].color;
-  return new THREE.MeshStandardMaterial({ color: hex, roughness: 0.25, metalness: 0.1, transparent: true, opacity: 0.92 });
+  return new THREE.MeshPhysicalMaterial({
+    color: hex, roughness: 0.16, metalness: 0, transparent: true, opacity: 0.9,
+    clearcoat: 1, clearcoatRoughness: 0.06, ior: 1.52, envMapIntensity: 2.4,
+    emissive: hex, emissiveIntensity: 0.12,
+  });
 }
+
+/** 镀锡的引脚、支架：亮的金属，靠环境反射出高光 */
+const leadMaterial = () => new THREE.MeshStandardMaterial({ color: '#d5d8db', metalness: 0.92, roughness: 0.24, envMapIntensity: 3 });
+
+/** 只为好看的细节网格（不参与包围盒、占地） */
+const deco = (m) => Object.assign(m, { userData: { deco: true } });
 
 /**
  * 创建一个零件模型（未旋转、位于原点）
@@ -231,21 +247,26 @@ export function createPartMesh(cls, { color } = {}) {
       // 色环电阻（1/4 W 蓝色金属膜）：两头端帽鼓起、中间细的"哑铃"形旋转体 + 5 道色环 + 两根引脚
       const R = RESISTOR;
       const axisY = R.capR + R.bandLift; // 横躺在板面上：色环最低点贴着板面
-      const body = lathe(resistorRadius, -R.len / 2, R.len / 2, 48, 0, material(0, { color: R.color, roughness: 0.32 }));
+      // 漆面：底色 + 一层清漆，高光更集中
+      const body = lathe(resistorRadius, -R.len / 2, R.len / 2, 48, 0, new THREE.MeshPhysicalMaterial({ color: R.color, roughness: 0.38, metalness: 0, clearcoat: 0.7, clearcoatRoughness: 0.18 }));
       body.position.y = axisY;
       g.add(body);
       for (const [x, c] of R.bands) {
         // 色环只比本体高 0.012 mm：远看时深度精度不够会闪，用多边形偏移让色环总画在本体前面
-        const ring = lathe(resistorRadius, x - R.bandW / 2, x + R.bandW / 2, 6, R.bandLift, new THREE.MeshStandardMaterial({ color: c, roughness: 0.45, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }));
+        const ring = lathe(resistorRadius, x - R.bandW / 2, x + R.bandW / 2, 6, R.bandLift, new THREE.MeshPhysicalMaterial({ color: c, roughness: 0.4, clearcoat: 0.6, clearcoatRoughness: 0.2, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }));
         ring.position.y = axisY;
         g.add(ring);
       }
       // 引脚：从端帽里伸出，略微下垂搭到板面上
-      const lead = new THREE.MeshStandardMaterial({ color: '#c9cdd1', metalness: 0.75, roughness: 0.3 });
+      const lead = leadMaterial();
       for (const s of [-1, 1]) {
         const p0 = new THREE.Vector3(s * (R.len / 2 - 0.3), axisY, 0);
         const p1 = new THREE.Vector3(s * (R.len / 2 + R.leadLen), R.leadR, 0);
         g.add(Object.assign(rod(p0, p1, R.leadR, lead), { userData: { lead: true } }));
+        // 引脚末端剪断处：一个小圆头（否则是一个生硬的平切面）
+        const tip = deco(new THREE.Mesh(new THREE.SphereGeometry(R.leadR, 12, 8), lead));
+        tip.position.copy(p1);
+        g.add(tip);
       }
       break;
     }
@@ -261,12 +282,32 @@ export function createPartMesh(cls, { color } = {}) {
       dome.rotation.z = -Math.PI / 2; // 半球朝 +X
       dome.position.set(3.5 + S, axisY, 0);
       g.add(dome);
-      const lead = new THREE.MeshStandardMaterial({ color: '#c0c4c8', metalness: 0.6, roughness: 0.35 });
+      const lead = leadMaterial();
       for (const [z, len] of [[1.27, 20], [-1.27, 18]]) {
         const p0 = new THREE.Vector3(-2.5 + S, axisY, z);
         const p1 = new THREE.Vector3(-2.5 - len + S, 0.25, z);
         g.add(Object.assign(rod(p0, p1, 0.25, lead), { userData: { lead: true } }));
+        const tip = deco(new THREE.Mesh(new THREE.SphereGeometry(0.25, 12, 8), lead));
+        tip.position.copy(p1);
+        g.add(tip);
       }
+      // 灯体里的支架（透过环氧树脂能看见）：两根引脚伸进灯体，各接一片金属——大的一片（阴极）顶上是放芯片的反光杯，
+      // 小的一片（阳极）用金线搭到芯片上。都在灯体内部，只为好看
+      const frame = leadMaterial();
+      const plate = (len, h, thick, x0, y, z) => {
+        const m = deco(new THREE.Mesh(new THREE.BoxGeometry(len, h, thick), frame));
+        m.position.set(x0 + len / 2 + S, y, z);
+        return m;
+      };
+      g.add(plate(3.6, 1.5, 0.42, -2.4, axisY, 1.27)); // 阴极片
+      g.add(plate(1.5, 1.9, 1.7, 0.6, axisY, 0.75)); // 反光杯所在的"砧"
+      g.add(plate(3.3, 1.2, 0.42, -2.4, axisY, -1.27)); // 阳极片
+      g.add(plate(0.7, 1.5, 0.9, 0.5, axisY, -1.05)); // 阳极顶上的小台
+      // 芯片：反光杯里一小粒，按灯的颜色微微发光
+      const dieColor = color === 'clear' ? '#fff4d6' : LED_COLORS[color]?.hex ?? CLASSES[1].color;
+      const die = deco(new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.5, 0.5), new THREE.MeshStandardMaterial({ color: dieColor, emissive: dieColor, emissiveIntensity: 0.9, roughness: 0.3 })));
+      die.position.set(2.25 + S, axisY, 0.75);
+      g.add(die);
       break;
     }
     default:

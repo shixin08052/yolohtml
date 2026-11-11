@@ -2,6 +2,8 @@
 // - 首页引导（还没有照片时盖在视图上，一键看演示 / 上传照片）
 // - 分拣结果卡（分拣完成后盖在 3D 画面上：各类数量、用时、拨开次数、清单缺口、跳过详情）
 // - 机械臂指令表（弹窗：按执行顺序列出抓取点、夹爪、关节角——和导出的 CSV / JSON 是同一份数据）
+import { setButtonLoading } from './loading.js';
+
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
 /**
@@ -34,9 +36,10 @@ export function createHero(root, { onDemo }) {
     setVisible(on) {
       el.hidden = !on;
     },
-    /** 示例列表还没读到时先禁用 */
+    /** 示例列表还没读到时先禁用，按钮上转圈 */
     setReady(on) {
       btn.disabled = !on;
+      setButtonLoading(btn, !on, '正在准备示例');
     },
   };
 }

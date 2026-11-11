@@ -1,7 +1,6 @@
 // 虚拟手机：机身（圆角盒）、镜头（位于光心 C）、视锥（光心到照片四角在底板上的落点）、
 // 底板上的照片视野轮廓。位置和朝向全部由位姿 (R, t) 与内参 K 决定。
 import * as THREE from 'three';
-import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { toThree, cameraQuaternionFromR } from '../math/coords.js';
 import { photoFootprint, intrinsicsMatrix } from '../math/pinhole.js';
 
@@ -46,20 +45,75 @@ export function createPhone() {
   // —— 机身：局部坐标 = Three.js 相机坐标（x 右、y 上、z 指向拍摄者），原点在镜头（光心）
   const body = new THREE.Group();
   body.name = 'phone';
-  const shellMat = new THREE.MeshStandardMaterial({ color: '#3a3d42', roughness: 0.45, metalness: 0.5, transparent: true });
-  const screenMat = new THREE.MeshStandardMaterial({ color: '#0d0f12', roughness: 0.2, metalness: 0.1, transparent: true });
-  const lensMat = new THREE.MeshStandardMaterial({ color: '#111', roughness: 0.15, metalness: 0.6, transparent: true });
-  const ringMat = new THREE.MeshStandardMaterial({ color: '#b9bcc2', roughness: 0.3, metalness: 0.9, transparent: true });
-  const shell = new THREE.Mesh(new RoundedBoxGeometry(1, 1, 1, 4, 0.08), shellMat);
-  const screen = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), screenMat);
-  // 镜头：沿局部 z 轴的小圆柱，从光心向拍摄方向（−z）凸出 2 mm
-  const lens = new THREE.Mesh(new THREE.CylinderGeometry(PHONE.lensRadius, PHONE.lensRadius, 2, 32), lensMat);
-  lens.rotation.x = Math.PI / 2;
+  // 材质：磨砂玻璃后盖、抛光不锈钢中框、屏幕玻璃、镜头玻璃和金属镜圈。都设成可透明（转场时整机淡入）
+  const shellMat = new THREE.MeshPhysicalMaterial({ color: '#43464c', roughness: 0.5, metalness: 0.2, clearcoat: 0.5, clearcoatRoughness: 0.45, transparent: true });
+  const frameMat = new THREE.MeshStandardMaterial({ color: '#8f9399', roughness: 0.2, metalness: 1, envMapIntensity: 3, transparent: true });
+  const screenMat = new THREE.MeshPhysicalMaterial({ color: '#08090b', roughness: 0.08, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.03, envMapIntensity: 3, transparent: true });
+  const lensMat = new THREE.MeshPhysicalMaterial({ color: '#0b0d12', roughness: 0.05, metalness: 0.3, clearcoat: 1, clearcoatRoughness: 0.02, envMapIntensity: 4, transparent: true });
+  const ringMat = new THREE.MeshStandardMaterial({ color: '#c3c6cb', roughness: 0.22, metalness: 1, envMapIntensity: 3, transparent: true });
+  const bumpMat = new THREE.MeshPhysicalMaterial({ color: '#4b4e55', roughness: 0.2, metalness: 0.1, clearcoat: 1, clearcoatRoughness: 0.08, envMapIntensity: 2, transparent: true });
+  const flashMat = new THREE.MeshStandardMaterial({ color: '#f4ecd2', roughness: 0.35, emissive: '#f4ecd2', emissiveIntensity: 0.25, transparent: true });
+
+  /** 圆角矩形（中心在原点） */
+  const roundedRect = (w, h, r) => {
+    const sh = new THREE.Shape();
+    const [x, y] = [w / 2, h / 2];
+    sh.moveTo(-x + r, -y);
+    sh.lineTo(x - r, -y);
+    sh.absarc(x - r, -y + r, r, -Math.PI / 2, 0);
+    sh.lineTo(x, y - r);
+    sh.absarc(x - r, y - r, r, 0, Math.PI / 2);
+    sh.lineTo(-x + r, y);
+    sh.absarc(-x + r, y - r, r, Math.PI / 2, Math.PI);
+    sh.lineTo(-x, -y + r);
+    sh.absarc(-x + r, -y + r, r, Math.PI, Math.PI * 1.5);
+    return sh;
+  };
+  /** 沿局部 z 的圆柱（镜头、镜圈） */
+  const disc = (r, len, mat, seg = 40) => {
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, seg), mat);
+    m.rotation.x = Math.PI / 2;
+    return m;
+  };
+
+  // 机身、屏幕的几何体按拍照方向（横 / 竖）在 setPose 里生成：机身是四角半径 11 mm 的圆角板，边缘倒角，不是把方盒子拉伸出来
+  const shell = new THREE.Mesh(new THREE.BufferGeometry(), [shellMat, frameMat]);
+  const screen = new THREE.Mesh(new THREE.BufferGeometry(), screenMat);
+  // 主摄镜头：沿局部 z 轴的小圆柱，从光心向拍摄方向（−z）凸出 2 mm
+  const lens = disc(PHONE.lensRadius, 2, lensMat);
   lens.position.z = -1;
-  const ring = new THREE.Mesh(new THREE.TorusGeometry(PHONE.lensRadius, 0.8, 8, 32), ringMat);
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(PHONE.lensRadius, 0.8, 12, 48), ringMat);
   ring.position.z = -2;
   // 手机不投影：悬在半空的机身在桌面上投下的大块阴影只会干扰观察
   body.add(shell, screen, lens, ring);
+
+  // 相机模组：一块凸起的玻璃台，上面主摄 + 另外两颗镜头 + 闪光灯 + 激光雷达。
+  // 按"主摄在原点、机身中心在 +x +y 方向"建好，setPose 里按实际方向用 ±1 的缩放翻转过去
+  const module = new THREE.Group();
+  module.name = 'camera-module';
+  const plate = new THREE.Mesh(new THREE.ExtrudeGeometry(roundedRect(35, 35, 9), { depth: 0.9, bevelEnabled: true, bevelThickness: 0.35, bevelSize: 0.35, bevelSegments: 2, curveSegments: 16 }), bumpMat);
+  plate.position.set(8.5, 8.5, -1.25); // 台面在机身背面（z = 0）往外 1.25 mm
+  module.add(plate);
+  for (const [x, y] of [[0, 17], [16.5, 8.5]]) {
+    const l = disc(PHONE.lensRadius, 2, lensMat);
+    l.position.set(x, y, -1);
+    const r = new THREE.Mesh(new THREE.TorusGeometry(PHONE.lensRadius, 0.8, 12, 48), ringMat);
+    r.position.set(x, y, -2);
+    module.add(l, r);
+  }
+  // 每颗镜头里面一圈更小的"瞳孔"，有层次
+  for (const [x, y] of [[0, 0], [0, 17], [16.5, 8.5]]) {
+    const iris = disc(2.6, 0.3, new THREE.MeshStandardMaterial({ color: '#1b2233', roughness: 0.15, metalness: 0.8, envMapIntensity: 4, transparent: true }));
+    iris.position.set(x, y, -2.05);
+    iris.userData.fade = true;
+    module.add(iris);
+  }
+  const flash = disc(2.4, 0.5, flashMat);
+  flash.position.set(17.5, -3, -1.5);
+  const lidar = disc(2, 0.5, lensMat);
+  lidar.position.set(17.5, 20, -1.5);
+  module.add(flash, lidar);
+  body.add(module);
   group.add(body);
 
   // —— 视锥与视野轮廓（底板坐标，不随机身转动）
@@ -70,7 +124,10 @@ export function createPhone() {
   frustum.name = 'frustum';
   group.add(frustum);
 
-  const mats = [shellMat, screenMat, lensMat, ringMat, lineMat, missMat, fovMat];
+  const mats = [shellMat, frameMat, screenMat, lensMat, ringMat, bumpMat, flashMat, lineMat, missMat, fovMat];
+  module.traverse((o) => { if (o.userData.fade) mats.push(o.material); });
+  /** 当前机身几何体对应的尺寸（换了横竖才重建） */
+  let shellKey = '';
   group.visible = false;
 
   /**
@@ -82,10 +139,20 @@ export function createPhone() {
     const { width: W, height: H } = intrinsics;
     const { size, lens: lensOff } = phoneLayout(orientation, W, H);
     // 机身中心 = 镜头 − 偏移（照片坐标 y 向下，局部 y 向上）；机身在镜头后方（朝拍摄者）
-    shell.scale.set(size[0], size[1], PHONE.depth);
+    if (shellKey !== size.join('x')) {
+      shellKey = size.join('x');
+      shell.geometry.dispose();
+      screen.geometry.dispose();
+      const bevel = 1.1;
+      // 挤出体：正反两面（后盖玻璃）用第 0 个材质，侧面一圈（金属中框）用第 1 个
+      shell.geometry = new THREE.ExtrudeGeometry(roundedRect(size[0] - 2 * bevel, size[1] - 2 * bevel, 11 - bevel), { depth: PHONE.depth - 2 * bevel, bevelEnabled: true, bevelThickness: bevel, bevelSize: bevel, bevelSegments: 4, curveSegments: 20 });
+      shell.geometry.translate(0, 0, -(PHONE.depth - 2 * bevel) / 2); // 厚度方向居中
+      screen.geometry = new THREE.ShapeGeometry(roundedRect(size[0] - 5, size[1] - 5, 9), 20);
+    }
     shell.position.set(-lensOff[0], lensOff[1], PHONE.depth / 2);
-    screen.scale.set(size[0] - 4, size[1] - 4, 1);
     screen.position.set(-lensOff[0], lensOff[1], PHONE.depth + 0.05);
+    // 相机模组朝机身中心那一侧展开：机身中心相对镜头在 (−lensOff[0], +lensOff[1])
+    module.scale.set(Math.sign(-lensOff[0]) || 1, Math.sign(lensOff[1]) || 1, 1);
     body.position.copy(toThree(...pose.position));
     body.quaternion.copy(cameraQuaternionFromR(pose.R));
 

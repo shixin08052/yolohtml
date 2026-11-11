@@ -45,7 +45,7 @@
   animation: result-in 0.35s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 @keyframes result-in { from { opacity: 0; transform: translateY(10px); } }
-@media (prefers-reduced-motion: reduce) { .result-card { animation: none; } }
+@media (prefers-reduced-motion: reduce) { :root[data-motion='system'] .result-card { animation: none; } }
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) { .result-card { background: var(--glass-solid); } }
 @media (prefers-reduced-transparency: reduce) { .result-card { background: var(--glass-solid); -webkit-backdrop-filter: none; backdrop-filter: none; } }
 .result-card .result-close { position: absolute; top: 8px; right: 8px; display: grid; place-items: center; width: 30px; min-width: 30px; height: 30px; padding: 0; line-height: 1; }
@@ -224,7 +224,7 @@
   .ai-cache-toggle, .ai-text-button { min-height: 44px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .ai-box *, .ai-box *::after { animation: none !important; transition: none !important; }
+  :root[data-motion='system'] .ai-box *, :root[data-motion='system'] .ai-box *::after { animation: none !important; transition: none !important; }
 }
 @media (prefers-reduced-transparency: reduce) {
   .ai-box, .ai-effort-card, .ai-text, .ai-settings input { background: var(--glass-solid); }

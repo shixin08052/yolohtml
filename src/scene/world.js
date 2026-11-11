@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { cssVar, onThemeChange } from '../ui/theme.js';
 import { BOARD } from '../config.js';
 import { toThree, fromThree, cameraQuaternionFromR } from '../math/coords.js';
@@ -12,6 +13,55 @@ export const TABLE = { width: 1200, depth: 900 };
 
 /** 底板中心（底板坐标） */
 const BOARD_CENTER = [BOARD.width / 2, BOARD.height / 2, 0];
+
+/**
+ * 桌垫的贴图：深色底 + 细颗粒（哑光的质感）+ 很淡的 50 mm 网格（给画面一个尺度感），四周略暗。
+ * 画在 1 px = 1 mm 的画布上；贴图坐标由调用方按桌垫尺寸换算
+ */
+function matTexture() {
+  const c = document.createElement('canvas');
+  c.width = TABLE.width;
+  c.height = TABLE.depth;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#2f2c29';
+  ctx.fillRect(0, 0, c.width, c.height);
+  // 颗粒：固定种子的伪随机数，每次打开都一样
+  let seed = 20261111;
+  const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296);
+  const img = ctx.getImageData(0, 0, c.width, c.height);
+  for (let i = 0; i < img.data.length; i += 4) {
+    const n = (rnd() - 0.5) * 14;
+    img.data[i] += n;
+    img.data[i + 1] += n;
+    img.data[i + 2] += n;
+  }
+  ctx.putImageData(img, 0, 0);
+  // 网格：以桌垫中心（= 底板中心）对齐，每 50 mm 一条细线，每 100 mm 稍亮
+  for (const [step, alpha] of [[50, 0.035], [100, 0.05]]) {
+    ctx.strokeStyle = `rgba(255, 255, 255, ${alpha})`;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let x = (c.width / 2) % step; x < c.width; x += step) {
+      ctx.moveTo(Math.round(x) + 0.5, 0);
+      ctx.lineTo(Math.round(x) + 0.5, c.height);
+    }
+    for (let y = (c.height / 2) % step; y < c.height; y += step) {
+      ctx.moveTo(0, Math.round(y) + 0.5);
+      ctx.lineTo(c.width, Math.round(y) + 0.5);
+    }
+    ctx.stroke();
+  }
+  // 四周压暗一点，视线自然落在中间的底板上
+  const g = ctx.createRadialGradient(c.width / 2, c.height / 2, c.height * 0.35, c.width / 2, c.height / 2, c.width * 0.62);
+  g.addColorStop(0, 'rgba(0, 0, 0, 0)');
+  g.addColorStop(1, 'rgba(0, 0, 0, 0.32)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, c.width, c.height);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 8;
+  return tex;
+}
 
 /** 底板坐标系的坐标轴：X 红、Y 绿、Z 蓝，长 100 mm，带 CSS2D 字母 */
 function createAxes() {
@@ -64,6 +114,9 @@ export function createWorld(container) {
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFShadowMap;
+  // 手机等触屏设备显存紧：阴影贴图小一档
+  const coarse = typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches;
+  const shadowSize = !coarse && renderer.capabilities.maxTextureSize >= 4096 ? 4096 : 2048;
   container.appendChild(renderer.domElement);
 
   // CSS2D 标签层：叠在画布上，不拦截鼠标
@@ -80,25 +133,59 @@ export function createWorld(container) {
     requestRender();
   };
 
-  // 灯光：半球光 + 一盏带阴影的平行光（从左前上方照下）
-  scene.add(new THREE.HemisphereLight('#ffffff', '#5a554d', 1.5));
-  const sun = new THREE.DirectionalLight('#ffffff', 1.6);
+  // 环境反射：一间柔光的"摄影棚"，金属引脚、机械臂的钢件、LED 的环氧树脂表面才有东西可反射（否则金属是一片死灰）。
+  // 只用来算反射和环境光，不显示成背景
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+  scene.environmentIntensity = 0.28;
+  pmrem.dispose();
+
+  // 灯光：环境反射提供柔和的底光，半球光补一点天地色差；一盏带阴影的主光从左前上方照下，一盏不投影的辅光从右后方勾出轮廓
+  // 强度是对着画面调的：白纸受光处接近但不到纯白，影子里明显暗一档（环境光太强时影子会被冲掉）
+  scene.add(new THREE.HemisphereLight('#ffffff', '#5a554d', 0.1));
+  const sun = new THREE.DirectionalLight('#fffaf3', 1.85);
   sun.position.copy(toThree(BOARD.width / 2 - 300, BOARD.height / 2 - 250, 700)); // 从操作者一侧照，机械臂（在远端）的影子落在底板外
   sun.target.position.copy(toThree(...BOARD_CENTER));
   sun.castShadow = true;
-  sun.shadow.mapSize.set(2048, 2048);
-  Object.assign(sun.shadow.camera, { left: -500, right: 500, top: 450, bottom: -450, near: 100, far: 2000 });
-  sun.shadow.bias = -0.0005;
+  sun.shadow.mapSize.set(shadowSize, shadowSize);
+  // 阴影只需要盖住底板、料盒和机械臂这一带：范围收紧后每个像素更细，几毫米大的零件也有清楚的影子
+  Object.assign(sun.shadow.camera, { left: -400, right: 400, top: 380, bottom: -360, near: 100, far: 2000 });
+  sun.shadow.bias = -0.0004;
+  sun.shadow.normalBias = 0.35;
+  sun.shadow.radius = 1.6;
   scene.add(sun, sun.target);
+  const rim = new THREE.DirectionalLight('#dfe9ff', 0.3);
+  rim.position.copy(toThree(BOARD.width / 2 + 420, BOARD.height / 2 + 380, 380));
+  rim.target.position.copy(toThree(...BOARD_CENTER));
+  scene.add(rim, rim.target);
 
-  // 桌面：深色平面，顶面在底板下方 BOARD.thickness 处
+  // 桌面：一张圆角的深色桌垫（有厚度、边缘倒角），顶面在底板下方 BOARD.thickness 处
+  const matShape = new THREE.Shape();
+  {
+    const [w, d, r] = [TABLE.width / 2, TABLE.depth / 2, 36];
+    matShape.moveTo(-w + r, -d);
+    matShape.lineTo(w - r, -d);
+    matShape.absarc(w - r, -d + r, r, -Math.PI / 2, 0);
+    matShape.lineTo(w, d - r);
+    matShape.absarc(w - r, d - r, r, 0, Math.PI / 2);
+    matShape.lineTo(-w + r, d);
+    matShape.absarc(-w + r, d - r, r, Math.PI / 2, Math.PI);
+    matShape.lineTo(-w, -d + r);
+    matShape.absarc(-w + r, -d + r, r, Math.PI, Math.PI * 1.5);
+  }
+  const MAT_THICK = 3;
+  const matTex = matTexture();
+  // 挤出体的贴图坐标就是形状的坐标（mm，原点在中心）：换算到 0–1
+  matTex.repeat.set(1 / TABLE.width, 1 / TABLE.depth);
+  matTex.offset.set(0.5, 0.5);
   const table = new THREE.Mesh(
-    new THREE.PlaneGeometry(TABLE.width, TABLE.depth),
-    new THREE.MeshStandardMaterial({ color: '#2f2c29', roughness: 0.92 }),
+    new THREE.ExtrudeGeometry(matShape, { depth: MAT_THICK - 1, bevelEnabled: true, bevelThickness: 1, bevelSize: 1, bevelSegments: 3, curveSegments: 12 }),
+    [new THREE.MeshStandardMaterial({ map: matTex, roughness: 0.94, metalness: 0 }), new THREE.MeshStandardMaterial({ color: '#262321', roughness: 0.9 })],
   );
   table.name = 'table';
-  table.rotation.x = -Math.PI / 2;
-  table.position.copy(toThree(BOARD_CENTER[0], BOARD_CENTER[1], -BOARD.thickness));
+  table.rotation.x = -Math.PI / 2; // 形状平面 → 水平，挤出方向 → 向上
+  // 挤出体从 z = −bevelThickness 到 depth + bevelThickness：顶面落在底板底面
+  table.position.copy(toThree(BOARD_CENTER[0], BOARD_CENTER[1], -BOARD.thickness - MAT_THICK));
   table.receiveShadow = true;
   scene.add(table);
 

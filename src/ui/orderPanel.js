@@ -32,12 +32,13 @@ function saveLlm(v) {
  *   panel: ReturnType<import('./infoPanel.js').createInfoPanel>,
  *   getParts: () => (import('../state.js').Part[]|null),
  *   getPlanningOptions?: () => { footprints: object, arm: object },
+ *   getStuck?: () => Record<string, number>,   规划后清单里拿不到的：种类 → 个数（挤得太紧或够不到）
  *   onChange: () => void,   清单变了（调用方重新规划）
  *   fileStem: () => string,
  *   message: (text: string, level?: string) => void,
  * }} deps
  */
-export function createOrderPanel({ panel, getParts, getPlanningOptions = () => ({}), onChange, fileStem, message }) {
+export function createOrderPanel({ panel, getParts, getPlanningOptions = () => ({}), getStuck = () => ({}), onChange, fileStem, message }) {
   /** 自选清单：null = 全部分拣；否则 种类 → 数量 */
   let order = null;
   let note = '';
@@ -45,6 +46,8 @@ export function createOrderPanel({ panel, getParts, getPlanningOptions = () => (
   let cacheHit = false;
   let bodyElement = null;
   let aiStatus = '';
+  let aiError = false;
+  let busyAct = 'ai'; // 是哪个按钮发起的（转圈画在它上面）
   let busy = null; // 正在请求大模型时的 AbortController
   let llm = { model: DEFAULT_MODEL, apiKey: '', baseURL: '', reasoningEffort: 'none', useCache: true, ...loadLlm() };
   llm.reasoningEffort = normalizeEffort(llm.reasoningEffort);
@@ -180,26 +183,31 @@ export function createOrderPanel({ panel, getParts, getPlanningOptions = () => (
 
   const selection = () => selectForOrder(getParts() ?? [], order, getPlanningOptions());
 
-  function statusText(l) {
+  function statusText(l, stuck = 0) {
     if (l.short > 0) return `<span class="bad">缺 ${l.short}</span>`;
     if (!l.want) return '<span class="muted">不拣</span>';
+    if (stuck > 0) return `<span class="bad" title="挤得太紧或机械臂够不到">${stuck} 个拿不到</span>`;
     return l.want === l.have ? '全部' : `拣 ${l.pick}`;
   }
 
-  function summaryText(sel) {
+  function summaryText(sel, stuck = {}) {
     const total = sel.lines.reduce((s, l) => s + l.have, 0);
-    if (!sel.custom) return `板上共 <b>${total}</b> 个元件，全部分拣。改下面的数量即按清单分拣。`;
-    return `按清单分拣：需要 <b>${sel.totalWant}</b> 个，板上能拣 <b>${sel.totalPick}</b> 个${sel.totalShort ? `，<span class="bad">缺 ${sel.totalShort} 个</span>` : ''}；其余留在板上，挡路的先挪到空位。优先拣遮挡最少的元件。`;
+    // 规划后才知道哪些实际拿不到（挤得太紧、够不到）：和"分拣"分区的数字保持一致
+    const nStuck = sel.lines.reduce((s, l) => s + Math.min(l.pick, stuck[l.key] ?? 0), 0);
+    const stuckText = nStuck ? `，<span class="bad">其中 ${nStuck} 个拿不到</span>` : '';
+    if (!sel.custom) return `板上共 <b>${total}</b> 个元件，全部分拣${stuckText}。改下面的数量即按清单分拣。`;
+    return `按清单分拣：需要 <b>${sel.totalWant}</b> 个，板上能拣 <b>${sel.totalPick - nStuck}</b> 个${stuckText}${sel.totalShort ? `，<span class="bad">缺 ${sel.totalShort} 个</span>` : ''}；其余留在板上，挡路的先挪到空位。`;
   }
 
   /** 只更新数字和状态（不重建输入框，免得打字时丢焦点） */
   function refresh(body, { inputs = false } = {}) {
     const sel = selection();
-    body.querySelector('.order-summary').innerHTML = summaryText(sel);
+    const stuck = getStuck() ?? {};
+    body.querySelector('.order-summary').innerHTML = summaryText(sel, stuck);
     for (const l of sel.lines) {
       const tr = body.querySelector(`tr[data-key="${l.key}"]`);
       if (!tr) continue;
-      tr.querySelector('.st').innerHTML = statusText(l);
+      tr.querySelector('.st').innerHTML = statusText(l, Math.min(l.pick, stuck[l.key] ?? 0));
       tr.classList.toggle('none', !l.have && !l.want);
       if (inputs) tr.querySelector('input').value = l.want;
     }
@@ -285,6 +293,7 @@ export function createOrderPanel({ panel, getParts, getPlanningOptions = () => (
     setupEffortPicker(body);
     watchMotion(body.querySelector('.ai-box'));
     refresh(body);
+    updateBusyControls(); // 等待期间分区被重建（例如零件变了）：把转圈和占位补回来
 
     const current = () => {
       const o = {};
@@ -321,7 +330,8 @@ export function createOrderPanel({ panel, getParts, getPlanningOptions = () => (
         clearOrderCache();
         message('已清空本地清单缓存', 'ok');
         aiStatus = '已清空本地缓存';
-        body.querySelector('.ai-status').textContent = aiStatus;
+        aiError = false;
+        updateBusyControls();
       }
       else if (act === 'ai-cancel') busy?.abort();
     });
@@ -360,21 +370,44 @@ export function createOrderPanel({ panel, getParts, getPlanningOptions = () => (
     onChange();
   }
 
+  /** 等待大模型时：按钮转圈、输入框描边、数量一栏变成流光占位（结果回来会整栏替换，这期间不让改） */
   function updateBusyControls() {
-    if (!bodyElement?.isConnected) return;
-    for (const button of bodyElement.querySelectorAll('[data-act="ai"], [data-act="ai-refresh"]')) button.disabled = !!busy;
-    bodyElement.querySelector('[data-act="ai-cancel"]').hidden = !busy;
-    bodyElement.querySelector('.ai-status').textContent = aiStatus;
+    const body = bodyElement?.isConnected ? bodyElement : null;
+    if (!body) return;
+    for (const button of body.querySelectorAll('[data-act="ai"], [data-act="ai-refresh"]')) button.disabled = !!busy;
+    body.querySelector(`[data-act="${busyAct}"]`)?.classList.toggle('is-loading', !!busy);
+    if (!busy) for (const button of body.querySelectorAll('.btn.is-loading')) button.classList.remove('is-loading');
+    body.querySelector('[data-act="ai-cancel"]').hidden = !busy;
+    body.querySelector('.ai-box').classList.toggle('is-busy', !!busy);
+    body.querySelector('.ai-box').setAttribute('aria-busy', busy ? 'true' : 'false');
+    body.querySelector('.order-table').setAttribute('aria-busy', busy ? 'true' : 'false');
+    const status = body.querySelector('.ai-status');
+    status.dataset.state = busy ? 'busy' : aiError ? 'error' : '';
+    status.innerHTML = `${busy ? '<span class="spinner" aria-hidden="true"></span>' : ''}<span>${esc(aiStatus)}</span>`;
   }
 
   async function runAi({ refresh = false } = {}) {
     if (busy) return;
     const controller = new AbortController();
     busy = controller;
-    aiStatus = llm.reasoningEffort === 'none' ? '正在生成清单…' : '正在思考并生成清单…';
-    updateBusyControls();
+    busyAct = refresh ? 'ai-refresh' : 'ai';
+    aiError = false;
+    // 等得久了（开了思考可能要一两分钟）显示已经等了多久，让人知道没有卡死
+    const startedAt = Date.now();
+    let phase = llm.reasoningEffort === 'none' ? '正在生成清单' : '正在思考并生成清单';
+    const showWait = () => {
+      const sec = Math.floor((Date.now() - startedAt) / 1000);
+      aiStatus = `${phase}…${sec >= 3 ? ` 已等待 ${sec} 秒` : ''}`;
+      updateBusyControls();
+    };
+    showWait();
+    const ticker = setInterval(showWait, 1000);
+    const before = Object.fromEntries(selection().lines.map((l) => [l.key, l.want]));
     try {
-      const res = await askOrder({ ...llm, text: draft, refresh, signal: controller.signal });
+      const res = await askOrder({
+        ...llm, text: draft, refresh, signal: controller.signal,
+        onRetry: () => { phase = '回复格式不对，正在自动重试'; showWait(); },
+      });
       if (controller.signal.aborted) {
         aiStatus = '已取消';
         return;
@@ -383,14 +416,22 @@ export function createOrderPanel({ panel, getParts, getPlanningOptions = () => (
       cacheHit = !!res.cacheHit;
       note = res.note;
       replaceAiOrder(res.order);
-      message(`AI 已替换清单：共 ${Object.values(order).reduce((s, n) => s + n, 0)} 个元件${cacheHit ? '（本地缓存）' : ''}`, 'ok');
+      message(`AI 已替换清单：共 ${Object.values(order).reduce((s, n) => s + n, 0)} 个元件${cacheHit ? '（本地缓存）' : ''}${res.retried ? '（第一次回复格式不对，已自动重试）' : ''}`, 'ok');
       aiStatus = '';
       busy = null;
       render();
+      // 数量变了的那几行闪一下，一眼看出 AI 改了哪里
+      if (bodyElement?.isConnected) {
+        for (const l of selection().lines) {
+          if (l.want !== before[l.key]) bodyElement.querySelector(`tr[data-key="${l.key}"] input`)?.classList.add('qty-flash');
+        }
+      }
     } catch (err) {
       aiStatus = err.message;
+      aiError = !controller.signal.aborted;
       if (!controller.signal.aborted) message(`AI 填写清单失败：${err.message}`, 'warn');
     } finally {
+      clearInterval(ticker);
       busy = null;
       updateBusyControls();
     }
@@ -399,6 +440,10 @@ export function createOrderPanel({ panel, getParts, getPlanningOptions = () => (
   return {
     render,
     selection,
+    /** 重新规划之后调用：按最新的规划结果刷新"能拣几个 / 拿不到几个" */
+    sync() {
+      if (bodyElement?.isConnected) refresh(bodyElement);
+    },
     get order() {
       return order;
     },

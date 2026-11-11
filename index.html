@@ -39,7 +39,7 @@
       <main class="main">
         <p class="capture-guide">请使用 iPhone 13 Pro 主摄 1×、4:3 拍摄。支持 JPEG、PNG，不支持 HEIC/HEIF。</p>
         <div id="capture-notices" class="capture-notices" role="status" hidden></div>
-        <div id="model-progress" class="model-progress" hidden><span role="status"></span><button type="button" class="btn btn-small" id="cancel-detection">取消识别</button></div>
+        <div id="model-progress" class="model-progress" hidden><span class="spinner" aria-hidden="true"></span><span role="status"></span><button type="button" class="btn btn-small" id="cancel-detection">取消识别</button><span class="progress indeterminate" aria-hidden="true"><i></i></span></div>
         <div class="tabs" role="tablist">
           <button class="tab active" role="tab" data-view="debug" aria-selected="true"><span class="only-normal">调试视图</span><span class="only-demo">照片</span></button>
           <button class="tab only-demo" role="tab" data-view="confirm" aria-selected="false" id="tab-confirm">正视图</button>

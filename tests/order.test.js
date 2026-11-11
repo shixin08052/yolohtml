@@ -10,6 +10,7 @@ import { ikWorld } from '../src/robot/ik.js';
 import { buildSequence } from '../src/robot/sequence.js';
 import { sortInstructions, instructionsCsv } from '../src/robot/export.js';
 import { ARM_HOME } from '../src/scene/arm.js';
+import { IMG9899 } from './fixtures/img9899.js';
 
 const part = (id, cls, color, score = 0.9, x = 60 + id * 25, y = 100) => ({ id, cls, color, score, x, y, rotDeg: 0, name: CLASSES[cls].name, heightMm: CLASSES[cls].heightMm });
 const footprints = Object.fromEntries(CLASSES.map((c) => [c.id, partFootprint(c.id)]));
@@ -206,5 +207,34 @@ describe('元件清点与自选清单', () => {
     // 不给 only 时和以前一样全部分拣
     const all = plan(parts, binsFor(parts), ARM);
     expect(all.tasks.filter((t) => t.kind === 'pick')).toHaveLength(parts.length);
+  });
+});
+
+describe('示例照片 IMG_9899：任何清单都拣得到', () => {
+  // 花瓣形的一堆（红 2、绿 5、透明 7 / 8 / 9）里透明的互相挡着：要把旁边不在清单里的红、绿挪到远处才拨得动
+  const pickedBy = (order) => {
+    const sel = selectForOrder(IMG9899, order, options);
+    const res = planForOrder(IMG9899, sel, ARM, { footprints, start: ARM_HOME });
+    return { sel, res, picks: res.tasks.filter((t) => t.kind === 'pick').map((t) => t.partId).sort((a, b) => a - b) };
+  };
+
+  for (const n of [1, 2, 3]) {
+    it(`只要 ${n} 颗透明 LED：全部入盒，红、绿只挪位不入盒`, () => {
+      const { sel, res, picks } = pickedBy({ 'led-clear': n });
+      expect(res.skipped).toEqual([]);
+      expect(picks).toEqual([...sel.ids].sort((a, b) => a - b));
+      expect(picks).toHaveLength(n);
+      expect(res.bins.map((b) => b.key)).toEqual(['led-clear']);
+      expect(res.tasks.filter((t) => t.kind === 'relocate').every((t) => !sel.ids.has(t.partId))).toBe(true);
+    });
+  }
+
+  it('每一种单独要、几种混着要，都没有跳过', () => {
+    const orders = [...ORDER_KINDS.map((k) => ({ [k.key]: 9 })), { resistor: 2, 'led-clear': 1 }, { 'led-blue': 2, 'led-clear': 2 }, { 'led-red': 2, 'led-green': 1, 'led-clear': 3 }];
+    for (const order of orders) {
+      const { sel, res, picks } = pickedBy(order);
+      expect(res.skipped, JSON.stringify(order)).toEqual([]);
+      expect(picks, JSON.stringify(order)).toEqual([...sel.ids].sort((a, b) => a - b));
+    }
   });
 });

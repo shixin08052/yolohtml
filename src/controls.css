@@ -120,6 +120,8 @@ input[type='checkbox'], input[type='range'] { accent-color: var(--accent); }
   .btn-small { height: 34px; }
   .tab { padding: 8px 16px; }
 }
+/* 动画默认始终显示，不跟随系统的"减少动态效果"（很多电脑为了省电或远程桌面把系统动画关了，页面会显得像坏了）。
+   需要跟随系统时在地址后加 ?motion=system（main.js 会在 <html> 上标 data-motion="system"），下面这类规则才生效。 */
 @media (prefers-reduced-motion: reduce) {
-  .btn, .select, .tab, .icon-btn { transition: none; }
+  :root[data-motion='system'] :is(.btn, .select, .tab, .icon-btn) { transition: none; }
 }

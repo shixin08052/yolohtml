@@ -1,0 +1,152 @@
+/* 加载、等待和过渡：全站共用的小部件和入场动画。
+   原则：只动 transform / opacity（不引起重排）；等待类的动画表达"正在做事"，系统设了"减少动态效果"时只保留转圈。 */
+
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes fade-in { from { opacity: 0; } }
+@keyframes rise-in { from { opacity: 0; transform: translateY(8px); } }
+@keyframes pop-in { from { opacity: 0; transform: scale(0.96) translateY(6px); } }
+@keyframes shimmer { to { background-position: -220% 0; } }
+@keyframes progress-slide { from { transform: translateX(-110%); } to { transform: translateX(290%); } }
+@keyframes scan-sweep { from { transform: translateY(-100%); } to { transform: translateY(460%); } }
+@keyframes dot-bounce { 0%, 60%, 100% { opacity: 0.25; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-2px); } }
+@keyframes soft-pulse { to { box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 0%, transparent); } }
+@keyframes flash-bg { from { background-color: color-mix(in srgb, var(--accent) 30%, var(--card)); } }
+@keyframes emblem-pulse { 50% { transform: scale(0.88); opacity: 0.55; } }
+@keyframes check-pop { from { transform: scale(0.4); opacity: 0; } 60% { transform: scale(1.2); } }
+
+/* ---------- 转圈 ---------- */
+.spinner {
+  display: inline-block; flex: none; width: 14px; height: 14px; vertical-align: -2px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, currentColor 22%, transparent);
+  border-top-color: currentColor;
+  animation: spin 0.7s linear infinite;
+}
+.spinner.lg { width: 34px; height: 34px; border-width: 3px; color: var(--accent); }
+
+/* 等待中的按钮：文字前面转圈，不能再点 */
+.btn.is-loading { pointer-events: none; }
+.btn.is-loading::before {
+  content: ''; flex: none; width: 13px; height: 13px; margin-right: 8px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-top-color: currentColor;
+  animation: spin 0.7s linear infinite;
+}
+
+/* 跳动的三个点（"正在…"后面） */
+.wait-dots { display: inline-flex; gap: 3px; margin-left: 4px; vertical-align: 1px; }
+.wait-dots i { width: 3px; height: 3px; border-radius: 50%; background: currentColor; animation: dot-bounce 1.2s ease-in-out infinite; }
+.wait-dots i:nth-child(2) { animation-delay: 0.15s; }
+.wait-dots i:nth-child(3) { animation-delay: 0.3s; }
+
+/* ---------- 进度条：有比例时按 --p（0–1）填充，没有时来回滑 ---------- */
+.progress { display: block; height: 3px; border-radius: 99px; background: color-mix(in srgb, var(--text) 9%, transparent); overflow: hidden; }
+.progress > i {
+  display: block; height: 100%; width: 100%; border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent-hi), var(--accent));
+  transform-origin: left center; transform: scaleX(var(--p, 0));
+  transition: transform 0.25s ease-out;
+}
+.progress.indeterminate > i { width: 34%; transform: none; transition: none; animation: progress-slide 1.15s ease-in-out infinite; }
+
+/* ---------- 视图区的加载遮罩（读取照片时） ---------- */
+.view-loader {
+  position: absolute; inset: 0; z-index: 5;
+  display: grid; place-items: center; padding: 16px;
+  background: var(--surface);
+  /* 读得快（本地小图）就不闪一下：稍等一会儿才显出来 */
+  animation: fade-in 0.25s 0.12s backwards;
+}
+.view-loader-card { display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; min-width: min(240px, 100%); }
+.view-loader-title { margin: 0; font-weight: 600; }
+.view-loader-sub { margin: -6px 0 0; font-size: 12.5px; color: var(--text-2); }
+.view-loader .progress { width: min(220px, 100%); }
+
+/* ---------- 模型下载 / 识别进度条 ---------- */
+.model-progress { position: relative; overflow: hidden; justify-content: flex-start; }
+.model-progress > [role='status'] { flex: 1 1 auto; min-width: 0; font-variant-numeric: tabular-nums; }
+.model-progress > .spinner { color: var(--accent); }
+.model-progress > .progress { position: absolute; left: 16px; right: 16px; bottom: 2px; height: 2px; }
+.model-progress:not([hidden]), .capture-notices:not([hidden]) { animation: rise-in 0.25s ease-out backwards; }
+
+/* 识别时照片上有一道光从上往下扫 */
+.views.is-detecting #view-debug::after {
+  content: ''; position: absolute; left: 0; right: 0; top: 0; height: 18%; z-index: 1; pointer-events: none;
+  background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--accent) 18%, transparent) 70%, color-mix(in srgb, var(--accent) 60%, transparent) 99%, transparent);
+  animation: scan-sweep 1.9s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+
+/* ---------- 入场 ---------- */
+.info-panel > .panel-section { animation: rise-in 0.28s cubic-bezier(0.2, 0.8, 0.2, 1) backwards; }
+.msg { animation: rise-in 0.22s ease-out backwards; }
+.view.active { animation: fade-in 0.18s ease-out; }
+.sort-dock:not([hidden]) { animation: rise-in 0.3s cubic-bezier(0.2, 0.8, 0.2, 1) backwards; }
+.ins-dialog[open] { animation: pop-in 0.22s cubic-bezier(0.2, 0.8, 0.2, 1); }
+.ins-dialog::backdrop { animation: fade-in 0.2s ease-out; }
+
+/* 首页引导：标题、说明、三步、按钮依次出现 */
+.hero-card > * { animation: rise-in 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) backwards; }
+.hero-card > :nth-child(2) { animation-delay: 0.05s; }
+.hero-card > :nth-child(3) { animation-delay: 0.1s; }
+.hero-card > :nth-child(4) { animation-delay: 0.16s; }
+.hero-card > :nth-child(5) { animation-delay: 0.22s; }
+.hero-steps li { transition: transform 0.2s ease, border-color 0.2s, box-shadow 0.2s; }
+.hero-steps li:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); box-shadow: 0 8px 18px -12px var(--accent-glow); }
+
+/* ---------- 步骤条：当前步骤的圆点呼吸，完成时对勾弹一下 ---------- */
+.step.active .dot { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 45%, transparent); animation: soft-pulse 1.8s ease-out infinite; }
+.step.done .dot::after { animation: check-pop 0.3s ease-out; }
+
+/* ---------- 分拣 ---------- */
+/* 控制条底边的整体进度（--p：0–1） */
+.sort-dock { position: relative; overflow: hidden; }
+.sort-dock::after {
+  content: ''; position: absolute; left: 0; bottom: 0; height: 2px; width: 100%;
+  background: linear-gradient(90deg, var(--accent-hi), var(--accent));
+  transform-origin: left center; transform: scaleX(var(--p, 0));
+  transition: transform 0.3s linear, opacity 0.4s;
+}
+.sort-dock[data-state='idle']::after { opacity: 0; }
+.task-list li { transition: background-color 0.25s, color 0.25s; }
+.task-list li.active { box-shadow: inset 2px 0 0 var(--accent); }
+/* 正在重新规划（改了清单）：旧的数字和步骤先淡下去，标题旁边转圈 */
+.panel-section.is-planning > h3::after {
+  content: ''; display: inline-block; width: 11px; height: 11px; margin-left: 8px; vertical-align: -1px;
+  border-radius: 50%; border: 2px solid color-mix(in srgb, var(--accent) 25%, transparent); border-top-color: var(--accent);
+  animation: spin 0.7s linear infinite;
+}
+.panel-section.is-planning .summary, .panel-section.is-planning .task-list, .panel-section.is-planning .skip-list { opacity: 0.45; transition: opacity 0.15s; }
+
+/* ---------- 元件清单 ---------- */
+.order-table .st > * , .order-table .st { transition: color 0.2s; }
+.qty input { transition: border-color 0.15s, box-shadow 0.15s; }
+.qty input:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+.qty input.qty-flash { animation: flash-bg 0.9s ease-out; }
+/* AI 正在生成：数量一栏变成流光占位，暂时不能改 */
+.order-table[aria-busy='true'] .qty { pointer-events: none; }
+.order-table[aria-busy='true'] .qty input {
+  color: transparent; border-color: transparent;
+  background: linear-gradient(100deg, var(--hover) 30%, color-mix(in srgb, var(--accent) 22%, var(--card)) 50%, var(--hover) 70%) 0 0 / 220% 100%;
+  animation: shimmer 1.3s linear infinite;
+}
+.order-table[aria-busy='true'] .qty .icon-btn, .order-table[aria-busy='true'] .st { opacity: 0.35; transition: opacity 0.2s; }
+.ai-box.is-busy .ai-text { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); transition: border-color 0.2s, box-shadow 0.2s; }
+.ai-box.is-busy .ai-emblem { animation: emblem-pulse 1.4s ease-in-out infinite; }
+.ai-status { display: flex; align-items: center; gap: 7px; min-height: 18px; }
+.ai-status .spinner { color: var(--accent); }
+.ai-status[data-state='error'] { color: var(--err); }
+.ai-note:not([hidden]), .ai-usage:not([hidden]) { animation: rise-in 0.3s ease-out backwards; }
+
+/* ---------- 减少动态效果（只在 ?motion=system 时跟随系统，见 controls.css）：只留转圈（它表示"还在进行"，去掉会像卡死） ---------- */
+@media (prefers-reduced-motion: reduce) {
+  :root[data-motion='system'] :is(.info-panel > .panel-section, .msg, .view.active, .sort-dock:not([hidden]), .ins-dialog[open],
+    .hero-card > *, .model-progress:not([hidden]), .capture-notices:not([hidden]), .ai-note:not([hidden]), .ai-usage:not([hidden]),
+    .step.active .dot, .wait-dots i, .qty input.qty-flash, .ai-box.is-busy .ai-emblem, .view-loader),
+  :root[data-motion='system'] .ins-dialog::backdrop, :root[data-motion='system'] .step.done .dot::after { animation: none; }
+  :root[data-motion='system'] .views.is-detecting #view-debug::after { display: none; }
+  :root[data-motion='system'] .progress.indeterminate > i { animation: none; width: 100%; opacity: 0.5; }
+  :root[data-motion='system'] .order-table[aria-busy='true'] .qty input { animation: none; }
+  :root[data-motion='system'] :is(.hero-steps li, .progress > i), :root[data-motion='system'] .sort-dock::after { transition: none; }
+  :root[data-motion='system'] .hero-steps li:hover { transform: none; }
+}

@@ -5,6 +5,8 @@ import { normalizeOrder } from '../robot/order.js';
 export const ORDER_CACHE_KEY = 'yolohtml.deepseek.orders.v1';
 export const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 export const CACHE_MAX_ENTRIES = 50;
+/** 模型给的说明最多保留多少个字（界面上只有两三行的位置） */
+export const NOTE_MAX = 80;
 
 const browserStorage = () => {
   try { return globalThis.localStorage; } catch { return undefined; }
@@ -26,7 +28,7 @@ export function createOrderCache({ storage = browserStorage(), now = () => Date.
     const saved = JSON.parse(storage?.getItem(ORDER_CACHE_KEY) ?? '[]');
     if (Array.isArray(saved)) for (const entry of saved) {
       if (Array.isArray(entry) && entry.length === 2 && typeof entry[0] === 'string' && valid(entry[1])) {
-        entries.set(entry[0], { order: normalizeOrder(entry[1].order), note: entry[1].note.slice(0, 40), savedAt: entry[1].savedAt });
+        entries.set(entry[0], { order: normalizeOrder(entry[1].order), note: entry[1].note.slice(0, NOTE_MAX), savedAt: entry[1].savedAt });
       }
     }
   } catch { /* 损坏或禁用的存储不影响生成清单 */ }
@@ -45,7 +47,7 @@ export function createOrderCache({ storage = browserStorage(), now = () => Date.
     set(key, result, expectedRevision = revision) {
       if (revision !== expectedRevision) return; // 清空后，不让较早发出的请求重新写回
       entries.delete(key);
-      entries.set(key, { order: normalizeOrder(result.order), note: result.note.slice(0, 40), savedAt: now() });
+      entries.set(key, { order: normalizeOrder(result.order), note: result.note.slice(0, NOTE_MAX), savedAt: now() });
       prune();
       persist();
     },

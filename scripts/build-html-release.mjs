@@ -57,7 +57,7 @@ const instructions = `视觉分拣数字孪生系统 v${pkg.version} · Windows 
 - 如浏览器未自动打开，复制启动窗口中的“演示页面”地址到 Edge / Chrome。
 - 如果企业电脑策略禁用了 PowerShell 脚本，请将网页部署到已有静态服务器后展示。
 - WebGPU 不可用时会回退到 WASM，首次加载模型可能稍慢。
-- 显示与动画遵循系统浅色/深色及“减少动态效果”设置。
+- 显示遵循系统浅色/深色设置。动画始终显示（不受 Windows“动画效果”开关影响）；需要跟随系统时在地址后加 ?motion=system。
 
 文件校验
 release-manifest.json 记录各文件 SHA-256；ZIP 同目录的 .sha256 文件用于核对压缩包完整性。
