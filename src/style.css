@@ -593,10 +593,13 @@ body.demo .demo-chip { display: inline-flex; }
   flex-wrap: wrap;
   align-items: center;
   gap: 6px 8px;
-  max-width: calc(56% - 24px);
+  max-width: calc(100% - 24px);
   padding: 6px 12px 6px 8px;
   border-radius: var(--radius);
   font-size: 12px;
+}
+#view-debug.is-box-editing #rect-inset {
+  display: none;
 }
 .box-tools .select {
   height: var(--ctl-h-sm);
@@ -1191,7 +1194,8 @@ body.demo .demo-chip { display: inline-flex; }
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .box-tools { left: 8px; bottom: 8px; max-width: calc(68% - 16px); padding: 5px; gap: 6px; }
+  .box-tools { left: 8px; right: 8px; bottom: 8px; max-width: calc(100% - 16px); padding: 6px 8px; gap: 6px; }
+  #view-debug.is-box-editing .view-tools > .check { display: none; }
   .info-panel { overflow: visible; padding: 12px 0 16px; }
   #app:has(#sort-dock:not([hidden])) .info-panel {
     padding-bottom: 16px;

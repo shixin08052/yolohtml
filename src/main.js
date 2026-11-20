@@ -1229,6 +1229,7 @@ const boxEditor = createBoxEditor({
     syncBoxAttr();
   },
   onSelect: (i) => {
+    $('#box-cancel').disabled = i < 0 && !boxEditor.canCancel;
     $('#box-delete').disabled = i < 0;
     $('#box-class').value = String(boxEditor.cls);
     syncBoxClassPills();
@@ -1312,6 +1313,10 @@ $('#box-attr').addEventListener('change', (e) => {
   boxEditor.setAttr({ color: e.target.value || undefined });
   syncBoxAttr();
 });
+$('#box-cancel').addEventListener('click', () => {
+  boxEditor.cancelBox();
+  $('#box-cancel').disabled = !boxEditor.canCancel;
+});
 $('#box-delete').addEventListener('click', () => boxEditor.deleteSelected());
 $('#box-clear').addEventListener('click', () => boxEditor.clear());
 $('#box-done').addEventListener('click', () => setBoxEditing(false));
@@ -1345,7 +1350,10 @@ function updateDetOverlay() {
 function setBoxEditing(on) {
   if (on && !detResult) return;
   boxEditing = on;
-  $('#btn-boxedit').setAttribute('aria-pressed', String(on));
+  const topBtn = $('#btn-boxedit');
+  topBtn.setAttribute('aria-pressed', String(on));
+  topBtn.textContent = on ? '退出框选' : '框选';
+  $('#view-debug').classList.toggle('is-box-editing', on);
   $('#box-tools').hidden = !on;
   debugView.setTool(on ? boxEditor.tool : null);
   if (on) {

@@ -85,10 +85,11 @@
               <div id="box-attr-pills" class="box-pills" role="group" aria-label="LED 颜色快捷选择" hidden></div>
               <select id="box-attr" class="select" aria-label="LED 颜色" hidden></select>
               <span class="box-sep" aria-hidden="true"></span>
+              <button type="button" class="icon-btn text" id="box-cancel" disabled title="取消选中当前框 (Esc)">取消</button>
               <button type="button" class="icon-btn text" id="box-delete" disabled title="删除选中框 (Delete)">删除</button>
               <button type="button" class="icon-btn text" id="box-clear" title="清空所有框">清空</button>
               <button type="button" class="btn btn-primary btn-small" id="box-done" title="完成框选 (Esc)">完成</button>
-              <span class="tip up" tabindex="0" role="note" aria-label="操作提示：拖动画框 · 数字键 1/2 切类别 · 点框选中后可拖动 / 拉角 · Delete 删除 · Esc 完成"><span class="tip-icon" aria-hidden="true">?</span><span class="tip-body" aria-hidden="true"><span class="hint-mouse">拖动画框 · 按 1/2 切类别 · 点框选中后拖动 / 拉角 · Delete 删除 · 右键平移 · Esc 完成</span><span class="hint-touch">单指画框 · 点框选中后拖动 / 拉角 · 双指缩放</span></span></span>
+              <span class="tip up" tabindex="0" role="note" aria-label="操作提示：拖动画框 · 数字键 1/2 切类别 · 点框选中后可拖动 / 拉角 · 取消可选中复位 · Delete 删除 · Esc 完成"><span class="tip-icon" aria-hidden="true">?</span><span class="tip-body" aria-hidden="true"><span class="hint-mouse">拖动画框 · 按 1/2 切类别 · 点框选中后拖动 / 拉角 · 点取消可取消选中 · Delete 删除 · 右键平移 · Esc 完成</span><span class="hint-touch">单指画框 · 点框选中后拖动 / 拉角 · 点"取消"取消选中 · 双指缩放</span></span></span>
             </div>
             <!-- 正射图小窗：点击放大 / 缩小 -->
             <figure id="rect-inset" class="inset" hidden>
