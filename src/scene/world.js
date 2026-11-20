@@ -3,65 +3,79 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
-import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { cssVar, onThemeChange } from '../ui/theme.js';
 import { BOARD } from '../config.js';
 import { toThree, fromThree, cameraQuaternionFromR } from '../math/coords.js';
+import { createWorkbench } from './workbench.js';
+
+/**
+ * 定制实验室摄影棚 IBL 环境场景（供 PMREMGenerator 预滤波生成环境贴图）：
+ * 相比 Three.js 默认的纯黑白高反差 RoomEnvironment，这里模拟真实的工程实验室光环境：
+ * - 顶部两条柔和暖白条形 LED 顶灯（4800K）
+ * - 左侧一扇大面积柔光自然日照窗（6000K 冷调补光），让金属圆柱与玻璃呈现自然冷暖渐变反射
+ * - 暖木色桌底漫反射与中性灰实验室墙面，避免金属表面出现刺眼假白块
+ */
+function createLabEnvironment() {
+  const env = new THREE.Scene();
+  env.background = new THREE.Color('#282a2e');
+
+  const room = new THREE.Mesh(
+    new THREE.BoxGeometry(30, 16, 26),
+    new THREE.MeshBasicMaterial({ color: '#4c4a46', side: THREE.BackSide }),
+  );
+  room.position.y = 4;
+  env.add(room);
+
+  // 暖木桌面与地板低频反射面
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(30, 26), new THREE.MeshBasicMaterial({ color: '#5b4d3e' }));
+  floor.rotation.x = -Math.PI / 2;
+  floor.position.y = -3.8;
+  env.add(floor);
+
+  // 天花板两条柔和长条 LED 实验室灯带
+  const stripMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(2.6, 2.52, 2.35) });
+  for (const z of [-3.2, 3.4]) {
+    const strip = new THREE.Mesh(new THREE.PlaneGeometry(18, 2.4), stripMat);
+    strip.rotation.x = Math.PI / 2;
+    strip.position.set(0, 11.6, z);
+    env.add(strip);
+  }
+
+  // 左侧冷白柔和自然光窗户（勾勒机械臂钢件、铝型材与卡尺的冷色高光边）
+  const winLeft = new THREE.Mesh(
+    new THREE.PlaneGeometry(14, 7.5),
+    new THREE.MeshBasicMaterial({ color: new THREE.Color(1.45, 1.62, 1.85) }),
+  );
+  winLeft.rotation.y = Math.PI / 2;
+  winLeft.position.set(-14.6, 4.5, 1);
+  env.add(winLeft);
+
+  // 右侧微暖反光板（柔和过渡，避免仪器右侧暗部发死）
+  const fillRight = new THREE.Mesh(
+    new THREE.PlaneGeometry(12, 6),
+    new THREE.MeshBasicMaterial({ color: new THREE.Color(0.95, 0.88, 0.8) }),
+  );
+  fillRight.rotation.y = -Math.PI / 2;
+  fillRight.position.set(14.6, 3.8, -1);
+  env.add(fillRight);
+
+  // 前上方柔光顶灯（对应龙门架悬臂条形工作灯）
+  const taskLight = new THREE.Mesh(
+    new THREE.PlaneGeometry(10, 1.6),
+    new THREE.MeshBasicMaterial({ color: new THREE.Color(2.2, 2.08, 1.9) }),
+  );
+  taskLight.rotation.x = Math.PI / 2.6;
+  taskLight.position.set(0, 8.2, -7.5);
+  env.add(taskLight);
+
+  return env;
+}
 
 /** 桌面尺寸（mm），中心与底板中心对齐 */
 export const TABLE = { width: 1200, depth: 900 };
 
 /** 底板中心（底板坐标） */
 const BOARD_CENTER = [BOARD.width / 2, BOARD.height / 2, 0];
-
-/**
- * 桌垫的贴图：深色底 + 细颗粒（哑光的质感）+ 很淡的 50 mm 网格（给画面一个尺度感），四周略暗。
- * 画在 1 px = 1 mm 的画布上；贴图坐标由调用方按桌垫尺寸换算
- */
-function matTexture() {
-  const c = document.createElement('canvas');
-  c.width = TABLE.width;
-  c.height = TABLE.depth;
-  const ctx = c.getContext('2d');
-  ctx.fillStyle = '#2f2c29';
-  ctx.fillRect(0, 0, c.width, c.height);
-  // 颗粒：固定种子的伪随机数，每次打开都一样
-  let seed = 20261111;
-  const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296);
-  const img = ctx.getImageData(0, 0, c.width, c.height);
-  for (let i = 0; i < img.data.length; i += 4) {
-    const n = (rnd() - 0.5) * 14;
-    img.data[i] += n;
-    img.data[i + 1] += n;
-    img.data[i + 2] += n;
-  }
-  ctx.putImageData(img, 0, 0);
-  // 网格：以桌垫中心（= 底板中心）对齐，每 50 mm 一条细线，每 100 mm 稍亮
-  for (const [step, alpha] of [[50, 0.035], [100, 0.05]]) {
-    ctx.strokeStyle = `rgba(255, 255, 255, ${alpha})`;
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    for (let x = (c.width / 2) % step; x < c.width; x += step) {
-      ctx.moveTo(Math.round(x) + 0.5, 0);
-      ctx.lineTo(Math.round(x) + 0.5, c.height);
-    }
-    for (let y = (c.height / 2) % step; y < c.height; y += step) {
-      ctx.moveTo(0, Math.round(y) + 0.5);
-      ctx.lineTo(c.width, Math.round(y) + 0.5);
-    }
-    ctx.stroke();
-  }
-  // 四周压暗一点，视线自然落在中间的底板上
-  const g = ctx.createRadialGradient(c.width / 2, c.height / 2, c.height * 0.35, c.width / 2, c.height / 2, c.width * 0.62);
-  g.addColorStop(0, 'rgba(0, 0, 0, 0)');
-  g.addColorStop(1, 'rgba(0, 0, 0, 0.32)');
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, c.width, c.height);
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.anisotropy = 8;
-  return tex;
-}
 
 /** 底板坐标系的坐标轴：X 红、Y 绿、Z 蓝，长 100 mm，带 CSS2D 字母 */
 function createAxes() {
@@ -112,8 +126,10 @@ export function createWorld(container) {
   }
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.AgXToneMapping ?? THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.02;
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFShadowMap;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   // 手机等触屏设备显存紧：阴影贴图小一档
   const coarse = typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches;
   const shadowSize = !coarse && renderer.capabilities.maxTextureSize >= 4096 ? 4096 : 2048;
@@ -129,65 +145,53 @@ export function createWorld(container) {
     const bg = new THREE.Color(cssVar('--canvas-bg'));
     renderer.setClearColor(bg);
     scene.background = bg;
+    scene.fog = new THREE.Fog(bg, 2200, 4800);
     letterbox.set(cssVar('--surface')); // 转场 / 对比时画面区域外的底色（每帧读样式会触发重新计算样式）
     requestRender();
   };
 
-  // 环境反射：一间柔光的"摄影棚"，金属引脚、机械臂的钢件、LED 的环氧树脂表面才有东西可反射（否则金属是一片死灰）。
-  // 只用来算反射和环境光，不显示成背景
+  // 定制实验室 IBL 环境反射（自然冷暖渐变，赋予金属、拉丝铝、玻璃屏幕、LED 环氧树脂真实材质层次）
   const pmrem = new THREE.PMREMGenerator(renderer);
-  scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-  scene.environmentIntensity = 0.28;
+  const envScene = createLabEnvironment();
+  scene.environment = pmrem.fromScene(envScene, 0.045).texture;
+  scene.environmentIntensity = 0.62;
   pmrem.dispose();
 
-  // 灯光：环境反射提供柔和的底光，半球光补一点天地色差；一盏带阴影的主光从左前上方照下，一盏不投影的辅光从右后方勾出轮廓
-  // 强度是对着画面调的：白纸受光处接近但不到纯白，影子里明显暗一档（环境光太强时影子会被冲掉）
-  scene.add(new THREE.HemisphereLight('#ffffff', '#5a554d', 0.1));
-  const sun = new THREE.DirectionalLight('#fffaf3', 1.85);
-  sun.position.copy(toThree(BOARD.width / 2 - 300, BOARD.height / 2 - 250, 700)); // 从操作者一侧照，机械臂（在远端）的影子落在底板外
+  // 真实实验室光影层次：
+  // 1. 柔和天地漫反射（桌面木色暖反光 + 顶部自然散射光）
+  scene.add(new THREE.HemisphereLight('#f6f8fc', '#5c4e40', 0.34));
+
+  // 2. 主光源：来自前上方实验室顶灯的柔和投影光（PCFSoftShadowMap 柔和半影，覆盖整个工作台与外围仪器工具）
+  const sun = new THREE.DirectionalLight('#fff8ee', 1.65);
+  sun.position.copy(toThree(BOARD.width / 2 - 220, BOARD.height / 2 - 260, 780));
   sun.target.position.copy(toThree(...BOARD_CENTER));
   sun.castShadow = true;
   sun.shadow.mapSize.set(shadowSize, shadowSize);
-  // 阴影只需要盖住底板、料盒和机械臂这一带：范围收紧后每个像素更细，几毫米大的零件也有清楚的影子
-  Object.assign(sun.shadow.camera, { left: -400, right: 400, top: 380, bottom: -360, near: 100, far: 2000 });
-  sun.shadow.bias = -0.0004;
-  sun.shadow.normalBias = 0.35;
-  sun.shadow.radius = 1.6;
+  Object.assign(sun.shadow.camera, { left: -720, right: 720, top: 560, bottom: -480, near: 120, far: 2100 });
+  sun.shadow.bias = -0.00028;
+  sun.shadow.normalBias = 0.28;
   scene.add(sun, sun.target);
-  const rim = new THREE.DirectionalLight('#dfe9ff', 0.3);
-  rim.position.copy(toThree(BOARD.width / 2 + 420, BOARD.height / 2 + 380, 380));
+
+  // 3. 龙门架悬臂 LED 工作灯局域暖白补光（带真实距离衰减，让台垫中央工作区有自然聚焦明暗层次）
+  const taskLamp = new THREE.PointLight('#fff4e4', 180000, 1400, 2);
+  taskLamp.position.copy(toThree(BOARD.width / 2, 340, 465));
+  scene.add(taskLamp);
+
+  // 4. 左侧自然光冷调补光（与顶部暖白工作灯形成冷暖对比，消除暗部死黑）
+  const windowFill = new THREE.DirectionalLight('#d7e6ff', 0.42);
+  windowFill.position.copy(toThree(BOARD.width / 2 - 680, BOARD.height / 2 + 120, 380));
+  windowFill.target.position.copy(toThree(...BOARD_CENTER));
+  scene.add(windowFill, windowFill.target);
+
+  // 5. 右后方柔和轮廓光（勾勒深色机械臂关节、控制器与稳压电源边缘高光）
+  const rim = new THREE.DirectionalLight('#e6efff', 0.36);
+  rim.position.copy(toThree(BOARD.width / 2 + 540, BOARD.height / 2 + 460, 400));
   rim.target.position.copy(toThree(...BOARD_CENTER));
   scene.add(rim, rim.target);
 
-  // 桌面：一张圆角的深色桌垫（有厚度、边缘倒角），顶面在底板下方 BOARD.thickness 处
-  const matShape = new THREE.Shape();
-  {
-    const [w, d, r] = [TABLE.width / 2, TABLE.depth / 2, 36];
-    matShape.moveTo(-w + r, -d);
-    matShape.lineTo(w - r, -d);
-    matShape.absarc(w - r, -d + r, r, -Math.PI / 2, 0);
-    matShape.lineTo(w, d - r);
-    matShape.absarc(w - r, d - r, r, 0, Math.PI / 2);
-    matShape.lineTo(-w + r, d);
-    matShape.absarc(-w + r, d - r, r, Math.PI / 2, Math.PI);
-    matShape.lineTo(-w, -d + r);
-    matShape.absarc(-w + r, -d + r, r, Math.PI, Math.PI * 1.5);
-  }
-  const MAT_THICK = 3;
-  const matTex = matTexture();
-  // 挤出体的贴图坐标就是形状的坐标（mm，原点在中心）：换算到 0–1
-  matTex.repeat.set(1 / TABLE.width, 1 / TABLE.depth);
-  matTex.offset.set(0.5, 0.5);
-  const table = new THREE.Mesh(
-    new THREE.ExtrudeGeometry(matShape, { depth: MAT_THICK - 1, bevelEnabled: true, bevelThickness: 1, bevelSize: 1, bevelSegments: 3, curveSegments: 12 }),
-    [new THREE.MeshStandardMaterial({ map: matTex, roughness: 0.94, metalness: 0 }), new THREE.MeshStandardMaterial({ color: '#262321', roughness: 0.9 })],
-  );
-  table.name = 'table';
-  table.rotation.x = -Math.PI / 2; // 形状平面 → 水平，挤出方向 → 向上
-  // 挤出体从 z = −bevelThickness 到 depth + bevelThickness：顶面落在底板底面
-  table.position.copy(toThree(BOARD_CENTER[0], BOARD_CENTER[1], -BOARD.thickness - MAT_THICK));
-  table.receiveShadow = true;
-  scene.add(table);
+  // 实验室工作台完整环境（实木复合桌面、防静电台垫、铝型材龙门架与顶部照明灯、控制器、稳压电源、急停与工具）
+  const workbench = createWorkbench();
+  scene.add(workbench);
 
   const axes = createAxes();
   axes.visible = false;
@@ -244,7 +248,7 @@ export function createWorld(container) {
     const rn = Math.hypot(...right);
     const r = right.map((x) => x / rn);
     const up = [r[1] * f[2] - r[2] * f[1], r[2] * f[0] - r[0] * f[2], r[0] * f[1] - r[1] * f[0]];
-    const tanV = Math.tan((DEFAULT_FOV * Math.PI) / 360) / 1.12; // 留 12% 边距
+    const tanV = Math.tan((DEFAULT_FOV * Math.PI) / 360) / 1.22; // 留出适度边距，兼顾底板零件细节与工作台周边设备
     const tanH = tanV * aspect;
     let dist = 100;
     for (const p of pts) {
@@ -280,6 +284,15 @@ export function createWorld(container) {
   }
 
   const raycaster = new THREE.Raycaster();
+  /** 根据屏幕坐标构造当前相机射线；转场 / 对比时（画面区域不是全画布）返回 null */
+  function raycasterFromClient(clientX, clientY) {
+    if (frame) return null;
+    const r = renderer.domElement.getBoundingClientRect();
+    if (!r.width || !r.height) return null;
+    const ndc = new THREE.Vector2(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
+    raycaster.setFromCamera(ndc, camera);
+    return raycaster;
+  }
   /**
    * 屏幕上的点与水平面 Z = z 的交点（底板坐标）；转场 / 对比时（画面区域不是全画布）不处理
    * @param {number} clientX
@@ -288,11 +301,9 @@ export function createWorld(container) {
    * @returns {number[]|null}
    */
   function pickPlane(clientX, clientY, z = 0) {
-    if (frame) return null;
-    const r = renderer.domElement.getBoundingClientRect();
-    const ndc = new THREE.Vector2(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
-    raycaster.setFromCamera(ndc, camera);
-    const hit = raycaster.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -z), new THREE.Vector3());
+    const rc = raycasterFromClient(clientX, clientY);
+    if (!rc) return null;
+    const hit = rc.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -z), new THREE.Vector3());
     return hit ? fromThree(hit) : null;
   }
 
@@ -530,6 +541,7 @@ export function createWorld(container) {
     setFocusPoints,
     setBasePoints,
     pickPlane,
+    raycasterFromClient,
     photoCameraParams,
     applyCamera,
     setControlsActive,
@@ -557,6 +569,6 @@ function unavailableWorld(container) {
     camera: new THREE.PerspectiveCamera(),
     resize: noop, render: noop, setFrame: noop, requestRender: noop,
     setDefaultView: noop, flyToPoints: noop, setFocusPoints: noop, setBasePoints: noop,
-    setAxesVisible: noop, setControlsActive: noop, pickPlane: () => null,
+    setAxesVisible: noop, setControlsActive: noop, pickPlane: () => null, raycasterFromClient: () => null,
   };
 }

@@ -41,6 +41,35 @@ describe('料盒按需生成', () => {
     expect(binKey(P(0, 1, 0, 0, 'blue'))).toBe('led-blue');
     expect(binKey(P(0, 1, 0, 0))).toBe('led');
   });
+
+  it('多轮增量分拣：上一轮已放进元件的料盒保持原格位，后续同盒元件按 initialFill 避让已有元件', () => {
+    const green = P(0, 1, 120, 100, 'green');
+    const red = P(1, 1, 160, 100, 'red');
+    const green2 = P(2, 1, 190, 100, 'green');
+    const footprints = Object.fromEntries(CLASSES.map((c) => [c.id, partFootprint(c.id)]));
+
+    // 第一轮只选 green：分配在第一个 LED 格位 rightMid
+    const bins1 = binsFor([green]);
+    expect(bins1.map((b) => [b.key, b.center])).toEqual([['led-green', BIN_SLOTS.rightMid]]);
+    const r1 = plan([green], bins1, ARM, { footprints });
+    expect(r1.tasks).toHaveLength(1);
+    const drop1 = r1.tasks[0].drop.to;
+
+    // 第二轮再选 red + green2：green 盒必须留在 rightMid 不换位，red 分配到下一个空闲格位 rightFar
+    const bins2 = binsFor([red, green2], bins1);
+    expect(bins2.find((b) => b.key === 'led-green').center).toEqual(BIN_SLOTS.rightMid);
+    expect(bins2.find((b) => b.key === 'led-red').center).toEqual(BIN_SLOTS.rightFar);
+
+    const initialFill = new Map([
+      ['led-green', [{ fp: footprints[1], x: drop1[0], y: drop1[1], z: drop1[2], yaw: drop1[3], height: footprints[1].height }]],
+    ]);
+    const r2 = plan([red, green2], bins2, ARM, { footprints, initialFill });
+    const green2Task = r2.tasks.find((t) => t.partId === 2);
+    expect(green2Task).toBeDefined();
+    // 第二颗绿 LED 落点不能与第一颗重合
+    const dist = Math.hypot(green2Task.drop.to[0] - drop1[0], green2Task.drop.to[1] - drop1[1]);
+    expect(dist).toBeGreaterThan(2);
+  });
 });
 
 describe('按颜色分拣', () => {

@@ -1,6 +1,6 @@
 // "元件清单"分区：清点（板上每种有几个）+ 自选清单（每种要几个，按清单分拣）+ AI 帮填。
 // 数量的整理、挑零件是 robot/order.js 的纯函数；这里只管界面。
-import { selectForOrder, orderTable, clampCount, normalizeOrder, ORDER_MAX } from '../robot/order.js';
+import { selectForOrder, selectByIds, orderTable, clampCount, normalizeOrder, ORDER_MAX } from '../robot/order.js';
 import { askOrder, DEFAULT_MODEL, MAX_REQUEST_CHARS, REASONING_OPTIONS, normalizeEffort } from '../llm/orderAssist.js';
 import { clearOrderCache } from '../llm/orderCache.js';
 import { toCsv } from '../experiment.js';
@@ -41,6 +41,8 @@ function saveLlm(v) {
 export function createOrderPanel({ panel, getParts, getPlanningOptions = () => ({}), getStuck = () => ({}), onChange, fileStem, message }) {
   /** 自选清单：null = 全部分拣；否则 种类 → 数量 */
   let order = null;
+  /** 3D 视图直接点选的具体零件 ID 集合；null = 走按种类数量清单（order） */
+  let pickedIds = null;
   let note = '';
   /** AI 说明数量怎么算的 */
   let why = '';
@@ -183,7 +185,10 @@ export function createOrderPanel({ panel, getParts, getPlanningOptions = () => (
     };
   }
 
-  const selection = () => selectForOrder(getParts() ?? [], order, getPlanningOptions());
+  const selection = () => {
+    const parts = getParts() ?? [];
+    return pickedIds !== null ? selectByIds(parts, pickedIds) : selectForOrder(parts, order, getPlanningOptions());
+  };
 
   function statusText(l, stuck = 0) {
     if (l.short > 0) return `<span class="bad">缺 ${l.short}</span>`;
@@ -197,7 +202,8 @@ export function createOrderPanel({ panel, getParts, getPlanningOptions = () => (
     // 规划后才知道哪些实际拿不到（挤得太紧、够不到）：和"分拣"分区的数字保持一致
     const nStuck = sel.lines.reduce((s, l) => s + Math.min(l.pick, stuck[l.key] ?? 0), 0);
     const stuckText = nStuck ? `，<span class="bad">其中 ${nStuck} 个拿不到</span>` : '';
-    if (!sel.custom) return `板上共 <b>${total}</b> 个元件，全部分拣${stuckText}。改下面的数量即按清单分拣。`;
+    if (!sel.custom) return `板上共 <b>${total}</b> 个元件，全部分拣${stuckText}。改下面数量或在 3D 视图点选元件即可按需分拣。`;
+    if (sel.byIds) return `3D 已点选 <b>${sel.totalPick}</b> / ${total} 个元件分拣${stuckText}；其余留在板上，挡路的先挪到空位。`;
     return `按清单分拣：需要 <b>${sel.totalWant}</b> 个，板上能拣 <b>${sel.totalPick - nStuck}</b> 个${stuckText}${sel.totalShort ? `，<span class="bad">缺 ${sel.totalShort} 个</span>` : ''}；其余留在板上，挡路的先挪到空位。`;
   }
 
@@ -209,6 +215,7 @@ export function createOrderPanel({ panel, getParts, getPlanningOptions = () => (
     for (const l of sel.lines) {
       const tr = body.querySelector(`tr[data-key="${l.key}"]`);
       if (!tr) continue;
+      tr.querySelector('.num').textContent = l.have;
       tr.querySelector('.st').innerHTML = statusText(l, Math.min(l.pick, stuck[l.key] ?? 0));
       tr.classList.toggle('none', !l.have && !l.want);
       if (inputs) tr.querySelector('input').value = l.want;
@@ -217,8 +224,24 @@ export function createOrderPanel({ panel, getParts, getPlanningOptions = () => (
   }
 
   function setOrder(next, body, { inputs = true } = {}) {
+    pickedIds = null;
     order = next;
     if (body) refresh(body, { inputs });
+    onChange();
+  }
+
+  function applyPickedIds(nextSet) {
+    const parts = getParts() ?? [];
+    const valid = new Set(parts.filter((p) => nextSet.has(p.id)).map((p) => p.id));
+    if (parts.length > 0 && valid.size === parts.length) {
+      pickedIds = null;
+      order = null;
+    } else {
+      pickedIds = valid;
+      order = null;
+    }
+    const body = bodyElement?.isConnected ? bodyElement : null;
+    if (body) refresh(body, { inputs: true });
     onChange();
   }
 
@@ -367,6 +390,7 @@ export function createOrderPanel({ panel, getParts, getPlanningOptions = () => (
 
   /** 成功取得完整结果后，先清空旧选择及所有输入，再填本次结果；仅重新规划一次。 */
   function replaceAiOrder(next) {
+    pickedIds = null;
     order = {};
     const body = bodyElement?.isConnected ? bodyElement : null;
     if (body) for (const input of body.querySelectorAll('.order-table input')) input.value = 0;
@@ -446,6 +470,47 @@ export function createOrderPanel({ panel, getParts, getPlanningOptions = () => (
   return {
     render,
     selection,
+    /** 3D 视图点击某个零件：切换该零件是否加入分拣 */
+    togglePart(partId) {
+      const next = new Set(selection().ids);
+      if (next.has(partId)) next.delete(partId);
+      else next.add(partId);
+      applyPickedIds(next);
+    },
+    /** 3D 视图全选 */
+    selectAll() {
+      const body = bodyElement?.isConnected ? bodyElement : null;
+      setOrder(null, body, { inputs: true });
+    },
+    /** 3D 视图清空选中 */
+    selectNone() {
+      applyPickedIds(new Set());
+    },
+    /** 3D 视图反选 */
+    invertParts() {
+      const parts = getParts() ?? [];
+      const cur = selection().ids;
+      applyPickedIds(new Set(parts.filter((p) => !cur.has(p.id)).map((p) => p.id)));
+    },
+    /** 换照片或改框重建零件时清空旧的 3D 点选 ID */
+    clearPickedIds() {
+      pickedIds = null;
+    },
+    /** 一轮分拣完成后：板上剩余元件先置为待选 0 个，方便用户直接点选下一个要分拣的元件 */
+    clearForNextRound() {
+      const parts = getParts() ?? [];
+      pickedIds = parts.length ? new Set() : null;
+      order = null;
+      const body = bodyElement?.isConnected ? bodyElement : null;
+      if (body) refresh(body, { inputs: true });
+    },
+    /** 重置分拣时静默恢复全选（由调用方统一刷新规划） */
+    resetAllSilent() {
+      pickedIds = null;
+      order = null;
+      const body = bodyElement?.isConnected ? bodyElement : null;
+      if (body) refresh(body, { inputs: true });
+    },
     /** 重新规划之后调用：按最新的规划结果刷新"能拣几个 / 拿不到几个" */
     sync() {
       if (bodyElement?.isConnected) refresh(bodyElement);

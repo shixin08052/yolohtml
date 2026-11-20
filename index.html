@@ -111,7 +111,15 @@
               <button type="button" class="icon-btn text" id="btn-arm-debug" aria-pressed="false" title="点击底板或桌面，机械臂移动到该点正上方">机械臂调试</button>
               <button type="button" class="icon-btn text" id="btn-transition" disabled>转场</button>
               <button type="button" class="icon-btn text" id="btn-compare" aria-pressed="false" disabled>对比</button>
-              <span class="tip" tabindex="0" role="note" aria-label="操作提示：左键旋转 · 右键平移 · 滚轮缩放"><span class="tip-icon" aria-hidden="true">?</span><span class="tip-body" aria-hidden="true"><span class="hint-mouse">左键旋转 · 右键平移 · 滚轮缩放</span><span class="hint-touch">单指旋转 · 双指缩放 / 平移</span></span></span>
+              <span class="tip" tabindex="0" role="note" aria-label="操作提示：点击元件勾选分拣 · 左键旋转 · 右键平移 · 滚轮缩放"><span class="tip-icon" aria-hidden="true">?</span><span class="tip-body" aria-hidden="true"><span class="hint-mouse">点击元件勾选分拣 · 左键旋转 · 右键平移 · 滚轮缩放</span><span class="hint-touch">点按元件勾选分拣 · 单指旋转 · 双指缩放 / 平移</span></span></span>
+            </div>
+            <!-- 3D 视图直接点选分拣条 -->
+            <div id="pick-bar" class="pick-bar" role="region" aria-label="3D 元件点选分拣" hidden>
+              <span id="pick-bar-info" class="pick-bar-info">点击元件勾选分拣</span>
+              <span class="pick-bar-sep" aria-hidden="true"></span>
+              <button type="button" class="icon-btn text" id="pick-all">全选</button>
+              <button type="button" class="icon-btn text" id="pick-invert">反选</button>
+              <button type="button" class="icon-btn text" id="pick-none">清空</button>
             </div>
           </section>
         </div>

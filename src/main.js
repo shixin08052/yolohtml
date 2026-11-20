@@ -142,42 +142,74 @@ const phone = createPhone();
 world.scene.add(phone.group);
 const partsLayer = createPartsLayer({ requestRender: world.requestRender });
 world.scene.add(partsLayer.group);
+let orderPanel = null;
 $('#show-part-labels').addEventListener('change', (e) => partsLayer.setLabelsVisible(e.target.checked));
-/* 3D 零件标签平时只显示名称；鼠标靠近某个零件时展开坐标和置信度（只改 DOM 类名，不触发重新渲染） */
+
+/** 当前是否处于可在 3D 视图中直接点击勾选元件的状态 */
+const canPickIn3D = () =>
+  world.available &&
+  stageIndex(store.state.stage) >= stageIndex('sceneBuilt') &&
+  (store.state.parts?.length ?? 0) > 0 &&
+  !armDebug &&
+  !sortActive() &&
+  transition.mode === 'idle' &&
+  !needConfirm();
+
+/** 3D 视图坐标拾取零件 ID：先检查可见标签命中，再做 3D 射线与板面 11 mm 吸附 */
+function pickPartAtClient(clientX, clientY) {
+  const host = $('#three-container');
+  for (const tag of host.querySelectorAll('.part-tag')) {
+    if (tag.style.display === 'none' || tag.classList.contains('tag-hidden')) continue;
+    const r = tag.getBoundingClientRect();
+    if (r.width && clientX >= r.left - 3 && clientX <= r.right + 3 && clientY >= r.top - 3 && clientY <= r.bottom + 3) {
+      const id = Number(tag.dataset.partId);
+      if (Number.isFinite(id)) return id;
+    }
+  }
+  return partsLayer.hitTest(world.raycasterFromClient(clientX, clientY), world.pickPlane(clientX, clientY, 0));
+}
+
+/* 3D 零件悬停联动：靠近或指向零件 / 标签时展开坐标置信度、高亮底座光环并切为手型光标 */
 {
   const host = $('#three-container');
-  let hovered = null;
   let pending = null;
-  const setHover = (el) => {
-    if (el === hovered) return;
-    hovered?.classList.remove('is-hover');
-    hovered = el;
-    hovered?.classList.add('is-hover');
+  const clearHover = () => {
+    partsLayer.setHighlighted(null);
+    world.renderer.domElement.style.cursor = '';
   };
   host.addEventListener('pointermove', (e) => {
-    if (e.pointerType === 'touch' || e.buttons) return setHover(null); // 拖动视角时不弹
+    if (e.pointerType === 'touch' || e.buttons) return clearHover(); // 拖动视角时不弹
     if (pending) return;
     pending = requestAnimationFrame(() => {
       pending = null;
-      let best = null;
-      let bestD = 56;
+      const pickable = canPickIn3D();
+      const directId = pickable ? pickPartAtClient(e.clientX, e.clientY) : null;
+      if (directId != null) {
+        partsLayer.setHighlighted(directId);
+        world.renderer.domElement.style.cursor = 'pointer';
+        return;
+      }
+      world.renderer.domElement.style.cursor = '';
+      let bestId = null;
+      let bestD = 48;
       for (const tag of host.querySelectorAll('.part-tag')) {
         if (tag.style.display === 'none') continue;
         const r = tag.getBoundingClientRect();
         if (!r.width) continue;
-        // 标签底边中点就在零件正上方：以它为准，往下多给一点（零件本体）
         const d = Math.hypot(e.clientX - (r.left + r.width / 2), Math.max(0, e.clientY - r.bottom - 24, r.top - e.clientY));
         if (d < bestD) {
           bestD = d;
-          best = tag;
+          bestId = Number(tag.dataset.partId);
         }
       }
-      setHover(best);
+      partsLayer.setHighlighted(Number.isFinite(bestId) ? bestId : null);
     });
   });
-  host.addEventListener('pointerleave', () => setHover(null));
+  host.addEventListener('pointerleave', clearHover);
 }
 let transitionPending = false; // 有新位姿、还没在 3D 视图里播过转场
+/** 虚拟手机是否已在开始分拣后永久收起（同一张照片只在首次识别完、未开始分拣前显示手机） */
+let phoneDismissed = false;
 
 /** 演示模式：只显示流程图；识别后先给出正视图请用户确认，确认后才转场建模（地址带 ?demo 或点顶栏按钮打开） */
 let demoMode = false;
@@ -200,8 +232,10 @@ const transition = createTransition({
   phone,
   onGrow: (t) => partsLayer.setGrow(t),
   onModeChange: (mode) => {
+    if (phoneDismissed) phone.setOpacity(0);
     $('#btn-compare').setAttribute('aria-pressed', String(mode === 'compare'));
-    $('#btn-transition').disabled = mode === 'playing' || !store.state.pose;
+    $('#btn-compare').disabled = phoneDismissed || !store.state.pose;
+    $('#btn-transition').disabled = phoneDismissed || mode === 'playing' || !store.state.pose;
     $('#three-reset').disabled = mode !== 'idle';
     renderStatus();
   },
@@ -213,7 +247,7 @@ const poseInputs = () => {
 };
 
 function playTransition() {
-  if (!world.available || !store.state.pose) return;
+  if (!world.available || !store.state.pose || phoneDismissed) return;
   // 一键流程到转场开始为止（场景还没建好时不算）
   if (run?.until === 'transition' && store.state.stage === 'sceneBuilt') endRun();
   // 场景还没建好（检测还在跑）时先播一遍，建好后切到 3D 视图时再播一次（那次才结束一键流程的计时）
@@ -225,13 +259,15 @@ function playTransition() {
 
 $('#btn-transition').addEventListener('click', playTransition);
 $('#btn-compare').addEventListener('click', () => {
-  if (!store.state.pose) return;
+  if (!store.state.pose || phoneDismissed) return;
   transition.compare(transition.mode !== 'compare', poseInputs());
 });
 
 store.on('stage:posed', (st) => {
+  phoneDismissed = false;
   phone.setPose({ pose: st.pose, intrinsics: st.intrinsics, orientation: st.image.exif.orientation });
   stopSorting();
+  clearIncrementalSortState();
   partsLayer.clear();
   // 全景视角要把手机（光心周围 ±80 mm）也装进画面
   const [X, Y, Z] = st.pose.position;
@@ -317,6 +353,7 @@ function setArmDebug(on) {
     armTarget.hide();
     panel.remove('arm');
   }
+  syncPickBar();
 }
 $('#btn-arm-debug').addEventListener('click', () => setArmDebug(!armDebug));
 
@@ -372,21 +409,31 @@ function armGoto(X, Y) {
   arm.animatePath(viaHome ? [arm.homeAngles, s.angles] : [s.angles]).catch(() => {});
 }
 
-// 区分点击与拖动（拖动是在转视角）
+// 区分点击与拖动（拖动是在转视角；短点击在调试模式下移动机械臂，在正常建模后点选要分拣的元件）
 {
   const el = world.renderer.domElement;
   let down = null;
   el.addEventListener('pointerdown', (e) => {
-    down = e.isPrimary ? { x: e.clientX, y: e.clientY, t: performance.now() } : null;
+    down = e.isPrimary && e.button === 0 ? { x: e.clientX, y: e.clientY, t: performance.now() } : null;
   });
   el.addEventListener('pointerup', (e) => {
-    if (!armDebug || !down || transition.mode !== 'idle') return;
+    if (!down || transition.mode !== 'idle') return;
     const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y);
     const quick = performance.now() - down.t < 500;
     down = null;
     if (moved > 6 || !quick) return;
-    const P = world.pickPlane(e.clientX, e.clientY, 0);
-    if (P) armGoto(P[0], P[1]);
+    if (armDebug) {
+      const P = world.pickPlane(e.clientX, e.clientY, 0);
+      if (P) armGoto(P[0], P[1]);
+      return;
+    }
+    if (canPickIn3D()) {
+      const hitId = pickPartAtClient(e.clientX, e.clientY);
+      if (hitId != null) {
+        orderPanel.togglePart(hitId);
+        flushPlan();
+      }
+    }
   });
 }
 
@@ -725,6 +772,7 @@ store.on('stage:imageLoaded', (st) => {
   debugView.setOverlay('pose', null);
   $('#pose-toggle').hidden = true;
   transition.cancel();
+  phoneDismissed = false;
   phone.clear();
   world.setFocusPoints(null);
   transitionPending = false;
@@ -735,6 +783,7 @@ store.on('stage:imageLoaded', (st) => {
   $('#btn-compare').disabled = true;
   panel.remove('pose');
   stopSorting();
+  clearIncrementalSortState();
   panel.remove('sort');
   sortPlan = null;
   sortPlayer.load([]);
@@ -1521,6 +1570,9 @@ function prepareScene() {
 /** 第二段：写入零件、建 3D 模型 */
 function commitParts({ parts }) {
   stopSorting();
+  clearIncrementalSortState();
+  initialParts = parts.map((p) => ({ ...p }));
+  orderPanel?.clearPickedIds();
   store.advance('detected', { detections: detResult.detections, parts });
   partsLayer.setParts(parts, parallaxOn);
 }
@@ -1728,8 +1780,13 @@ function refineYawByShape(parts) {
 
 function setParallax(on) {
   parallaxOn = on;
+  const hadSorted = sortedPartIds.size > 0;
   // 分拣进行中或已经动过零件：先复原，再切换
-  if (stopSorting()) partsLayer.setParts(store.state.parts, !on);
+  if (stopSorting() || hadSorted) {
+    clearIncrementalSortState();
+    if (initialParts) store.state.parts = initialParts.map((p) => ({ ...p }));
+    partsLayer.setParts(store.state.parts, !on);
+  }
   if (store.state.parts) store.state.parts = selectMethod(store.state.parts, on);
   partsLayer.animateMethod(on);
   renderDetectSection(lastMapping);
@@ -1939,10 +1996,27 @@ const sortPlayer = createSortPlayer({
   },
   onState: (state) => onSortState(state),
 });
+/** 识别完成时的原始零件副本（点"重置"时恢复到这份初始状态） */
+let initialParts = null;
+/** 已在完成轮次中分拣入盒的零件 ID 集合（保留在料盒内，除非用户点"重置"） */
+const sortedPartIds = new Set();
+/** 各料盒（按 bin.key）中已落定的零件列表：{ fp, x, y, z, yaw, height, partId }[] */
+const placedByBinKey = new Map();
+/** 已落入零件的料盒（按 bin.key 锁定格位，后续轮次保留在桌面上且不换位） */
+const lockedBins = new Map();
+/** 当前底板上尚未入盒的剩余零件 */
+const unsortedParts = () => (store.state.parts ? store.state.parts.filter((p) => !sortedPartIds.has(p.id)) : null);
+
+function clearIncrementalSortState() {
+  sortedPartIds.clear();
+  placedByBinKey.clear();
+  lockedBins.clear();
+}
+
 /** 元件清单（清点 + 自选清单 + AI 帮填）：清单变了就重新规划 */
-const orderPanel = createOrderPanel({
+orderPanel = createOrderPanel({
   panel,
-  getParts: () => (stageIndex(store.state.stage) >= stageIndex('sceneBuilt') ? store.state.parts : null),
+  getParts: () => (stageIndex(store.state.stage) >= stageIndex('sceneBuilt') ? unsortedParts() : null),
   getPlanningOptions: () => ({ footprints: partFootprints(), arm: ARM }),
   getStuck: () => inventory(sortPlan?.skipped ?? []),
   onChange: () => scheduleOrderPlan(),
@@ -1965,13 +2039,13 @@ const resultCard = createResultCard($('#view-three'), {
 const partFootprints = () => Object.fromEntries(CLASSES.map((c) => [c.id, partFootprint(c.id)]));
 /** 当前规划：{ tasks, skipped, segs } */
 let sortPlan = null;
-/** 分拣是否动过场景（零件被拿走、机械臂离开初始姿态） */
+/** 当前这一轮分拣是否正在动场景（中途被打断时只回退当前未完成的一轮，已完成的轮次保留） */
 let sortTouched = false;
 
 const sortActive = () => sortPlayer.state === 'running' || sortPlayer.state === 'paused';
 
 /**
- * 停止分拣并复原机械臂；返回是否动过零件（调用方需要重建零件）
+ * 停止当前正在播放的分拣并复原机械臂；返回当前这一轮是否未完成就被打断
  * @returns {boolean}
  */
 function stopSorting() {
@@ -1986,6 +2060,59 @@ function stopSorting() {
   return touched;
 }
 
+/** 将 3D 零件恢复到最近一次已完成轮次的状态（已入盒的留在盒内，板上的留在当前位置） */
+function restoreCommittedScene() {
+  if (!store.state.parts) return;
+  partsLayer.setParts(store.state.parts, parallaxOn);
+  for (const list of placedByBinKey.values()) {
+    for (const item of list) {
+      partsLayer.setSorted(item.partId, [item.x, item.y, item.z, item.yaw]);
+    }
+  }
+}
+
+/** 一轮分拣播放完成时：把本轮入盒的零件与板上被拨开/挪位的零件持久化提交，后续选别的零件继续捡时不回退 */
+function commitCompletedRound() {
+  if (!sortPlan || !store.state.parts) return;
+  const footprints = partFootprints();
+  const byId = new Map(store.state.parts.map((p) => [p.id, { ...p }]));
+  for (const t of sortPlan.tasks) {
+    if (t.kind === 'push' || t.kind === 'relocate') {
+      const [x, y, , yawDeg] = t.partTo;
+      const cur = byId.get(t.partId);
+      if (cur && !sortedPartIds.has(t.partId)) {
+        const nextYaw = yawDeg ?? cur.rotDeg;
+        byId.set(t.partId, {
+          ...cur,
+          x,
+          y,
+          xPlane: x,
+          yPlane: y,
+          xParallax: x,
+          yParallax: y,
+          rotDeg: nextYaw,
+        });
+        partsLayer.updateBoardPart(t.partId, [x, y, nextYaw]);
+      }
+    } else if (t.kind === 'pick') {
+      sortedPartIds.add(t.partId);
+      const bin = sortPlan.bins.find((b) => b.id === t.binId);
+      const part = byId.get(t.partId);
+      const pose = t.drop?.to ?? [...t.to.slice(0, 2), 0, t.partYawDeg ?? part?.rotDeg ?? 0];
+      partsLayer.setSorted(t.partId, pose);
+      if (bin && part) {
+        lockedBins.set(bin.key, bin);
+        const fp = footprints[part.cls];
+        const list = placedByBinKey.get(bin.key) ?? [];
+        list.push({ fp, x: pose[0], y: pose[1], z: pose[2], yaw: pose[3], height: fp.height, partId: part.id });
+        placedByBinKey.set(bin.key, list);
+      }
+    }
+  }
+  store.state.parts = store.state.parts.map((p) => byId.get(p.id) ?? p);
+  sortTouched = false;
+}
+
 /**
  * 清单改了：稍后重新规划。
  * 元件挤在一起时规划要 0.2–0.5 秒，直接算会让加减按钮每点一下卡一下；这里先让数字和界面更新，
@@ -1993,7 +2120,11 @@ function stopSorting() {
  */
 let planTimer = 0;
 function scheduleOrderPlan() {
-  if (sortTouched && stopSorting()) partsLayer.setParts(store.state.parts, parallaxOn);
+  resultCard.hide();
+  if (sortTouched && stopSorting()) restoreCommittedScene();
+  const sel = orderPanel.selection();
+  partsLayer.setSelectedIds(sel.ids, { custom: sel.custom });
+  syncPickBar();
   document.querySelector('#info-panel [data-key="sort"]')?.classList.add('is-planning');
   clearTimeout(planTimer);
   planTimer = setTimeout(flushPlan, PLAN_DELAY_MS);
@@ -2013,7 +2144,7 @@ function refreshPlan({ fromOrder = false } = {}) {
   document.querySelector('#info-panel [data-key="sort"]')?.classList.remove('is-planning');
   const { parts } = store.state;
   if (!parts) return;
-  // 清单分区按当前零件重建；清单自己引起的重新规划不重建（免得输入框丢焦点）
+  // 清单分区按当前剩余板上零件重建；清单自己引起的重新规划不重建（免得输入框丢焦点）
   if (!fromOrder) orderPanel.render();
   if (!world.available) {
     sortPlan = null;
@@ -2025,15 +2156,23 @@ function refreshPlan({ fromOrder = false } = {}) {
   }
   const start = fkWorld(arm.homeAngles, ARM);
   const footprints = partFootprints();
-  // 料盒按需生成：电阻一个，LED 按颜色各一个
-  // 自选清单：只拣选中的零件，料盒也只为它们生成；没选中的留在板上
+  const remaining = unsortedParts() ?? [];
+  // 料盒按需生成：已落入零件的料盒锁定保留，新选中的零件按需补齐料盒
   const picked = orderPanel.selection();
-  const { tasks, skipped, bins: binList, moved } = planForOrder(parts, picked, ARM, { start, footprints });
+  partsLayer.setSelectedIds(picked.ids, { custom: picked.custom });
+  const { tasks, skipped, bins: binList, moved } = planForOrder(remaining, picked, ARM, {
+    start,
+    footprints,
+    existingBins: [...lockedBins.values()],
+    initialFill: placedByBinKey,
+  });
   bins.setBins(binList);
   const skippedIds = new Set(skipped.map((p) => p.id));
-  store.state.parts = parts.map((p) => ({ ...p, reachable: !skippedIds.has(p.id) }));
+  store.state.parts = parts.map((p) => ({ ...p, reachable: sortedPartIds.has(p.id) ? true : !skippedIds.has(p.id) }));
   partsLayer.markUnreachable([...skippedIds]);
-  const segs = buildSequence(tasks, store.state.parts, ARM, { startAngles: arm.homeAngles, homeAngles: arm.homeAngles });
+  const segs = tasks.length
+    ? buildSequence(tasks, store.state.parts, ARM, { startAngles: arm.homeAngles, homeAngles: arm.homeAngles })
+    : [];
   sortPlan = { tasks, skipped, segs, bins: binList, order: picked, moved };
   orderPanel.sync();
   sortPlayer.load(segs);
@@ -2042,9 +2181,20 @@ function refreshPlan({ fromOrder = false } = {}) {
   updateExportButtons();
 }
 
-/** 重置：零件回到原位，机械臂回到初始姿态 */
+/** 重置：所有零件（含已入盒与被挪动的）回到初始识别位置，机械臂回到初始姿态（手机不再出现） */
 function resetSorting(opts) {
-  if (stopSorting()) partsLayer.setParts(store.state.parts, parallaxOn);
+  const hadSorted = sortedPartIds.size > 0;
+  const touched = stopSorting();
+  clearIncrementalSortState();
+  if (initialParts) {
+    store.state.parts = selectMethod(initialParts.map((p) => ({ ...p })), parallaxOn);
+  }
+  if (touched || hadSorted) {
+    partsLayer.setParts(store.state.parts, parallaxOn);
+  }
+  orderPanel?.resetAllSilent();
+  resultCard.hide();
+  if (phoneDismissed) phone.setOpacity(0);
   refreshPlan(opts);
 }
 
@@ -2062,19 +2212,29 @@ function sortViewPoints() {
 
 function startSorting() {
   flushPlan();
-  if (!world.available || needConfirm() || loadingPhoto || detResult?.pending || !sortPlan?.tasks.length) return;
-  if (sortPlayer.state === 'done') resetSorting();
+  if (!world.available || needConfirm() || loadingPhoto || detResult?.pending) return;
+  // 只有当板上所有元件都已分拣入盒、用户点"重新开始"时，才重置回初始状态
+  if ((unsortedParts()?.length ?? 0) === 0 && sortedPartIds.size > 0) {
+    resetSorting();
+  }
+  if (!sortPlan?.tasks.length) return;
   setArmDebug(false);
   armTarget.hide();
   transition.cancel();
-  if (store.state.stage === 'sceneBuilt') store.advance('sorting', { tasks: sortPlan.tasks, skipped: sortPlan.skipped });
+  if (store.state.stage === 'sceneBuilt' || store.state.stage === 'done') {
+    store.advance('sorting', { tasks: sortPlan.tasks, skipped: sortPlan.skipped });
+  }
   tabs.select('three');
   // 手机上滚到标签页处：3D 画面正好落在顶部和底部控制条之间
   if (window.matchMedia('(max-width: 900px)').matches) $('.tabs').scrollIntoView({ block: 'start', behavior: 'smooth' });
   sortTouched = true;
   resultCard.hide();
-  // 手机悬在底板上方会挡住视线：分拣时先隐藏，重置后恢复
+  // 手机只能在第一次识别完、没开始分拣之前出现：一旦开始分拣永久隐藏
+  phoneDismissed = true;
   phone.setOpacity(0);
+  world.setFocusPoints(null);
+  $('#btn-transition').disabled = true;
+  $('#btn-compare').disabled = true;
   world.flyToPoints(sortViewPoints(), { azimuthDeg: 18, elevationDeg: 46 });
   sortPlayer.start();
 }
@@ -2132,7 +2292,9 @@ function renderSortSection() {
   const nPush = tasks.filter((t) => t.kind === 'push').length;
   const nRelocate = tasks.filter((t) => t.kind === 'relocate').length;
   const ord = sortPlan.order;
-  let html = `<p class="summary">${ord?.custom ? '按清单' : '共'} <b>${nPick}</b> 个零件待分拣${sortPlan.moved.size ? `<span class="muted">；${sortPlan.moved.size} 个挡路元件会挪开并留在板上</span>` : ''}${ord?.totalShort ? `<span class="bad">（清单还缺 ${ord.totalShort} 个）</span>` : ''}${nPush ? `<span class="muted">（拨开 ${nPush} 次）</span>` : ''}${nRelocate ? `<span class="muted">（夹起挪位 ${nRelocate} 次）</span>` : ''}${skipped.length ? `，<span class="bad">${skipped.length} 个跳过</span>` : ''}</p>`;
+  const nSorted = sortedPartIds.size;
+  const sortedNote = nSorted > 0 ? `<span class="muted">（已入盒 ${nSorted} 个）</span>` : '';
+  let html = `<p class="summary">${ord?.custom ? '按清单' : '共'} <b>${nPick}</b> 个零件待分拣${sortedNote}${sortPlan.moved.size ? `<span class="muted">；${sortPlan.moved.size} 个挡路元件会挪开并留在板上</span>` : ''}${ord?.totalShort ? `<span class="bad">（清单还缺 ${ord.totalShort} 个）</span>` : ''}${nPush ? `<span class="muted">（拨开 ${nPush} 次）</span>` : ''}${nRelocate ? `<span class="muted">（夹起挪位 ${nRelocate} 次）</span>` : ''}${skipped.length ? `，<span class="bad">${skipped.length} 个跳过</span>` : ''}</p>`;
   html += `<div class="sort-controls">
     <button type="button" class="btn btn-primary btn-small" id="sort-start">开始</button>
     <button type="button" class="btn btn-small" id="sort-pause" disabled>暂停</button>
@@ -2189,28 +2351,77 @@ function updateSortProgress(task, phase) {
   const ph = body.querySelector('#sort-phase');
   if (ph) {
     const nPick = sortPlan.tasks.filter((t) => t.kind === 'pick').length;
-    ph.textContent = !sortTouched ? '等待开始' : task == null ? (finished ? `全部完成（${nPick} 个）` : phase) : `第 ${task + 1} / ${n} 步 · ${phase}`;
+    ph.textContent = !sortTouched && sortPlayer.state !== 'done'
+      ? (sortedPartIds.size > 0
+        ? (nPick > 0 ? `已入盒 ${sortedPartIds.size} 个 · 待分拣 ${nPick} 个` : `已入盒 ${sortedPartIds.size} 个 · 请点选要分拣的元件`)
+        : '等待开始')
+      : task == null
+        ? (finished ? `全部完成（本次 ${nPick} 个${sortedPartIds.size > nPick ? `，累计 ${sortedPartIds.size} 个` : ''}）` : phase)
+        : `第 ${task + 1} / ${n} 步 · ${phase}`;
     $('#dock-phase').textContent = ph.textContent;
   }
 }
 
+/** 同步 3D 视图底部点选分拣条的显隐、计数与按钮可用态 */
+function syncPickBar() {
+  const bar = $('#pick-bar');
+  if (!bar || !orderPanel) return;
+  const show = canPickIn3D();
+  bar.hidden = !show;
+  if (!show) return;
+  const totalAll = store.state.parts?.length ?? 0;
+  const nSorted = sortedPartIds.size;
+  const remaining = Math.max(0, totalAll - nSorted);
+  const sel = orderPanel.selection();
+  const n = sel.ids.size;
+  if (remaining === 0 && nSorted > 0) {
+    $('#pick-bar-info').innerHTML = `全部 <b>${totalAll}</b> 个元件已入盒 · 点"重置"可恢复初始状态`;
+  } else if (nSorted > 0) {
+    $('#pick-bar-info').innerHTML = n
+      ? `已入盒 <b>${nSorted}</b> · 待分拣 <b>${n}</b> / ${remaining} · 点击 3D 元件可加选`
+      : `已入盒 <b>${nSorted}</b> · 板上剩 <b>${remaining}</b> 个 · 点击 3D 元件继续选`;
+  } else {
+    $('#pick-bar-info').innerHTML = n
+      ? `已选 <b>${n}</b> / ${remaining} · 点击 3D 元件可勾选`
+      : `已选 <b>0</b> / ${remaining} · 点击 3D 元件加入分拣`;
+  }
+  $('#pick-all').disabled = remaining === 0 || n === remaining;
+  $('#pick-invert').disabled = remaining === 0;
+  $('#pick-none').disabled = remaining === 0 || n === 0;
+}
+$('#pick-all')?.addEventListener('click', () => { orderPanel.selectAll(); flushPlan(); });
+$('#pick-invert')?.addEventListener('click', () => { orderPanel.invertParts(); flushPlan(); });
+$('#pick-none')?.addEventListener('click', () => { orderPanel.selectNone(); flushPlan(); });
+
 function syncSortControls(state = sortPlayer.state) {
   const blocked = loadingPhoto || detResult?.pending || needConfirm() || !world.available;
+  const remaining = unsortedParts()?.length ?? 0;
+  const allSorted = sortedPartIds.size > 0 && remaining === 0;
+  const hasTasks = (sortPlan?.tasks.length ?? 0) > 0;
+  const canStart = !blocked && state !== 'running' && state !== 'paused' && (allSorted || (state !== 'done' && hasTasks));
+  const startLabel = allSorted ? '重新开始' : sortedPartIds.size > 0 ? '继续分拣' : '开始分拣';
+  const sideStartLabel = allSorted ? '重新开始' : sortedPartIds.size > 0 ? '继续分拣' : '开始';
   $('#sort-dock').hidden = !world.available || !sortPlan || needConfirm();
-  $('#dock-start').disabled = blocked || state === 'running' || state === 'paused' || !sortPlan?.tasks.length;
-  $('#dock-start').textContent = state === 'done' ? '重新开始' : '开始分拣';
+  $('#dock-start').disabled = !canStart;
+  $('#dock-start').textContent = startLabel;
   $('#dock-pause').disabled = !(state === 'running' || state === 'paused');
   $('#dock-pause').textContent = state === 'paused' ? '继续' : '暂停';
-  if (state === 'idle') $('#dock-phase').textContent = '等待开始';
+  if (state === 'idle') {
+    const nPick = sortPlan?.tasks.filter((t) => t.kind === 'pick').length ?? 0;
+    $('#dock-phase').textContent = sortedPartIds.size > 0
+      ? (nPick > 0 ? `已入盒 ${sortedPartIds.size} 个 · 待分拣 ${nPick} 个` : `已入盒 ${sortedPartIds.size} 个 · 请点选要分拣的元件`)
+      : '等待开始';
+  }
   const body = document.querySelector('#info-panel [data-key="sort"]');
   if (body) {
     const start = body.querySelector('#sort-start');
     const pause = body.querySelector('#sort-pause');
-    start.disabled = blocked || state === 'running' || state === 'paused' || !sortPlan?.tasks.length;
-    start.textContent = state === 'done' ? '重新开始' : '开始';
+    start.disabled = !canStart;
+    start.textContent = sideStartLabel;
     pause.disabled = !(state === 'running' || state === 'paused');
     pause.textContent = state === 'paused' ? '继续' : '暂停';
   }
+  syncPickBar();
 }
 
 /** 分拣实际播放了多久（ms，不含暂停） */
@@ -2245,32 +2456,51 @@ function onSortState(state) {
       sortElapsed = 0;
       $('#dock-joints').hidden = true;
       resultCard.hide();
-      if (store.state.pose && transition.mode === 'idle') phone.setOpacity(1);
+      // 手机只能在第一次识别完、未开始分拣前出现；开始分拣后永久隐藏
+      if (!phoneDismissed && store.state.pose && transition.mode === 'idle') phone.setOpacity(1);
+      else phone.setOpacity(0);
     }
   }
-  renderStatus();
   if (state === 'done') {
-    updateSortProgress(null, '完成');
-    if (store.state.stage === 'sorting') store.advance('done');
     const nPick = sortPlan.tasks.filter((t) => t.kind === 'pick').length;
     const nPush = sortPlan.tasks.filter((t) => t.kind === 'push').length;
     const nRelocate = sortPlan.tasks.filter((t) => t.kind === 'relocate').length;
-    panel.message(`分拣完成：${nPick} 个零件${nPush ? `，拨开 ${nPush} 次` : ''}${nRelocate ? `，挪位 ${nRelocate} 次` : ''}${sortPlan.skipped.length ? `，跳过 ${sortPlan.skipped.length} 个` : ''}`, 'ok');
-    showJoints();
     const ord = sortPlan.order;
+    const roundBins = sortPlan.bins.map((b) => ({
+      label: b.label,
+      hex: b.hex,
+      n: sortPlan.tasks.filter((t) => t.kind === 'pick' && t.binId === b.id).length,
+    })).filter((b) => b.n > 0);
+    const roundMoved = sortPlan.moved.size;
+    const roundSkipped = sortPlan.skipped.map((p) => ({ name: partName(p), reason: p.skipReason }));
+    const roundShort = ord?.custom ? ord.lines.filter((l) => l.short > 0) : [];
+
+    commitCompletedRound();
+    updateSortProgress(null, '完成');
+    if (store.state.stage === 'sorting') store.advance('done');
+    const remainingCount = unsortedParts()?.length ?? 0;
+    if (remainingCount > 0) {
+      orderPanel.clearForNextRound();
+      partsLayer.setSelectedIds(new Set(), { custom: true });
+    }
+    renderStatus();
+    panel.message(`分拣完成：本次入盒 ${nPick} 个零件${sortedPartIds.size > nPick ? `（累计入盒 ${sortedPartIds.size} 个）` : ''}${remainingCount ? `，板上还剩 ${remainingCount} 个可继续点选分拣` : ''}${nPush ? `，拨开 ${nPush} 次` : ''}${nRelocate ? `，挪位 ${nRelocate} 次` : ''}${roundSkipped.length ? `，跳过 ${roundSkipped.length} 个` : ''}`, 'ok');
+    showJoints();
     resultCard.show({
-      bins: sortPlan.bins.map((b) => ({ label: b.label, hex: b.hex, n: sortPlan.tasks.filter((t) => t.kind === 'pick' && t.binId === b.id).length })),
+      bins: roundBins,
       picked: nPick,
       pushes: nPush,
       relocations: nRelocate,
-      moved: sortPlan.moved.size,
-      skipped: sortPlan.skipped.map((p) => ({ name: partName(p), reason: p.skipReason })),
+      moved: roundMoved,
+      skipped: roundSkipped,
       seconds: sortElapsed / 1000,
       speed: sortPlayer.speed,
-      short: ord?.custom ? ord.lines.filter((l) => l.short > 0) : [],
-      left: ord?.custom ? store.state.parts.length - ord.ids.size : 0,
+      short: roundShort,
+      left: remainingCount,
     });
+    return;
   }
+  renderStatus();
 }
 
 /* ------------------------------------------------------------------ */
@@ -2647,8 +2877,8 @@ function setDemoMode(on) {
   }
   updatePoseOverlay();
   updateTruthOverlay();
-  // 3D 零件标签带坐标和置信度，演示时不显示
-  partsLayer.setLabelsVisible(!on && $('#show-part-labels').checked);
+  // 3D 零件标签在普通模式与演示模式下均显示勾选框与元件名（坐标与置信度仅在悬停时展开）
+  partsLayer.setLabelsVisible($('#show-part-labels').checked);
   const built = stageIndex(store.state.stage) >= stageIndex('sceneBuilt');
   if (on) {
     setArmDebug(false);

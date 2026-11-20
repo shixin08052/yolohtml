@@ -93,7 +93,7 @@ export const BLOCKER_RANGE = 30;
  *     gap：推时夹爪的开口（0 合拢；张到最大时只用一根手指拨）
  *     start / end：合拢的指尖推的起止点；partFrom / partTo：零件的 [x, y, z, 朝向°]
  */
-export function plan(parts, bins, arm, { start = [arm.base[0], arm.base[1], 0], footprints = {}, board = BOARD, only = null } = {}) {
+export function plan(parts, bins, arm, { start = [arm.base[0], arm.base[1], 0], footprints = {}, board = BOARD, only = null, initialFill = null } = {}) {
   const skipped = [];
   const candidates = [];
   const fps = {};
@@ -134,6 +134,12 @@ export function plan(parts, bins, arm, { start = [arm.base[0], arm.base[1], 0], 
   // 贪心最近邻（只在下得去的零件里挑）；距离相同按零件 id 排
   const tasks = [];
   const fill = new Map(); // binId → 已落在盒里的零件 [{ fp, x, y, yaw, z, height }]
+  if (initialFill) {
+    for (const b of bins) {
+      const prev = initialFill.get(b.key) ?? initialFill.get(b.id);
+      if (prev?.length) fill.set(b.id, [...prev]);
+    }
+  }
   const pushes = new Map(); // 零件 id → 拨过几次
   const parked = new Set(); // 暂放过的障碍固定在空位，避免在依赖环里反复搬同一颗
   // 解障动作先在内存中试排；只有后续确实成功取件入盒，才提交这一段。

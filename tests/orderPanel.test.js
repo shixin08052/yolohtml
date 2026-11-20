@@ -252,4 +252,35 @@ describe('AI 清单回填和缓存控件', () => {
     expect(control.order).toEqual(before);
     expect(field('resistor').value).toBe('5');
   });
+
+  it('3D 视图点选单个元件、清空、反选、全选与右侧清单数量双向同步', () => {
+    const { control, onChange } = mount();
+    // 默认全选 3 个（id: 0 电阻, 1 红LED, 2 蓝LED）
+    expect([...control.selection().ids]).toEqual([0, 1, 2]);
+    // 取消勾选 id=1（红 LED）
+    control.togglePart(1);
+    expect(control.selection().byIds).toBe(true);
+    expect([...control.selection().ids]).toEqual([0, 2]);
+    expect(values()).toMatchObject({ resistor: 1, 'led-red': 0, 'led-blue': 1 });
+    expect(document.querySelector('.order-summary').textContent).toContain('3D 已点选 2 / 3');
+    // 反选 → 只剩 id=1
+    control.invertParts();
+    expect([...control.selection().ids]).toEqual([1]);
+    expect(values()).toMatchObject({ resistor: 0, 'led-red': 1, 'led-blue': 0 });
+    // 清空 → 0 个
+    control.selectNone();
+    expect(control.selection().ids.size).toBe(0);
+    expect(values()).toMatchObject({ resistor: 0, 'led-red': 0, 'led-blue': 0 });
+    // 点选 id=2（蓝 LED）
+    control.togglePart(2);
+    expect([...control.selection().ids]).toEqual([2]);
+    // 在右侧改数量切回数量清单模式
+    input(field('resistor'), '1');
+    expect(control.selection().byIds).toBe(false);
+    // 全选恢复
+    control.selectAll();
+    expect(control.selection().custom).toBe(false);
+    expect([...control.selection().ids]).toEqual([0, 1, 2]);
+    expect(onChange).toHaveBeenCalled();
+  });
 });

@@ -36,21 +36,33 @@ function binInfo(key) {
 const order = (key) => (key === 'resistor' ? -1 : key === 'led' ? 99 : LED_ORDER.indexOf(key.slice(4)));
 
 /**
- * 这组零件需要的料盒（每种出现过的 binKey 一个），格位按上面的规则分配
+ * 这组零件需要的料盒（每种出现过的 binKey 一个），格位按上面的规则分配。
+ * 若传入 existingBins（前几轮已落入零件的料盒），这些料盒保持原有格位不变，新出现的类别从剩余空闲格位分配。
  * @param {{ cls: number, color?: string }[]} parts
+ * @param {{ key: string, center: number[], size?: number[] }[]} [existingBins]
  * @returns {{ id: number, key: string, cls: number, color?: string, label: string, hex: string, center: number[], size: number[] }[]}
  */
-export function binsFor(parts) {
-  const keys = [...new Set(parts.map(binKey))].sort((a, b) => order(a) - order(b));
-  const free = [...LED_SLOTS];
-  return keys.map((key, id) => {
+export function binsFor(parts, existingBins = []) {
+  const locked = new Map();
+  for (const b of existingBins) {
+    if (b?.key && b?.center && !locked.has(b.key)) locked.set(b.key, b);
+  }
+  const partKeys = [...new Set(parts.map(binKey))];
+  const allKeys = [...new Set([...locked.keys(), ...partKeys])].sort((a, b) => order(a) - order(b));
+  const usedCenters = new Set([...locked.values()].map((b) => `${b.center[0]},${b.center[1]}`));
+  const free = LED_SLOTS.filter((s) => !usedCenters.has(`${BIN_SLOTS[s][0]},${BIN_SLOTS[s][1]}`));
+  return allKeys.map((key, id) => {
+    const prev = locked.get(key);
+    if (prev) {
+      return { id, key, ...binInfo(key), center: prev.center, size: prev.size ?? BIN_SIZE };
+    }
     let slot;
-    if (key === 'resistor') {
+    if (key === 'resistor' && free.includes('leftMid')) {
       slot = 'leftMid';
       free.splice(free.indexOf('leftMid'), 1);
     } else {
       // 电阻在后面才排到时，左中可能已被占：取第一个空的格位
-      slot = free.find((s) => s !== 'leftMid' || !keys.includes('resistor'));
+      slot = free.find((s) => s !== 'leftMid' || !allKeys.includes('resistor')) ?? free[0];
       free.splice(free.indexOf(slot), 1);
     }
     return { id, key, ...binInfo(key), center: BIN_SLOTS[slot], size: BIN_SIZE };

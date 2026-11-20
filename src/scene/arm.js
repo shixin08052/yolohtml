@@ -11,6 +11,7 @@ import { ARM, BOARD } from '../config.js';
 import { toThree } from '../math/coords.js';
 import { ikWorld, lerpAngles } from '../robot/ik.js';
 import { GRIP_MAX } from '../robot/sequence.js';
+import { getSandblastMaps, getBrushedMetalMaps, getMoldStippleMaps } from './pbrTextures.js';
 
 /** 初始姿态：收拢竖起，指尖在底板远边外侧上方（底板坐标），不伸到底板上方 */
 export const ARM_HOME = [148.5, BOARD.height + 10, 200];
@@ -30,13 +31,56 @@ export function moveDuration(a, b) {
  */
 export function createArm({ requestRender }) {
   const { L0, L1, L2, L3 } = ARM;
-  // 材质：烤漆外壳（带一层清漆）、阳极氧化的深色铝件、橙色点缀、抛光钢件（靠环境反射）、橡胶
-  const shell = new THREE.MeshPhysicalMaterial({ color: '#efede8', roughness: 0.42, metalness: 0.05, clearcoat: 0.55, clearcoatRoughness: 0.22 });
-  const dark = new THREE.MeshStandardMaterial({ color: '#33363b', roughness: 0.48, metalness: 0.55, envMapIntensity: 2 });
-  const accent = new THREE.MeshPhysicalMaterial({ color: '#c96442', roughness: 0.36, metalness: 0.1, clearcoat: 0.6, clearcoatRoughness: 0.2 });
-  const steel = new THREE.MeshStandardMaterial({ color: '#b4b9bf', roughness: 0.22, metalness: 1, envMapIntensity: 3 });
-  const rubber = new THREE.MeshStandardMaterial({ color: '#1c1d1f', roughness: 0.95, metalness: 0 });
-  const lamp = new THREE.MeshStandardMaterial({ color: '#7fe3a1', emissive: '#35d07f', emissiveIntensity: 1.6, roughness: 0.4 });
+  // 材质：细微喷粉烤漆外壳、喷砂阳极氧化深灰铝件、工业橙烤漆点缀、车削拉丝钢件、微颗粒橡胶
+  const sand = getSandblastMaps(4, 4);
+  const brushed = getBrushedMetalMaps(2, 2);
+  const stipple = getMoldStippleMaps(5, 5);
+
+  const shell = new THREE.MeshPhysicalMaterial({
+    color: '#eae7e0',
+    roughness: 0.48,
+    metalness: 0.06,
+    bumpMap: stipple?.bumpMap ?? null,
+    bumpScale: 0.14,
+    roughnessMap: stipple?.roughnessMap ?? null,
+    clearcoat: 0.42,
+    clearcoatRoughness: 0.28,
+  });
+  const dark = new THREE.MeshStandardMaterial({
+    color: '#30343a',
+    roughness: 0.52,
+    metalness: 0.65,
+    bumpMap: sand?.bumpMap ?? null,
+    bumpScale: 0.22,
+    roughnessMap: sand?.roughnessMap ?? null,
+    envMapIntensity: 1.9,
+  });
+  const accent = new THREE.MeshPhysicalMaterial({
+    color: '#c96442',
+    roughness: 0.4,
+    metalness: 0.12,
+    bumpMap: sand?.bumpMap ?? null,
+    bumpScale: 0.12,
+    clearcoat: 0.5,
+    clearcoatRoughness: 0.24,
+  });
+  const steel = new THREE.MeshStandardMaterial({
+    color: '#bfc5cc',
+    bumpMap: brushed?.bumpMap ?? null,
+    bumpScale: 0.12,
+    roughnessMap: brushed?.roughnessMap ?? null,
+    roughness: 0.26,
+    metalness: 0.94,
+    envMapIntensity: 2.4,
+  });
+  const rubber = new THREE.MeshStandardMaterial({
+    color: '#1b1d1f',
+    roughness: 0.94,
+    metalness: 0,
+    bumpMap: sand?.bumpMap ?? null,
+    bumpScale: 0.25,
+  });
+  const lamp = new THREE.MeshStandardMaterial({ color: '#7fe3a1', emissive: '#35d07f', emissiveIntensity: 1.6, roughness: 0.35 });
 
   const mesh = (geo, mat) => {
     const m = new THREE.Mesh(geo, mat);
@@ -103,11 +147,20 @@ export function createArm({ requestRender }) {
   group.name = 'arm';
   group.position.copy(toThree(...ARM.base));
 
-  // —— 底座（固定）：带倒角的法兰盘，一圈固定螺栓，底下一圈橡胶垫
+  // —— 底座（固定）：带倒角的法兰盘，一圈固定螺栓，底下一圈橡胶垫，背面带航空线缆接头
   group.add(turned([[0, 0], [50, 0], [50, 5], [48.5, 7.5], [46, 10], [0, 10]], dark));
   const foot = mesh(new THREE.CylinderGeometry(50.6, 50.6, 1.4, 64), rubber);
   foot.position.y = 0.7;
   group.add(foot);
+  // 底座与转台交界处的金属编码器刻度环
+  const encoderRing = mesh(new THREE.CylinderGeometry(39.4, 40.2, 1.4, 64), steel);
+  encoderRing.position.y = 10.1;
+  group.add(encoderRing);
+  // 底座背面（朝 +Y 远端，即 Three.js 的 −z）航空插头护套，与工作台控制器引出的主线束对接
+  const gland = mesh(new THREE.CylinderGeometry(5.5, 6.2, 10, 20), steel);
+  gland.rotation.x = Math.PI / 2;
+  gland.position.set(0, 5.5, -48);
+  group.add(gland);
   for (let i = 0; i < 8; i++) {
     const a = (i / 8) * Math.PI * 2 + Math.PI / 8;
     const bolt = mesh(new THREE.CylinderGeometry(2.1, 2.1, 1.6, 6), steel);
@@ -158,8 +211,26 @@ export function createArm({ requestRender }) {
     shoulder.add(plate);
   }
   shoulder.add(link(10, 40, 20, 34, shell)); // 靠近肩部的横撑（小臂折叠时到不了这里）
-  // 横撑上一条橙色饰线
+  // 横撑上一条橙色饰线与两根不锈钢连接销轴
   shoulder.add(link(14, 36, 20.6, 4, accent));
+  for (const x of [16, 34]) {
+    const pin = joint(2.2, 35.2, steel);
+    pin.position.set(x, 0, 0);
+    shoulder.add(pin);
+  }
+  // 大臂外侧走线软管与理线卡扣（贴在 z = 17.5 一侧，完全处于 ARM_SHAPE 包络半径 22 mm 以内）
+  const upperCable = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(12, 6, 17.2),
+    new THREE.Vector3(L1 * 0.35, 9.5, 17.8),
+    new THREE.Vector3(L1 * 0.72, 9.5, 17.8),
+    new THREE.Vector3(L1 - 10, 5, 17.2),
+  ]);
+  shoulder.add(mesh(new THREE.TubeGeometry(upperCable, 20, 1.8, 8, false), rubber));
+  for (const cx of [L1 * 0.35, L1 * 0.72]) {
+    const clip = link(cx - 2.5, cx + 2.5, 4.8, 2.6, dark, 17.6);
+    clip.position.y = 9.5;
+    shoulder.add(clip);
+  }
 
   // —— 肘关节（θ₂）与小臂
   const elbow = new THREE.Group();
@@ -173,6 +244,13 @@ export function createArm({ requestRender }) {
   elbow.add(link(14, 46, 18.8, 16.8, dark));
   elbow.add(link(L2 * 0.5 - 2.5, L2 * 0.5 + 2.5, 18.5, 16.5, accent));
   elbow.add(link(L2 - 26, L2 - 14, 18.6, 16.6, dark));
+  // 小臂顶部伺服线束导管
+  const foreCable = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(16, 9.6, 4.5),
+    new THREE.Vector3(L2 * 0.5, 10.2, 4.5),
+    new THREE.Vector3(L2 - 16, 9.4, 4.5),
+  ]);
+  elbow.add(mesh(new THREE.TubeGeometry(foreCable, 16, 1.4, 8, false), rubber));
 
   // —— 腕关节俯仰（θ₃）：夹爪沿局部 +x，指尖在 x = L3
   const wrist = new THREE.Group();
@@ -201,10 +279,15 @@ export function createArm({ requestRender }) {
   ring.rotation.z = -Math.PI / 2;
   ring.position.x = 28;
   roll.add(ring);
-  // 掌板：手指沿它上面的导轨开合
+  // 掌板：手指沿它上面的精密双轴导轨开合
   roll.add(link(29, 38, 16, 46, dark));
   const rail = link(36.2, 38.6, 5, 44, steel);
   roll.add(rail);
+  for (const ry of [-4.5, 4.5]) {
+    const rod = joint(1.3, 44, steel);
+    rod.position.set(37.4, ry, 0);
+    roll.add(rod);
+  }
   // 两根手指沿局部 z 分开，开合时沿 z 平移；指尖内侧有一块垫片，开口按两块垫片的间距算
   const fingers = [-1, 1].map((side) => {
     const f = link(38, L3, 9, 4, steel);

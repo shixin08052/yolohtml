@@ -97,7 +97,29 @@ export function selectForOrder(parts, order, { footprints = {}, arm } = {}) {
     return { ...k, have: n, want, pick, short: want - pick };
   });
   const sum = (f) => lines.reduce((s, l) => s + l[f], 0);
-  return { ids, lines, totalWant: sum('want'), totalPick: sum('pick'), totalShort: sum('short'), custom: !!order };
+  return { ids, lines, totalWant: sum('want'), totalPick: sum('pick'), totalShort: sum('short'), custom: !!order, byIds: false };
+}
+
+/**
+ * 按 3D 视图中点选的具体零件 ID 生成清单结果（与 selectForOrder 返回相同结构，直接接入 planForOrder）。
+ * @param {{ id: number, cls: number, color?: string }[]} parts
+ * @param {Iterable<number>} pickedIds
+ */
+export function selectByIds(parts, pickedIds) {
+  const raw = new Set(pickedIds);
+  const chosen = parts.filter((p) => raw.has(p.id));
+  const ids = new Set(chosen.map((p) => p.id));
+  const have = inventory(parts);
+  const picked = inventory(chosen);
+  const kinds = [...ORDER_KINDS];
+  if (have[UNKNOWN_LED.key]) kinds.push(UNKNOWN_LED);
+  const lines = kinds.map((k) => {
+    const n = have[k.key] ?? 0;
+    const w = picked[k.key] ?? 0;
+    return { ...k, have: n, want: w, pick: w, short: 0 };
+  });
+  const total = ids.size;
+  return { ids, lines, totalWant: total, totalPick: total, totalShort: 0, custom: true, byIds: true };
 }
 
 /**
@@ -113,7 +135,7 @@ export function orderTable(sel) {
 
 /** 按清单规划：只把目标送入料盒，障碍拨开或夹起暂放到板上空位。 */
 export function planForOrder(parts, sel, arm, opts = {}) {
-  const bins = binsFor(parts.filter((p) => sel.ids.has(p.id)));
+  const bins = binsFor(parts.filter((p) => sel.ids.has(p.id)), opts.existingBins);
   const result = plan(parts, bins, arm, { ...opts, only: sel.custom ? sel.ids : null });
   const moved = new Set(result.tasks.filter((t) => t.kind !== 'pick' && !sel.ids.has(t.partId)).map((t) => t.partId));
   return { ...result, bins, moved };
