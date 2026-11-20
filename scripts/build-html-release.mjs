@@ -20,9 +20,12 @@ let previous;
 try { previous = JSON.parse(await readFile(join(directory, 'release-info.json'), 'utf8')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
 if (previous) {
   if (previous.generatedBy !== generatedBy) throw new Error('Refusing to replace an unrelated directory');
-  await rm(directory, { recursive: true });
+  for (const entry of await readdir(directory)) await rm(join(directory, entry), { recursive: true, force: true });
 } else {
-  try { await stat(directory); throw new Error('Release directory already exists without release metadata'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  try {
+    await stat(directory);
+    if ((await readdir(directory)).length > 0) throw new Error('Release directory already exists without release metadata');
+  } catch (error) { if (error.code !== 'ENOENT') throw error; }
 }
 await cp(join(root, 'dist'), directory, { recursive: true, filter: (path) => !path.endsWith('.gitkeep') });
 const windowsFiles = join(root, 'scripts', 'windows-html');
