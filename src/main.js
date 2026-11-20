@@ -348,6 +348,7 @@ function setArmDebug(on) {
   armDebug = on;
   $('#btn-arm-debug').setAttribute('aria-pressed', String(on));
   if (on) {
+    resultCard.hide();
     renderArmSection(null);
   } else {
     armTarget.hide();
@@ -1205,6 +1206,7 @@ const detMode = () => detSettings.mode ?? (store.state.truth ? 'mock' : 'onnx');
 let detResult = null; // { bitmap, detections, source, note }
 let parallaxOn = true;
 let boxEditing = false;
+let editFromConfirm = false;
 /** 人工改框的记录（只对当前照片）：删掉的框和改之前的框。重新识别时这些不再出现，人工框保留 */
 let edits = null; // { bitmap, removed: Detection[] }
 
@@ -1229,7 +1231,7 @@ const boxEditor = createBoxEditor({
     syncBoxAttr();
   },
   onSelect: (i) => {
-    $('#box-cancel').disabled = i < 0 && !boxEditor.canCancel;
+    $('#box-cancel').disabled = i < 0;
     $('#box-delete').disabled = i < 0;
     $('#box-class').value = String(boxEditor.cls);
     syncBoxClassPills();
@@ -1313,10 +1315,7 @@ $('#box-attr').addEventListener('change', (e) => {
   boxEditor.setAttr({ color: e.target.value || undefined });
   syncBoxAttr();
 });
-$('#box-cancel').addEventListener('click', () => {
-  boxEditor.cancelBox();
-  $('#box-cancel').disabled = !boxEditor.canCancel;
-});
+$('#box-cancel').addEventListener('click', () => boxEditor.deleteSelected());
 $('#box-delete').addEventListener('click', () => boxEditor.deleteSelected());
 $('#box-clear').addEventListener('click', () => boxEditor.clear());
 $('#box-done').addEventListener('click', () => setBoxEditing(false));
@@ -1347,12 +1346,15 @@ function updateDetOverlay() {
   debugView.setOverlay('dets', on ? (ctx, s, dpr) => boxEditor.draw(ctx, s, dpr) : null);
 }
 
-function setBoxEditing(on) {
+function setBoxEditing(on, { fromConfirm = false } = {}) {
   if (on && !detResult) return;
   boxEditing = on;
+  if (on) editFromConfirm = fromConfirm || $('#view-confirm').classList.contains('active');
   const topBtn = $('#btn-boxedit');
   topBtn.setAttribute('aria-pressed', String(on));
   topBtn.textContent = on ? '退出框选' : '框选';
+  const sideBtn = document.querySelector('#btn-det-edit');
+  if (sideBtn) sideBtn.textContent = on ? '结束框选' : '框选';
   $('#view-debug').classList.toggle('is-box-editing', on);
   $('#box-tools').hidden = !on;
   debugView.setTool(on ? boxEditor.tool : null);
@@ -1362,9 +1364,11 @@ function setBoxEditing(on) {
     syncBoxClassPills();
     syncBoxAttr();
   } else {
+    const returnToConfirm = editFromConfirm || needConfirm();
+    editFromConfirm = false;
     boxEditor.setBoxes(boxEditor.getBoxes()); // 取消选中
-    // 演示模式：框好后回到正视图确认
-    if (needConfirm() && stageIndex(store.state.stage) >= stageIndex('sceneBuilt')) showConfirm();
+    // 从正视图点进"修改框选"或处于待确认状态：退出/完成框选后回到正视图
+    if (returnToConfirm && stageIndex(store.state.stage) >= stageIndex('sceneBuilt')) showConfirm();
   }
   updateDetOverlay();
 }
@@ -2181,7 +2185,7 @@ function refreshPlan({ fromOrder = false } = {}) {
   const segs = tasks.length
     ? buildSequence(tasks, store.state.parts, ARM, { startAngles: arm.homeAngles, homeAngles: arm.homeAngles })
     : [];
-  sortPlan = { tasks, skipped, segs, bins: binList, order: picked, moved };
+  sortPlan = { tasks, skipped, segs, bins: binList, order: picked, moved, planParts: store.state.parts.map((p) => ({ ...p })) };
   orderPanel.sync();
   sortPlayer.load(segs);
   renderSortSection();
@@ -2751,6 +2755,7 @@ store.on('change', updateExportButtons);
 async function exportParts() {
   if (!sceneReady()) return;
   const { image, calib, parts } = store.state;
+  const photoParts = initialParts ? selectMethod(initialParts.map((p) => ({ ...p })), parallaxOn) : parts;
   // 正视图重新按 6 px/mm 拉正（比 3D 贴图清楚）
   const S = 6;
   const { frame } = boardTex;
@@ -2762,7 +2767,7 @@ async function exportParts() {
     toFront,
     photo: image.bitmap,
     H: calib.H,
-    parts,
+    parts: photoParts,
     classes: CLASSES,
     body: (cls) => partFootprint(cls).rects[0],
     subtitle: `照片 ${image.fileName} · ${stamp()}${det ? ` · 检测：${det}` : ''}`,
@@ -2774,7 +2779,7 @@ async function exportParts() {
 function exportPlan(kind) {
   flushPlan();
   if (!sceneReady() || !sortPlan) return;
-  const ins = sortInstructions(sortPlan, store.state.parts, sortPlan.bins, CLASSES, ARM);
+  const ins = sortInstructions(sortPlan, sortPlan.planParts ?? store.state.parts, sortPlan.bins, CLASSES, ARM);
   if (kind === 'csv') downloadText(instructionsCsv(ins), `分拣指令_${photoStem()}.csv`, 'text/csv;charset=utf-8');
   else downloadText(instructionsJson(ins, { photo: store.state.image.fileName, time: stamp(), arm: ARM }), `分拣指令_${photoStem()}.json`, 'application/json;charset=utf-8');
 }
@@ -2783,7 +2788,7 @@ function exportPlan(kind) {
 function showInstructions() {
   flushPlan();
   if (!sceneReady() || !sortPlan) return;
-  insDialog.show(sortInstructions(sortPlan, store.state.parts, sortPlan.bins, CLASSES, ARM), { photo: store.state.image.fileName });
+  insDialog.show(sortInstructions(sortPlan, sortPlan.planParts ?? store.state.parts, sortPlan.bins, CLASSES, ARM), { photo: store.state.image.fileName });
 }
 const insDialog = createInstructionsDialog({
   onExport: (kind) => {
@@ -2824,7 +2829,7 @@ const confirmView = createConfirmView({
   onEdit: (detIndex = -1) => {
     if (!detResult) return;
     $('#btn-boxedit').disabled = false;
-    setBoxEditing(true);
+    setBoxEditing(true, { fromConfirm: true });
     // 从复核清单点进来：选中那个框并放大到它
     const box = detResult.detections[detIndex]?.box;
     if (box) {

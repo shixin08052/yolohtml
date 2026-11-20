@@ -93,18 +93,10 @@ export function drawDetections(ctx, boxes, scale, dpr = 1, { selected = -1, draf
 export function createBoxEditor({ getScale, dpr = () => window.devicePixelRatio || 1, redraw, onChange, onSelect = () => {}, imageSize }) {
   /** @type {import('../state.js').Detection[]} */
   let boxes = [];
-  /** 历史快照栈（方便没选中框时点"取消"也能撤回刚画错的框） */
-  let history = [];
   let selected = -1;
   let cls = 0;
   /** 拖动状态：{ kind: 'new'|'move'|'resize', start: [x, y], orig?: number[], corner?: number, cur: [x, y] } */
   let drag = null;
-
-  const cloneBoxes = (list) => list.map((d) => ({ ...d, box: [...d.box] }));
-  const pushHistory = () => {
-    history.push(cloneBoxes(boxes));
-    if (history.length > 30) history.shift();
-  };
 
   /** 手柄判定半径（原图像素） */
   const tol = () => (10 * dpr()) / getScale();
@@ -190,7 +182,6 @@ export function createBoxEditor({ getScale, dpr = () => window.devicePixelRatio 
           select(-1); // 点在空白处：取消选中
           return;
         }
-        pushHistory();
         // 与已有框重叠很多：当作重画那一个，替换掉（不重复）
         const box = [x1, y1, x2, y2];
         const { replace, inside } = placeNewBox(boxes, box);
@@ -221,16 +212,12 @@ export function createBoxEditor({ getScale, dpr = () => window.devicePixelRatio 
     /** 换一组框（例如载入文件、换照片）；会取消选中 */
     setBoxes(list) {
       boxes = list.map((d) => ({ ...d, box: [...d.box] }));
-      history = [];
       drag = null;
       select(-1);
     },
     getBoxes: () => boxes.slice(),
     get selected() {
       return selected;
-    },
-    get canCancel() {
-      return selected >= 0 || history.length > 0;
     },
     get cls() {
       return cls;
@@ -261,26 +248,9 @@ export function createBoxEditor({ getScale, dpr = () => window.devicePixelRatio 
     },
     deleteSelected() {
       if (selected < 0) return;
-      pushHistory();
       boxes.splice(selected, 1);
       select(-1);
       onChange(boxes.slice());
-    },
-    /** 取消当前选错/画错的框（有选中框时直接移除该框；若刚画完不小心点到空白处取消了选中，则撤回上一步画的框） */
-    cancelBox() {
-      if (selected >= 0) {
-        boxes.splice(selected, 1);
-        select(-1);
-        onChange(boxes.slice());
-        return true;
-      }
-      if (history.length > 0) {
-        boxes = history.pop();
-        select(-1);
-        onChange(boxes.slice());
-        return true;
-      }
-      return false;
     },
     clear() {
       if (!boxes.length) return;
