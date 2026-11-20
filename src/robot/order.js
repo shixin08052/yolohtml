@@ -14,6 +14,7 @@ export const ORDER_KINDS = [
 ];
 const UNKNOWN_LED = { key: 'led', label: 'LED（颜色未知）', hex: CLASSES[1].color };
 
+
 /** 每种最多要多少个（输入框上限，防止误填） */
 export const ORDER_MAX = 999;
 

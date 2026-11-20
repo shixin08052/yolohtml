@@ -3,6 +3,7 @@ import { store, STAGE_LABELS, STEPS, stageIndex } from './state.js';
 import { createStepper } from './ui/stepper.js';
 import { createTabs } from './ui/tabs.js';
 import { createInfoPanel } from './ui/infoPanel.js';
+import { bindMenu } from './ui/menu.js';
 import { createConfirmView } from './ui/confirmView.js';
 import { createDebugView } from './ui/debugView.js';
 import { drawTruth } from './ui/truthOverlay.js';
@@ -15,20 +16,21 @@ import { loadSampleIndex, loadSample } from './vision/samples.js';
 import { loadImageFile, ImageFormatError } from './vision/image.js';
 import { computeIntrinsics, defaultSource, captureWarnings } from './vision/intrinsics.js';
 import { renderImagePanel } from './ui/imagePanel.js';
-import { detectMarkersInImage, VALID_IDS } from './vision/aruco.js';
+import { VALID_IDS } from './vision/aruco.js';
 import { markerCornerErrors, homographyTruthError, poseTruthError } from './vision/evaluate.js';
 import { poseFromHomography, estimateFocal } from './vision/pose.js';
 import { intrinsicsMatrix } from './math/pinhole.js';
 import { mul3 } from './math/linalg.js';
 import { drawPose } from './ui/poseOverlay.js';
-import { boardHomography, rectify, invert3, bitmapPixels } from './vision/homography.js';
+import { boardHomography, rectify, invert3, bitmapPixels, primePixels } from './vision/homography.js';
 import { boxToTexture, erasePolygons } from './vision/erase.js';
 import { estimateYaw, expandPoly } from './vision/orientation.js';
 import { samplePatch, boardToPatch, leadDirection, ledColor, bodyAxis, LEAD } from './vision/leads.js';
 import { fitBoxes, SIZE } from './vision/sizePrior.js';
 import { partName as displayName, partColor } from './robot/bins.js';
 import { separateBodies } from './robot/clearance.js';
-import { segmentParts, fuseDetections } from './vision/colorSeg.js';
+import { fuseDetections } from './vision/colorSeg.js';
+import { detectMarkersOffThread, readPixelsOffThread, segmentPartsOffThread } from './vision/visionWorker.js';
 import { measurePaper, EDGE_NAMES, CHECK_LIMITS } from './vision/boardCheck.js';
 import { markerCornersWorld, markerRectOnPage, paperFrame, designFrame, frameMatrix } from './vision/boardLayout.js';
 import { BOARD, MARKERS, FIXED_INTRINSICS } from './config.js';
@@ -38,7 +40,7 @@ import { createPartsLayer, leadFootprint, partFootprint } from './scene/parts.js
 import { detect, MockMissingError, detectionsFileName, serializeDetections, readDetectionsFile, lastOnnxRun, getOnnxDetector } from './vision/detector.js';
 import { mapDetections, selectMethod } from './vision/mapping.js';
 import { partsTruthError } from './vision/evaluate.js';
-import { CLASSES, WORK_AREA, ARM, BIN_SLOTS, BIN_SIZE, MODELS, DETECT } from './config.js';
+import { CLASSES, LED_COLORS, WORK_AREA, ARM, BIN_SLOTS, BIN_SIZE, MODELS, DETECT } from './config.js';
 import { createArm } from './scene/arm.js';
 import { createBins } from './scene/bins.js';
 import { ikWorld, fkWorld, fkChain, fromBase, pathClear } from './robot/ik.js';
@@ -46,16 +48,20 @@ import { buildSequence, GRIP_MAX } from './robot/sequence.js';
 import { createSortPlayer } from './scene/sortPlayer.js';
 import { createRun, recordStep, finishRun, summarizeRun, RUN_KINDS } from './timing.js';
 import { createExperimentPanel } from './ui/experimentPanel.js';
-import { flowStatuses, flowSvg, currentNode, flowSvgStandalone } from './ui/flowchart.js';
+import { flowStatuses, currentNode } from './ui/flowchart.js';
 import { renderPartSheet } from './ui/partSheet.js';
-import { downloadText, downloadCanvas, svgToCanvas } from './ui/download.js';
+import { downloadText, downloadCanvas } from './ui/download.js';
 import { sortInstructions, instructionsCsv, instructionsJson } from './robot/export.js';
 import * as THREE from 'three';
 import { toThree } from './math/coords.js';
 import { createOrderPanel } from './ui/orderPanel.js';
 import { planForOrder, inventory } from './robot/order.js';
 import { createHero, createResultCard, createInstructionsDialog } from './ui/sortExtras.js';
-import { createViewLoader } from './ui/loading.js';
+import { createViewLoader, LOADER_HIDE_MS } from './ui/loading.js';
+import { trackEdits, mergeEdits, reviewReasons, withUid } from './vision/review.js';
+import { initTheme, getThemeMode, cycleThemeMode } from './ui/theme.js';
+
+initTheme();
 
 // 动画默认始终显示；地址带 ?motion=system 时才跟随系统的"减少动态效果"（样式里按 data-motion 判断）
 if (new URLSearchParams(location.search).get('motion') === 'system') document.documentElement.dataset.motion = 'system';
@@ -63,9 +69,44 @@ if (new URLSearchParams(location.search).get('motion') === 'system') document.do
 const $ = (sel) => document.querySelector(sel);
 const fmt = (x, d = 1) => (x == null || Number.isNaN(x) ? '—' : Number(x).toFixed(d));
 
+// 顶栏外观主题切换按钮
+{
+  const btn = $('#theme-btn');
+  const labels = { auto: '跟随系统', light: '浅色模式', dark: '深色模式' };
+  const syncThemeBtn = () => {
+    if (!btn) return;
+    const mode = getThemeMode();
+    btn.dataset.mode = mode;
+    btn.title = `切换外观主题（当前：${labels[mode]}）`;
+    btn.setAttribute('aria-label', btn.title);
+  };
+  syncThemeBtn();
+  btn?.addEventListener('click', () => {
+    const next = cycleThemeMode();
+    syncThemeBtn();
+    panel.message(`已切换外观：${labels[next]}`, 'info');
+  });
+}
+
 const panel = createInfoPanel($('#info-panel'));
-createStepper($('#stepper'), store);
+createStepper($('#stepper'), store, (stepKey) => {
+  if (!store.state.image) return;
+  if (stepKey === 'scene' || stepKey === 'sort') {
+    if (needConfirm()) showConfirm();
+    else if (world.available) tabs.select('three');
+    panel.focusSection(stepKey === 'sort' && sortPlan ? 'sort' : 'status');
+  } else {
+    tabs.select('debug');
+    if (demoMode) {
+      panel.focusSection('status');
+    } else {
+      const map = { image: 'image', calib: 'markers', pose: 'pose', detect: 'detect' };
+      panel.focusSection(map[stepKey] ?? 'status');
+    }
+  }
+});
 const debugView = createDebugView($('#debug-canvas'));
+
 const world = createWorld($('#three-container'));
 // 首页引导：还没有照片时盖在视图上
 const hero = createHero($('.views'), { onDemo: () => loadSampleByKey(DEMO_SAMPLE) });
@@ -102,14 +143,55 @@ world.scene.add(phone.group);
 const partsLayer = createPartsLayer({ requestRender: world.requestRender });
 world.scene.add(partsLayer.group);
 $('#show-part-labels').addEventListener('change', (e) => partsLayer.setLabelsVisible(e.target.checked));
+/* 3D 零件标签平时只显示名称；鼠标靠近某个零件时展开坐标和置信度（只改 DOM 类名，不触发重新渲染） */
+{
+  const host = $('#three-container');
+  let hovered = null;
+  let pending = null;
+  const setHover = (el) => {
+    if (el === hovered) return;
+    hovered?.classList.remove('is-hover');
+    hovered = el;
+    hovered?.classList.add('is-hover');
+  };
+  host.addEventListener('pointermove', (e) => {
+    if (e.pointerType === 'touch' || e.buttons) return setHover(null); // 拖动视角时不弹
+    if (pending) return;
+    pending = requestAnimationFrame(() => {
+      pending = null;
+      let best = null;
+      let bestD = 56;
+      for (const tag of host.querySelectorAll('.part-tag')) {
+        if (tag.style.display === 'none') continue;
+        const r = tag.getBoundingClientRect();
+        if (!r.width) continue;
+        // 标签底边中点就在零件正上方：以它为准，往下多给一点（零件本体）
+        const d = Math.hypot(e.clientX - (r.left + r.width / 2), Math.max(0, e.clientY - r.bottom - 24, r.top - e.clientY));
+        if (d < bestD) {
+          bestD = d;
+          best = tag;
+        }
+      }
+      setHover(best);
+    });
+  });
+  host.addEventListener('pointerleave', () => setHover(null));
+}
 let transitionPending = false; // 有新位姿、还没在 3D 视图里播过转场
 
 /** 演示模式：只显示流程图；识别后先给出正视图请用户确认，确认后才转场建模（地址带 ?demo 或点顶栏按钮打开） */
 let demoMode = false;
 /** 演示模式下已确认识别结果的照片（bitmap） */
 let confirmedFor = null;
-/** 演示模式下当前照片还要等用户确认 */
-const needConfirm = () => demoMode && confirmedFor !== store.state.image?.bitmap;
+/** 识别后有零件要请人确认的照片（bitmap）：这张照片在确认之前不进 3D、不分拣（演示模式下每张都要确认） */
+let reviewFor = null;
+/** 当前照片要请人确认的零件：{ part, det, reasons }[] */
+let reviewList = [];
+/** 当前照片还要等用户确认 */
+const needConfirm = () => {
+  const bitmap = store.state.image?.bitmap;
+  return !!bitmap && confirmedFor !== bitmap && (demoMode || reviewFor === bitmap);
+};
 
 const transition = createTransition({
   world,
@@ -438,7 +520,7 @@ const tabs = createTabs($('.main'), (view) => {
 });
 
 /* ------------------------------------------------------------------ */
-/* 状态：流程图（含出错分支），每一步变化时切换高亮                          */
+/* 状态：当前步骤 + 一句提示（进度看顶栏步骤条）                            */
 /* ------------------------------------------------------------------ */
 
 /** 正在读取照片（选好照片、还没进入 imageLoaded） */
@@ -452,6 +534,8 @@ let sampleLoadController = null;
 let transitionShown = false;
 const escHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
+const INTRINSICS_LABELS = { calib: '固定内参', exif: 'EXIF 估算', self: '照片估计', truth: '合成真值' };
+
 function renderStatus() {
   const { stage, error } = store.state;
   const st = flowStatuses({
@@ -462,17 +546,28 @@ function renderStatus() {
     transitionPlaying: transition.mode === 'playing',
     skipped: sortPlan?.skipped.length ?? 0,
     manual: detResult?.source === 'manual',
-    demo: demoMode,
+    demo: demoMode || reviewFor === store.state.image?.bitmap, // 有拿不准的零件时也多一步"确认"
     confirmed: !needConfirm(),
   });
   const flowOptions = { detectionSource: detResult?.source ?? (store.state.truth ? 'truth' : null) };
   const cur = currentNode(st, flowOptions);
-  let html = `<dl class="kv"><dt>流程</dt><dd>${loadingPhoto ? '读取照片中' : STAGE_LABELS[stage]}</dd></dl>`;
-  html += flowSvg(st, flowOptions);
-  if (detResult) html += `<p class="detection-source">检测来源：${escHtml(DET_SOURCE_LABELS[detResult.source])}</p>`;
-  if (error && !loadingPhoto) html += `<p class="note error">${escHtml(error.reason)}</p>`;
-  else if (cur) html += `<p class="fc-hint"><b>${escHtml(cur.label)}</b>：${escHtml(cur.hint)}</p>`;
-  html += '<p class="fc-legend"><i class="fc-dot done"></i>已完成 <i class="fc-dot active"></i>进行中 / 等待 <i class="fc-dot error"></i>出错 <i class="fc-dot todo"></i>未开始</p>';
+  const stageLabel = loadingPhoto ? '读取照片中' : STAGE_LABELS[stage];
+  let html;
+  // 圆点 + 标题一行，说明另起一行、和标题左对齐；检测来源等细节放在分隔线下的键值表里
+  const now = (kind, title, hint) => `<div class="status-now ${kind}"><i aria-hidden="true"></i><b>${escHtml(title)}</b>${hint ? `<span>${escHtml(hint)}</span>` : ''}</div>`;
+  const waitReview = !demoMode && needConfirm() && stageIndex(stage) >= stageIndex('sceneBuilt');
+  if (error && !loadingPhoto) html = now('error', stageLabel, error.reason);
+  else if (waitReview) {
+    html = now('active', reviewList.length ? `请复核 ${reviewList.length} 个拿不准的零件` : '拿不准的零件已改好', reviewList.length
+      ? '在"复核"页点清单里的零件去改框、补框，或指定 LED 颜色；看过没问题也可以直接确认'
+      : '点"确认，开始建模"继续');
+  } else if (cur) html = now('active', cur.label, cur.hint);
+  else html = now('ok', stageLabel, '');
+  const { image, intrinsics } = store.state;
+  const meta = [];
+  if (image && intrinsics && !loadingPhoto) meta.push(`<dt>相机内参</dt><dd>${escHtml(INTRINSICS_LABELS[intrinsics.source] ?? intrinsics.source)}</dd>`);
+  if (detResult) meta.push(`<dt>检测来源</dt><dd class="detection-source">${escHtml(DET_SOURCE_LABELS[detResult.source])}</dd>`);
+  if (meta.length) html += `<dl class="kv status-meta">${meta.join('')}</dl>`;
   if (error?.step === 'detect' && detResult?.source === 'none') {
     html += '<div class="sec-actions"><button class="btn btn-small" data-recover="retry">重试识别</button><button class="btn btn-small" data-recover="wasm">改用 WASM</button><button class="btn btn-small" data-recover="manual">手动框选</button></div>';
   }
@@ -491,8 +586,8 @@ function renderStatus() {
   renderCaptureNotices();
   syncSortControls();
   hero.setVisible(!store.state.image && !loadingPhoto);
-  if (loadingPhoto) viewLoader.show({ title: '正在读取照片', sub: loadingName });
-  else viewLoader.hide();
+  if (loadingPhoto) viewLoader.set('photo', { title: '正在读取照片', sub: loadingName, mode: 'cover' });
+  else viewLoader.set('photo', null);
 }
 
 function renderCaptureNotices() {
@@ -501,13 +596,10 @@ function renderCaptureNotices() {
   // 自带示例（去掉了 EXIF）不提示机型 / 焦距缺失：只有用户上传的照片才需要核对拍摄条件
   const warnings = image && !truth && !image.sample ? captureWarnings(image, calib) : [];
   if (!world.available) warnings.unshift('当前浏览器无法启动 3D，仍可上传照片并查看识别结果。');
-  root.hidden = !warnings.length && !image;
+  // 平时不占位置（内参来源在"状态"分区里）；只有拍摄条件有问题时才在视图上方显示警告
+  root.hidden = !warnings.length;
   root.classList.toggle('has-warn', warnings.length > 0);
   root.innerHTML = warnings.map((text) => `<p>${escHtml(text)}</p>`).join('');
-  if (image && intrinsics) {
-    const source = { calib: '固定内参', exif: 'EXIF 估算', self: '照片估计', truth: '合成真值' }[intrinsics.source];
-    root.innerHTML += `<p class="capture-source">当前内参：${escHtml(source)}</p>`;
-  }
 }
 store.on('change', () => renderStatus());
 store.on('error', () => renderStatus());
@@ -714,7 +806,21 @@ function showRectified(canvas) {
 $('#show-rect').addEventListener('change', () => showRectified(store.state.calib?.rectified ?? null));
 $('#rect-inset').addEventListener('click', () => $('#rect-inset').classList.toggle('big'));
 
-const nextFrame = () => new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
+/**
+ * 让出一帧：等浏览器画完这一帧再接着算（加载动画不掉帧）。标签页在后台时 rAF 不触发，最多等 100 ms 也继续
+ */
+const nextFrame = () =>
+  new Promise((resolve) => {
+    let done = false;
+    const go = () => {
+      if (done) return;
+      done = true;
+      setTimeout(resolve, 0);
+    };
+    requestAnimationFrame(go);
+    setTimeout(go, 100);
+  });
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** 渲染"标定"分区 */
 function renderCalibSection() {
@@ -790,12 +896,19 @@ async function runCalibration({ force = false } = {}) {
     const body = panel.setCustom('markers', '标定');
     body.innerHTML = '<p class="muted">识别中…</p>';
     showRectified(null);
+    viewLoader.set('prep', { title: '正在定位标定板', sub: '识别四角的定位码', mode: 'glass' });
     await nextFrame();
     if (store.state.image?.bitmap !== image.bitmap) return; // 等这一帧期间换了照片
     const t0 = performance.now();
-    const det = detectMarkersInImage(image.bitmap, 1600);
+    // 识别码在 Worker 里算（主线程空着，加载动画不卡）
+    const det = await detectMarkersOffThread(image.bitmap, 1600);
+    if (store.state.image?.bitmap !== image.bitmap) return; // 识别期间换了照片
     const { markers } = det;
     const ms = performance.now() - t0;
+    // 后面看引脚、LED 颜色要用整张照片的像素：也在 Worker 里读好，趁识别零件的时候送过来
+    readPixelsOffThread(image.bitmap).then((px) => {
+      if (px && store.state.image?.bitmap === image.bitmap) primePixels(image.bitmap, px);
+    });
     timeStep('markers', ms);
     const t1 = now();
     let hom = null;
@@ -809,6 +922,8 @@ async function runCalibration({ force = false } = {}) {
       const m = measurePaper(det.imageData, Hs);
       const paper = { corners: m.corners, edges: m.edges, reasons: m.reasons, widthMm: m.widthMm, heightMm: m.heightMm, scaleX: m.scaleX, scaleY: m.scaleY };
       calib = { markers, H: hom.H, Hinv: hom.Hinv, reprojErrPx: hom.reprojErrPx, rectified, paper };
+      await nextFrame(); // 正射图画完让出一帧，再接着求位姿
+      if (store.state.image?.bitmap !== image.bitmap) return;
     }
     // 缩小图（长边 1600）留着给颜色分割用，不必再读一遍全尺寸照片
     markerResult = { bitmap: image.bitmap, markers, ms, hom, calib, small: { imageData: det.imageData, scale: det.scale } };
@@ -835,6 +950,11 @@ async function runCalibration({ force = false } = {}) {
 }
 
 store.on('stage:calibrated', (st) => showRectified(st.calib.rectified));
+// 哪一步失败了：定位、建场景的遮罩收起（识别的遮罩由 updateModelProgress 管）
+store.on('error', () => {
+  viewLoader.set('prep', null);
+  viewLoader.set('build', null);
+});
 store.on('stage:calibrated', (st) => {
   // 切换内参来源时标定结果沿用（同一个对象），底板贴图与内参无关，不必重做
   if (boardTex?.calib === st.calib) {
@@ -965,14 +1085,17 @@ store.on('stage:posed', () => {
 const DET_SOURCE_LABELS = { truth: '合成图真值框', mock: 'mock 检测文件', onnx: '模型推理（ONNX）', manual: '手动框选', file: '载入的检测文件', none: '无' };
 
 /** 检测设置：mode 为 null 时自动选（合成图用真值框，其他照片用模型推理） */
-const detSettings = { mode: null, model: 'parts', prefer: 'auto', colorAssist: true };
+// 后端默认只用 WASM：WebGPU 推理快一些，但会占满显卡，页面（加载动画）跟着掉帧；WASM 在 Worker 里用 CPU 算，慢一点但界面流畅
+const detSettings = { mode: null, model: 'parts', prefer: 'wasm', colorAssist: true };
 
 function updateModelProgress(progress) {
   const root = $('#model-progress');
   root.hidden = !progress || !detResult?.pending;
-  // 识别进行中：照片上有一道扫描的光
   $('.views').classList.toggle('is-detecting', !root.hidden);
-  if (root.hidden) return;
+  if (root.hidden) {
+    viewLoader.set('detect', null);
+    return;
+  }
   // 下载知道总大小时显示真实比例，其余阶段进度条来回滑
   const bar = root.querySelector('.progress');
   const ratio = progress.stage === 'download' && progress.total && progress.loaded <= progress.total ? progress.loaded / progress.total : null;
@@ -985,6 +1108,16 @@ function updateModelProgress(progress) {
     if (progress.total && progress.loaded <= progress.total) text += ` / ${(progress.total / 1e6).toFixed(1)} MB`;
   }
   root.querySelector('[role="status"]').textContent = text;
+  // 视图上的遮罩：照片已经在下面时是磨砂玻璃（照片模糊可见），识别完模糊退掉、照片对焦出来
+  const preparing = progress.stage !== 'infer' && progress.stage !== 'ready';
+  viewLoader.set('prep', null); // 定位已经做完，识别的遮罩接上（之后取消识别时不会再露出"正在定位"）
+  viewLoader.set('detect', {
+    title: preparing ? '正在准备识别模型' : '正在识别元件',
+    sub: preparing ? text.replace(/…$/, '') : 'YOLO 找出每个电阻和 LED',
+    progress: ratio,
+    mode: store.state.image ? 'glass' : 'cover',
+    action: { label: '取消识别', onClick: cancelPendingDetection },
+  });
 }
 function cancelPendingDetection() {
   const reason = new DOMException('识别已取消', 'AbortError');
@@ -994,10 +1127,10 @@ function cancelPendingDetection() {
 $('#cancel-detection').addEventListener('click', cancelPendingDetection);
 
 /**
- * 颜色分割（在标定时的缩小图上做），返回原图像素上的候选框
- * @returns {{ parts: {cls:number, box:number[]}[], ms: number }|null}
+ * 颜色分割（在标定时的缩小图上做，Worker 里算），返回原图像素上的候选框
+ * @returns {Promise<{ parts: {cls:number, box:number[]}[], ms: number }|null>}
  */
-function colorCandidates() {
+async function colorCandidates() {
   const { calib, image } = store.state;
   const small = markerResult?.bitmap === image?.bitmap ? markerResult.small : null;
   if (!calib || !small) return null;
@@ -1014,7 +1147,7 @@ function colorCandidates() {
   const a = p(BOARD.width / 2 - 5, BOARD.height / 2);
   const b = p(BOARD.width / 2 + 5, BOARD.height / 2);
   const pxPerMm = Math.hypot(b[0] - a[0], b[1] - a[1]) / 10;
-  const parts = segmentParts(small.imageData, invert3(Hs), pxPerMm).map((c) => ({ ...c, box: c.box.map((v, i) => v / (i % 2 ? ky : kx)) }));
+  const parts = (await segmentPartsOffThread(small.imageData, invert3(Hs), pxPerMm)).map((c) => ({ ...c, box: c.box.map((v, i) => v / (i % 2 ? ky : kx)) }));
   return { parts, ms: performance.now() - t0 };
 }
 const detMode = () => detSettings.mode ?? (store.state.truth ? 'mock' : 'onnx');
@@ -1023,27 +1156,113 @@ const detMode = () => detSettings.mode ?? (store.state.truth ? 'mock' : 'onnx');
 let detResult = null; // { bitmap, detections, source, note }
 let parallaxOn = true;
 let boxEditing = false;
+/** 人工改框的记录（只对当前照片）：删掉的框和改之前的框。重新识别时这些不再出现，人工框保留 */
+let edits = null; // { bitmap, removed: Detection[] }
 
 const boxEditor = createBoxEditor({
   getScale: () => debugView.view.s,
   redraw: () => debugView.redraw(),
   imageSize: () => store.state.image,
-  onChange: (boxes) => {
+  onChange: (boxes, info) => {
     if (!detResult) return;
     detSeq++; // 正在进行的检测作废，以手动框选为准
     if (detResult.pending) cancelPendingDetection();
-    detResult = { ...detResult, detections: boxes, source: 'manual', note: null, pending: false, debugOnly: false, onnx: null, fit: null };
+    // 记下删掉 / 改过的框：之后重新识别（重试、换模型）时它们不会再冒出来
+    const tracked = trackEdits(detResult.detections, boxes);
+    const bitmap = detResult.bitmap;
+    edits = { bitmap, removed: [...(edits?.bitmap === bitmap ? edits.removed : []), ...tracked.removed] };
+    detResult = { ...detResult, detections: tracked.boxes, source: 'manual', note: null, pending: false, debugOnly: false, onnx: null, fit: null };
     updateModelProgress(null);
     if (demoMode) confirmedFor = null; // 演示模式：改了框要重新确认
+    if (info?.replaced) panel.message(`新框与已有的 ${info.replaced} 个框重叠，已替换（不会重复）`, 'info');
+    if (info?.inside >= 0) panel.message('新框落在另一个大得多的框里：如果那个框是框大了，请选中它删掉或拉小，不然会多出一个零件', 'warn');
     applyDetections();
+    syncBoxAttr();
   },
   onSelect: (i) => {
     $('#box-delete').disabled = i < 0;
     $('#box-class').value = String(boxEditor.cls);
+    syncBoxClassPills();
+    syncBoxAttr();
   },
 });
 for (const c of CLASSES) $('#box-class').add(new Option(c.name, String(c.id)));
-$('#box-class').addEventListener('change', (e) => boxEditor.setClass(Number(e.target.value)));
+$('#box-class').addEventListener('change', (e) => {
+  boxEditor.setClass(Number(e.target.value));
+  syncBoxClassPills();
+  syncBoxAttr();
+});
+
+// 类别快捷胶囊按钮（色环电阻 / LED）
+{
+  const host = $('#box-class-pills');
+  if (host) {
+    host.innerHTML = CLASSES.map(
+      (c, idx) => `<button type="button" class="box-pill" data-cls="${c.id}" style="--c:${c.color}" title="快捷键 ${idx + 1}"><span class="dot"></span>${escHtml(c.name)}</button>`,
+    ).join('');
+    host.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-cls]');
+      if (!btn) return;
+      const cls = Number(btn.dataset.cls);
+      $('#box-class').value = String(cls);
+      boxEditor.setClass(cls);
+      syncBoxClassPills();
+      syncBoxAttr();
+    });
+  }
+}
+
+function syncBoxClassPills() {
+  const host = $('#box-class-pills');
+  if (!host) return;
+  for (const btn of host.querySelectorAll('[data-cls]')) {
+    const on = Number(btn.dataset.cls) === boxEditor.cls;
+    btn.classList.toggle('on', on);
+    btn.setAttribute('aria-pressed', String(on));
+  }
+}
+syncBoxClassPills();
+
+/** 选中 LED 框时的"颜色"下拉框与快捷胶囊按钮："自动识别"按照片判断，也可以人工指定 */
+function syncBoxAttr() {
+  const sel = $('#box-attr');
+  const pills = $('#box-attr-pills');
+  const d = boxEditor.selected >= 0 ? boxEditor.getBoxes()[boxEditor.selected] : null;
+  const isLed = d?.cls === 1;
+  sel.hidden = true; // 保留隐藏的 select 兼容，界面展示胶囊按钮
+  if (pills) pills.hidden = !isLed;
+  if (!isLed) return;
+  if (!sel.options.length) sel.replaceChildren(new Option('颜色：自动识别', ''), ...Object.entries(LED_COLORS).map(([k, v]) => new Option(v.name, k)));
+  if (pills && !pills.childElementCount) {
+    pills.innerHTML =
+      `<button type="button" class="box-pill" data-color="" title="按原图自动判断颜色">自动</button>` +
+      Object.entries(LED_COLORS)
+        .map(([k, v]) => `<button type="button" class="box-pill" data-color="${k}" style="--c:${v.hex}" title="${escHtml(v.name)}"><span class="dot"></span>${escHtml(v.name.replace(/ LED$/, ''))}</button>`)
+        .join('');
+    pills.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-color]');
+      if (!btn) return;
+      const color = btn.dataset.color;
+      sel.value = color;
+      boxEditor.setAttr({ color: color || undefined });
+      syncBoxAttr();
+    });
+  }
+  const cur = d.color ?? '';
+  sel.value = cur;
+  if (pills) {
+    for (const btn of pills.querySelectorAll('[data-color]')) {
+      const on = btn.dataset.color === cur;
+      btn.classList.toggle('on', on);
+      btn.setAttribute('aria-pressed', String(on));
+    }
+  }
+}
+$('#box-attr').addEventListener('change', (e) => {
+  if (boxEditor.getBoxes()[boxEditor.selected]?.cls !== 1) return;
+  boxEditor.setAttr({ color: e.target.value || undefined });
+  syncBoxAttr();
+});
 $('#box-delete').addEventListener('click', () => boxEditor.deleteSelected());
 $('#box-clear').addEventListener('click', () => boxEditor.clear());
 $('#box-done').addEventListener('click', () => setBoxEditing(false));
@@ -1055,7 +1274,17 @@ window.addEventListener('keydown', (e) => {
     e.preventDefault();
     boxEditor.deleteSelected();
   } else if (e.key === 'Escape') {
-    boxEditor.setBoxes(boxEditor.getBoxes());
+    if (boxEditor.selected >= 0) boxEditor.select(-1);
+    else setBoxEditing(false);
+  } else if (e.key === '1' || e.key === '2') {
+    const cls = Number(e.key) - 1;
+    if (CLASSES[cls]) {
+      e.preventDefault();
+      $('#box-class').value = String(cls);
+      boxEditor.setClass(cls);
+      syncBoxClassPills();
+      syncBoxAttr();
+    }
   }
 });
 
@@ -1073,6 +1302,8 @@ function setBoxEditing(on) {
   if (on) {
     tabs.select('debug');
     $('#box-class').value = String(boxEditor.cls);
+    syncBoxClassPills();
+    syncBoxAttr();
   } else {
     boxEditor.setBoxes(boxEditor.getBoxes()); // 取消选中
     // 演示模式：框好后回到正视图确认
@@ -1085,6 +1316,8 @@ function setBoxEditing(on) {
 function resetDetections() {
   if (detResult?.pending) cancelPendingDetection();
   detResult = null;
+  edits = null;
+  reviewList = [];
   updateModelProgress(null);
   setBoxEditing(false);
   boxEditor.setBoxes([]);
@@ -1110,14 +1343,21 @@ async function runDetect({ force = false } = {}) {
     // 等待期间换了照片、重新检测、改了检测方式，或手动改了框：这次的结果作废
     const stale = () => seq !== detSeq || store.state.image?.bitmap !== image.bitmap;
     const mode = detMode();
+    // 同一张照片重新识别：人工框留着，删掉 / 改过的框不再出现
+    const keepManual = detResult?.bitmap === image.bitmap ? detResult.detections.filter((d) => d.manual) : [];
     if (detResult?.pending) cancelPendingDetection();
+    // 确认针对上一套检测结果；重新识别后有疑点时仍需复核，不能沿用同一张照片的旧确认。
+    confirmedFor = null;
+    reviewFor = null;
+    reviewList = [];
     const controller = new AbortController();
     const detector = mode === 'onnx' ? getOnnxDetector(detSettings.model, { prefer: detSettings.prefer }) : null;
     let detections = [];
     let source = mode === 'onnx' ? 'onnx' : truth ? 'truth' : 'mock';
     let note = null;
     let onnx = null;
-    detResult = { bitmap: image.bitmap, detections: [], source, note: null, pending: true, detector, controller };
+    // 连续点重新识别或切换后端时，中间的 pending 状态也要保留人工框。
+    detResult = { bitmap: image.bitmap, detections: keepManual, source, note: null, pending: true, detector, controller };
     updateModelProgress(null);
     renderDetectSection(null);
     if (store.state.error) store.rollback(store.state.stage);
@@ -1147,12 +1387,10 @@ async function runDetect({ force = false } = {}) {
         ? () =>
             setTimeout(() => {
               if (stale()) return colorDone(null);
-              try {
-                colorDone(colorCandidates());
-              } catch (err) {
+              colorCandidates().then(colorDone, (err) => {
                 console.error(err); // 颜色分割出错不影响 YOLO 的结果
                 colorDone(null);
-              }
+              });
             }, 0)
         : null;
       const t1 = now();
@@ -1187,13 +1425,25 @@ async function runDetect({ force = false } = {}) {
     if (stale()) return;
     // 官方 COCO 模型（调试用）的类别不是零件：框只在调试视图里显示，不映射成零件
     const debugOnly = mode === 'onnx' && detSettings.model !== 'parts';
-    // 按 LED 的固定尺寸修正偏大的框（挤在一起时中间那几个）
+    // 按 LED 的固定尺寸修正偏大的框（挤在一起时中间那几个）：先换成"建场景"的遮罩、让出一帧
     let fit = null;
     if (source !== 'none' && !debugOnly) {
+      beginBuildLoader();
+      await nextFrame();
+      if (stale()) return;
       const t2 = now();
       fit = fitDetections(detections);
       detections = fit.dets;
       fit.ms = now() - t2;
+    }
+    detections = detections.map((d) => withUid(d));
+    if (!debugOnly && (keepManual.length || edits?.bitmap === image.bitmap)) {
+      const merged = mergeEdits(detections, { removed: edits?.bitmap === image.bitmap ? edits.removed : [], manual: keepManual });
+      detections = merged.dets;
+      if (keepManual.length || merged.dropped) {
+        panel.message(`沿用你之前的修改：保留 ${keepManual.length} 个人工框${merged.dropped ? `，${merged.dropped} 个删过 / 改过的框不再出现` : ''}`, 'info');
+      }
+      if (source === 'none' && detections.length) source = 'manual';
     }
     detResult = { bitmap: image.bitmap, detections, source, note, onnx, debugOnly, fit };
     updateModelProgress(null);
@@ -1232,15 +1482,15 @@ async function runDetect({ force = false } = {}) {
     store.fail('detect', detResult.note);
     return;
   }
-  applyDetections();
+  await applyDetectionsSmooth();
 }
 
-/** 检测框 → 零件（两种方法都算），写入 state，重建 3D 零件 */
-function applyDetections() {
+/** 第一段：检测框 → 零件（两种方法都算、看照片定朝向和颜色）；还不写入 state。条件不满足时返回 null */
+function prepareScene() {
   const { pose, calib, intrinsics, image } = store.state;
   if (!detResult || !pose || image?.bitmap !== detResult.bitmap) {
     renderDetectSection(null);
-    return;
+    return null;
   }
   const t0 = now();
   const K = intrinsicsMatrix(intrinsics);
@@ -1250,20 +1500,100 @@ function applyDetections() {
   // 本体互相插进去的（零件挤在一起、实拍位置有零点几毫米的误差）各推开一点，3D 里不穿模
   const sep = separateBodies(refineFromPhoto(mapped.parts), partFootprints());
   const parts = sep.parts;
+  // 拿不准的零件（置信度低、颜色补的框、拆出来的框、LED 颜色没认出）：请人确认
+  const prevReview = reviewList.length;
+  reviewList = parts
+    .map((part) => ({ part, det: detResult.detections[part.detIndex] }))
+    .map((r) => ({ ...r, reasons: reviewReasons(r.part, r.det) }))
+    .filter((r) => r.reasons.length);
+  if (reviewList.length && reviewFor !== image.bitmap && confirmedFor !== image.bitmap) {
+    reviewFor = image.bitmap;
+    panel.message(`有 ${reviewList.length} 个零件拿不准，请在正视图里确认（可以改框、补框，或指定 LED 颜色）`, 'warn');
+  } else if (prevReview && !reviewList.length && reviewFor === image.bitmap) panel.message('拿不准的零件都确认好了', 'ok');
   if (sep.moved.size) {
     const mx = Math.max(...sep.moved.values());
     panel.message(`${sep.moved.size} 个零件的模型与旁边的互相插进去了，已各推开一点（最多 ${fmt(mx, 1)} mm）`, 'info');
   }
   timeStep('map', now() - t0);
-  const t1 = now();
+  return { parts, dropped };
+}
+
+/** 第二段：写入零件、建 3D 模型 */
+function commitParts({ parts }) {
   stopSorting();
   store.advance('detected', { detections: detResult.detections, parts });
   partsLayer.setParts(parts, parallaxOn);
+}
+
+/** 第三段：底板贴图（擦掉零件）、场景建好 */
+function commitScene({ parts, dropped }) {
   refreshBoardTexture();
   store.advance('sceneBuilt');
   renderDetectSection({ parts, dropped });
+}
+
+/** 检测框 → 零件，写入 state，重建 3D 零件，规划（一口气做完；改框、换方法等交互用） */
+function applyDetections() {
+  buildSeq++; // 正在分段建场景的那次作废
+  viewLoader.set('build', null);
+  const prepared = prepareScene();
+  if (!prepared) return;
+  const t1 = now();
+  commitParts(prepared);
+  commitScene(prepared);
   refreshPlan();
   timeStep('scene', now() - t1);
+  afterScene();
+}
+
+/** 分段建场景的代号：新的一次开始（或改框后同步重建）时，等待中的那次作废 */
+let buildSeq = 0;
+
+/** 识别完、建场景期间的遮罩（只在遮罩已经显示时接上，免得一闪）；定位、识别的遮罩换成它 */
+function beginBuildLoader() {
+  if (viewLoader.visible) viewLoader.set('build', { title: '正在建立 3D 场景', sub: '确定每个零件的位置、朝向和颜色', mode: store.state.image ? 'glass' : 'cover' });
+  viewLoader.set('prep', null);
+}
+
+/**
+ * 识别完成后的建场景：同 applyDetections，但每段之间让出一帧，加载动画不卡；
+ * 全部做完遮罩才收起，等它淡出后再切视图（两段动画不叠在一起）
+ */
+async function applyDetectionsSmooth() {
+  const token = ++buildSeq;
+  const dr = detResult;
+  const bitmap = store.state.image?.bitmap;
+  const stale = () => token !== buildSeq || detResult !== dr || store.state.image?.bitmap !== bitmap;
+  beginBuildLoader();
+  const masked = viewLoader.visible;
+  try {
+    await nextFrame();
+    if (stale()) return;
+    const prepared = prepareScene();
+    if (!prepared) return;
+    await nextFrame();
+    if (stale()) return;
+    const t1 = now();
+    commitParts(prepared);
+    await nextFrame();
+    if (stale()) return;
+    commitScene(prepared);
+    await nextFrame();
+    if (stale()) return;
+    refreshPlan();
+    timeStep('scene', now() - t1);
+    await nextFrame();
+  } finally {
+    if (token === buildSeq) viewLoader.set('build', null);
+  }
+  if (stale()) return;
+  if (masked) await sleep(LOADER_HIDE_MS);
+  if (stale()) return;
+  afterScene();
+}
+
+/** 场景建好之后：去正视图确认，或切到 3D 视图播放转场 */
+function afterScene() {
   if (!world.available) {
     endRun();
     if (needConfirm()) showConfirm();
@@ -1326,7 +1656,8 @@ const YAW_SEARCH_MM = 10;
  * 1. 朝向先看引脚（vision/leads.js）：在原照片上以零件为中心取一小块 8 px/mm 的正射图，框外一圈里找引脚，
  *    LED 由引脚方向反推灯头朝向，电阻由两侧引脚定长轴；旁边零件的本体所在区域不算，挨在一起也互不干扰；
  * 2. 引脚看不清时退回原来的办法（底板正射图上按零件像素的形状），再不行沿用 mapping 的 0° / 90° 粗判；
- * 3. LED 判断灯体颜色（红 / 绿 / 蓝 / 黄 / 透明），决定显示颜色和分到哪个料盒
+ * 3. LED 判断灯体颜色（红 / 绿 / 蓝 / 黄 / 透明），决定显示颜色和分到哪个料盒。
+ * 人工在框上指定了颜色的，以人工的为准，不再按照片判断
  */
 function refineFromPhoto(parts) {
   const { image, calib } = store.state;
@@ -1345,9 +1676,11 @@ function refineFromPhoto(parts) {
     let q = p;
     const lead = leadDirection(patch, body, p.cls === 1 ? 'led' : 'axis', { others });
     if (lead?.reliable) q = { ...p, rotDeg: lead.rotDeg, yawSource: 'leads' };
+    const det = detResult.detections[p.detIndex];
     if (p.cls === 1) {
       const c = ledColor(patch, body, { others });
-      if (c) q = { ...q, color: c.color };
+      if (det?.color && LED_COLORS[det.color]) q = { ...q, color: det.color, colorSource: 'manual' };
+      else if (c) q = { ...q, color: c.color };
       // 彩色灯体：引脚常被掰弯几度，角度按灯体自身的长轴微调（头朝哪边仍按引脚）
       if (c && c.color !== 'clear' && q.yawSource === 'leads') {
         // 灯体顶部（高 heightMm）沿视线落到板面，比实际位置往外偏 r·h / (相机高 − h)
@@ -1365,13 +1698,14 @@ function refineFromPhoto(parts) {
   });
   // 引脚看不清的零件才用原来的办法（较慢，只对这些零件算）
   const rest = out.filter((p) => !p.yawSource?.startsWith('leads'));
-  if (!rest.length) return out;
-  const byShape = new Map(refineYawByShape(rest).map((p) => [p.id, p]));
+  const byShape = new Map(rest.length ? refineYawByShape(rest).map((p) => [p.id, p]) : []);
   return out.map((p) => {
     const q = byShape.get(p.id);
-    return q?.yawSource ? { ...p, rotDeg: q.rotDeg, yawSource: q.yawSource } : p;
+    const r = q?.yawSource ? { ...p, rotDeg: q.rotDeg, yawSource: q.yawSource } : p;
+    return r;
   });
 }
+
 
 /**
  * 原来的办法：在底板正射图上取检测框对应的区域分出零件像素，按形状求角度；估计不可靠时沿用 mapping 的 0° / 90° 粗判
@@ -1484,7 +1818,7 @@ function renderDetControls() {
   html += `<label>检测方式 <select class="select" id="det-mode">${opt('onnx', '模型推理（ONNX）', mode)}${opt('mock', 'mock（真值 / 检测文件）', mode)}</select></label>`;
   if (mode === 'onnx') {
     html += `<label>模型 <select class="select" id="det-model">${Object.entries(MODELS).map(([k, m]) => opt(k, m.label, detSettings.model)).join('')}</select></label>`;
-    html += `<label>后端 <select class="select" id="det-prefer">${opt('auto', '自动（优先 WebGPU）', detSettings.prefer)}${opt('wasm', '仅 WASM', detSettings.prefer)}</select></label>`;
+    html += `<label>后端 <select class="select" id="det-prefer">${opt('wasm', 'WASM（默认，界面流畅）', detSettings.prefer)}${opt('auto', '优先 WebGPU（更快，识别时界面可能卡顿）', detSettings.prefer)}</select></label>`;
     html += `<label title="按颜色（红色 LED、蓝色电阻）找零件，YOLO 没框到的补上，虚线框表示"><input type="checkbox" id="det-color"${detSettings.colorAssist ? ' checked' : ''} /> 颜色分割补漏</label>`;
   }
   html += `<button type="button" class="btn btn-small" id="btn-det-rerun"${detResult?.pending ? ' disabled' : ''}>重新检测</button></div>`;
@@ -1569,10 +1903,12 @@ async function loadDetectionsFile(file) {
     }
     detSeq++; // 正在进行的检测作废，以载入的文件为准
     if (detResult.pending) cancelPendingDetection();
-    detResult = { ...detResult, detections, source: 'file', note: null, pending: false, debugOnly: false, onnx: null, fit: null };
+    // 载入的文件是一整套新框：之前的人工修改作废
+    edits = null;
+    detResult = { ...detResult, detections: detections.map((d) => withUid(d)), source: 'file', note: null, pending: false, debugOnly: false, onnx: null, fit: null };
     if (demoMode) confirmedFor = null;
     updateModelProgress(null);
-    boxEditor.setBoxes(detections);
+    boxEditor.setBoxes(detResult.detections);
     updateDetOverlay();
     applyDetections();
     panel.message(`已载入 ${file.name}：${detections.length} 个框`, 'ok');
@@ -1751,7 +2087,40 @@ $('#dock-start').addEventListener('click', startSorting);
 $('#dock-pause').addEventListener('click', toggleSortPause);
 $('#dock-reset').addEventListener('click', () => resetSorting());
 
+const SPEED_PRESETS = [0.5, 1, 1.5, 2, 3];
+const fmtSpeed = (s) => `${Number(s) % 1 === 0 ? Number(s).toFixed(0) : Number(s).toFixed(2).replace(/0$/, '')}×`;
+function setSortSpeed(val) {
+  sortPlayer.setSpeed(val);
+  const dockBtn = $('#dock-speed');
+  if (dockBtn) dockBtn.textContent = fmtSpeed(val);
+  const slider = document.querySelector('#info-panel #sort-speed');
+  const label = document.querySelector('#info-panel #sort-speed-val');
+  if (slider) slider.value = String(val);
+  if (label) label.textContent = `${Number(val).toFixed(2)}×`;
+}
+$('#dock-speed')?.addEventListener('click', () => {
+  const cur = sortPlayer.speed;
+  const idx = SPEED_PRESETS.findIndex((s) => Math.abs(s - cur) < 0.05);
+  const next = SPEED_PRESETS[(idx + 1) % SPEED_PRESETS.length];
+  setSortSpeed(next);
+});
+
 const partName = (p) => `${displayName(p)} (${fmt(p.x, 1)}, ${fmt(p.y, 1)})`;
+
+/** 聚焦到指定零件：在 3D 视图中高亮标签，在 2D 调试视图中放大到对应检测框 */
+function focusPartById(partId, { zoom = false } = {}) {
+  const p = store.state.parts?.find((q) => q.id === partId);
+  if (!p) return;
+  partsLayer.setHighlighted(partId);
+  if (zoom) {
+    if ($('#view-debug').classList.contains('active')) {
+      const box = detResult?.detections[p.detIndex]?.box;
+      if (box) debugView.focus(box);
+    } else if ($('#view-three').classList.contains('active') && world.available) {
+      world.requestRender();
+    }
+  }
+}
 
 /** 渲染"分拣"分区（规划变化时整体重建；进度变化只改样式） */
 function renderSortSection() {
@@ -1775,16 +2144,16 @@ function renderSortSection() {
   html += '<ol class="task-list">' + tasks.map((t, i) => {
     const p = byId.get(t.partId);
     if (t.kind === 'push') {
-      return `<li data-i="${i}" class="push"><span class="dot" style="--c:${partColor(p)}"></span>拨开 ${displayName(p)}<span class="muted"> · 夹爪下不去，先${t.gap > 0 ? '用一根手指' : ''}推开 ${fmt(t.dist, 0)} mm</span></li>`;
+      return `<li data-i="${i}" data-part-id="${t.partId}" class="push" title="悬停在 3D 视图高亮该元件 · 点击定位"><span class="dot" style="--c:${partColor(p)}"></span><span class="task-text">拨开 ${displayName(p)}<span class="muted"> · 夹爪下不去，先${t.gap > 0 ? '用一根手指' : ''}推开 ${fmt(t.dist, 0)} mm</span></span></li>`;
     }
     if (t.kind === 'relocate') {
-      return `<li data-i="${i}" class="push"><span class="dot" style="--c:${partColor(p)}"></span>挪开 ${displayName(p)}<span class="muted"> → 板上空位 (${fmt(t.partTo[0], 1)}, ${fmt(t.partTo[1], 1)})，不入盒</span></li>`;
+      return `<li data-i="${i}" data-part-id="${t.partId}" class="push" title="悬停在 3D 视图高亮该元件 · 点击定位"><span class="dot" style="--c:${partColor(p)}"></span><span class="task-text">挪开 ${displayName(p)}<span class="muted"> → 板上空位 (${fmt(t.partTo[0], 1)}, ${fmt(t.partTo[1], 1)})，不入盒</span></span></li>`;
     }
     const bin = sortPlan.bins.find((b) => b.id === t.binId);
-    return `<li data-i="${i}"><span class="dot" style="--c:${partColor(p)}"></span>${partName(p)}<span class="muted"> → ${bin.label}盒</span></li>`;
+    return `<li data-i="${i}" data-part-id="${t.partId}" title="悬停在 3D 视图高亮该元件 · 点击定位"><span class="dot" style="--c:${partColor(p)}"></span><span class="task-text">${partName(p)}<span class="muted"> → ${bin.label}盒</span></span></li>`;
   }).join('') + '</ol>';
   if (skipped.length) {
-    html += '<p class="sub-title">已跳过</p><ul class="skip-list">' + skipped.map((p) => `<li>${partName(p)}<span>${p.skipReason}</span></li>`).join('') + '</ul>';
+    html += '<p class="sub-title">已跳过</p><ul class="skip-list">' + skipped.map((p) => `<li data-part-id="${p.id}" title="悬停在 3D 视图高亮该元件 · 点击定位">${partName(p)}<span>${p.skipReason}</span></li>`).join('') + '</ul>';
   }
   body.innerHTML = html;
   body.querySelector('#sort-start').addEventListener('click', startSorting);
@@ -1792,8 +2161,17 @@ function renderSortSection() {
   body.querySelector('#sort-reset').addEventListener('click', () => resetSorting());
   body.querySelector('#sort-ins').addEventListener('click', showInstructions);
   body.querySelector('#sort-speed').addEventListener('input', (e) => {
-    sortPlayer.setSpeed(Number(e.target.value));
-    body.querySelector('#sort-speed-val').textContent = `${Number(e.target.value).toFixed(2)}×`;
+    setSortSpeed(Number(e.target.value));
+  });
+  // 任务列表与 3D / 2D 视图联动高亮
+  body.addEventListener('pointerover', (e) => {
+    const li = e.target.closest('[data-part-id]');
+    if (li) focusPartById(Number(li.dataset.partId));
+  });
+  body.addEventListener('pointerleave', () => partsLayer.setHighlighted(null));
+  body.addEventListener('click', (e) => {
+    const li = e.target.closest('[data-part-id]');
+    if (li) focusPartById(Number(li.dataset.partId), { zoom: true });
   });
   onSortState(sortPlayer.state);
 }
@@ -1899,9 +2277,7 @@ function onSortState(state) {
 /* 上传与示例                                                           */
 /* ------------------------------------------------------------------ */
 
-$('#file-input').addEventListener('change', async (e) => {
-  const file = e.target.files?.[0];
-  e.target.value = '';
+async function handleUploadFile(file) {
   if (!file) return;
   sampleLoadController?.abort();
   sampleLoadController = null;
@@ -1928,17 +2304,110 @@ $('#file-input').addEventListener('change', async (e) => {
     loadingPhoto = false;
     store.fail('image', err.message);
   }
+}
+
+$('#file-input').addEventListener('change', (e) => {
+  const file = e.target.files?.[0];
+  e.target.value = '';
+  if (file) handleUploadFile(file);
 });
+
+// 拖拽上传（Drag & Drop）与 Ctrl + V 粘贴照片
+{
+  const viewsEl = $('.views');
+  const dropOverlay = document.createElement('div');
+  dropOverlay.className = 'drop-overlay';
+  dropOverlay.hidden = true;
+  dropOverlay.setAttribute('aria-hidden', 'true');
+  dropOverlay.innerHTML = `
+    <div class="drop-overlay-box">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" /></svg>
+      <b>松开鼠标即可载入照片</b>
+      <span>支持 JPEG / PNG 原图</span>
+    </div>`;
+  viewsEl?.appendChild(dropOverlay);
+
+  let dragDepth = 0;
+  const hasFiles = (e) => e.dataTransfer?.types && [...e.dataTransfer.types].includes('Files');
+
+  window.addEventListener('dragenter', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    dragDepth++;
+    dropOverlay.hidden = false;
+  });
+  window.addEventListener('dragover', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+  });
+  window.addEventListener('dragleave', (e) => {
+    if (!hasFiles(e)) return;
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (dragDepth === 0) dropOverlay.hidden = true;
+  });
+  window.addEventListener('drop', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    dragDepth = 0;
+    dropOverlay.hidden = true;
+    const file = e.dataTransfer?.files?.[0];
+    if (!file) return;
+    // 如果正在打开检测框文件（.json）且已载入照片，支持直接拖入检测文件
+    if (/\.json$/i.test(file.name) && store.state.image && detResult) {
+      loadDetectionsFile(file);
+    } else {
+      handleUploadFile(file);
+    }
+  });
+
+  window.addEventListener('paste', (e) => {
+    if (/^(INPUT|TEXTAREA)$/.test(e.target?.tagName)) return;
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const item of items) {
+      if (item.kind === 'file' && item.type.startsWith('image/')) {
+        const file = item.getAsFile();
+        if (file) {
+          e.preventDefault();
+          handleUploadFile(file);
+          return;
+        }
+      }
+    }
+  });
+}
 
 const sampleSelect = $('#sample-select');
 let samples = [];
+const sampleMenu = $('#sample-menu');
+bindMenu($('#sample-menu-btn'), sampleMenu);
+bindMenu($('#more-menu-btn'), $('#more-menu'));
+/** 顶栏"上传照片"右侧的示例菜单：实拍在前，合成图在后 */
+function renderSampleMenu(list) {
+  const item = (s) => `<button type="button" class="menu-item" role="menuitem" data-sample="${escHtml(s.key)}"><span class="menu-check" aria-hidden="true"></span><span>${escHtml(s.label.replace(/^(真实照片|实拍照片|合成图)\s*·\s*/, ''))}</span></button>`;
+  const real = list.filter((s) => !s.key.startsWith('synth'));
+  const synth = list.filter((s) => s.key.startsWith('synth'));
+  sampleMenu.innerHTML =
+    (real.length ? `<p class="menu-label">实拍照片</p>${real.map(item).join('')}` : '') +
+    (synth.length ? `<p class="menu-label">合成测试图（带真值）</p>${synth.map(item).join('')}` : '') ||
+    '<p class="menu-note">没有可用的示例</p>';
+}
+sampleMenu.addEventListener('click', (e) => {
+  const key = e.target.closest('[data-sample]')?.dataset.sample;
+  if (key) loadSampleByKey(key);
+});
 loadSampleIndex()
   .then((list) => {
     samples = list;
     for (const s of list) sampleSelect.add(new Option(s.label, s.key));
+    renderSampleMenu(list);
     hero.setReady(list.length > 0);
   })
-  .catch((err) => panel.message(`示例列表读取失败：${err.message}`, 'warn'));
+  .catch((err) => {
+    sampleMenu.innerHTML = '<p class="menu-label">示例照片</p><p class="menu-note">示例列表读取失败</p>';
+    panel.message(`示例列表读取失败：${err.message}`, 'warn');
+  });
 
 sampleSelect.addEventListener('change', (e) => {
   const key = e.target.value;
@@ -2028,10 +2497,8 @@ const sceneReady = () => {
 renderStatus(); // 先建"状态"分区，导出放在它后面
 const exportBody = panel.setCustom('export', '导出');
 exportBody.innerHTML = `
-  <p class="muted small">交付材料：流程图按"识别—定位—执行"分段；零件图片为正视图框选 + 每个零件的特写；分拣指令含抓取点、夹爪方向和开口、关节角。</p>
+  <p class="muted small">零件图片为正视图框选 + 每个零件的特写；分拣指令含抓取点、夹爪方向和开口、关节角。</p>
   <div class="export-grid">
-    <span>流程图</span><span><button type="button" class="btn btn-small" data-exp="flow-png">PNG</button> <button type="button" class="btn btn-small" data-exp="flow-svg">SVG</button>
-      <label class="check small"><input type="checkbox" id="exp-flow-demo" checked /> 含"正视图确认"（演示流程）</label></span>
     <span>零件图片</span><span><button type="button" class="btn btn-small" data-exp="parts-png">PNG</button></span>
     <span>分拣指令</span><span><button type="button" class="btn btn-small" data-exp="plan-csv">CSV</button> <button type="button" class="btn btn-small" data-exp="plan-json">JSON</button></span>
   </div>`;
@@ -2042,15 +2509,6 @@ function updateExportButtons() {
   for (const k of ['plan-csv', 'plan-json']) exportBody.querySelector(`[data-exp="${k}"]`).disabled = !ready || !sortPlan;
 }
 store.on('change', updateExportButtons);
-
-async function exportFlow(kind) {
-  // 演示模式不显示导出分区；是否画上演示流程的"确认"一步由勾选决定
-  const demo = $('#exp-flow-demo').checked;
-  const { svg, width, height } = flowSvgStandalone({ demo, detectionSource: detResult?.source ?? null });
-  const name = `流程图_识别-定位-执行${demo ? '_含确认' : ''}`;
-  if (kind === 'svg') downloadText(svg, `${name}.svg`, 'image/svg+xml;charset=utf-8');
-  else await downloadCanvas(await svgToCanvas(svg, width, height, 4), `${name}.png`);
-}
 
 async function exportParts() {
   if (!sceneReady()) return;
@@ -2100,7 +2558,7 @@ exportBody.addEventListener('click', (e) => {
   const b = e.target.closest('[data-exp]');
   if (!b || b.disabled) return;
   const k = b.dataset.exp;
-  const job = k.startsWith('flow') ? exportFlow(k.slice(5)) : k === 'parts-png' ? exportParts() : exportPlan(k.slice(5));
+  const job = k === 'parts-png' ? exportParts() : exportPlan(k.slice(5));
   Promise.resolve(job)
     .then(() => panel.message('已导出', 'ok'))
     .catch((err) => {
@@ -2125,21 +2583,33 @@ const confirmView = createConfirmView({
     transitionPending = world.available;
     tabs.select(world.available ? 'three' : 'debug'); // 无 WebGL 时保留照片及正视图。
   },
-  onEdit: () => {
+  onEdit: (detIndex = -1) => {
     if (!detResult) return;
     $('#btn-boxedit').disabled = false;
     setBoxEditing(true);
+    // 从复核清单点进来：选中那个框并放大到它
+    const box = detResult.detections[detIndex]?.box;
+    if (box) {
+      boxEditor.select(detIndex);
+      debugView.focus(box);
+    }
   },
 });
 
 /** 演示模式下 3D 视图要等确认后才能看；正视图标签只在演示模式、场景建好后可用 */
 function updateDemoTabs() {
   const built = stageIndex(store.state.stage) >= stageIndex('sceneBuilt');
-  $('#tab-three').disabled = demoMode && needConfirm();
-  $('#tab-confirm').disabled = !(demoMode && built && store.state.parts);
+  const reviewing = !demoMode && reviewFor === store.state.image?.bitmap;
+  const wait = needConfirm();
+  $('#tab-three').disabled = wait && world.available;
+  // 正视图：演示模式下一直有；平时只在这张照片有拿不准的零件时出现（叫"复核"）
+  const tab = $('#tab-confirm');
+  tab.classList.toggle('force-show', reviewing);
+  tab.textContent = demoMode ? '正视图' : '复核';
+  tab.disabled = !((demoMode || reviewing) && built && store.state.parts);
   // 确认之前不显示分拣（免得没确认就开始分拣）
-  document.body.classList.toggle('demo-wait', demoMode && needConfirm());
-  $('#sort-dock').hidden = !world.available || !sortPlan || needConfirm();
+  document.body.classList.toggle('demo-wait', wait);
+  $('#sort-dock').hidden = !world.available || !sortPlan || wait;
   if (!world.available) {
     $('#tab-three').disabled = false;
     for (const id of ['btn-transition', 'btn-compare', 'three-reset', 'btn-arm-debug']) $(`#${id}`).disabled = true;
@@ -2153,6 +2623,7 @@ function showConfirm() {
   if (!boardTex || boardTex.bitmap !== store.state.image?.bitmap || !parts) return;
   confirmView.show({
     canBuild: world.available,
+    review: reviewList.map((r) => ({ id: r.part.id, detIndex: r.part.detIndex, cls: r.part.cls, reasons: r.reasons })),
     source: DET_SOURCE_LABELS[detResult?.source] ?? '',
     image: boardTex.canvas,
     toTex: invert3(boardTex.toBoard),
@@ -2167,7 +2638,8 @@ function showConfirm() {
 function setDemoMode(on) {
   demoMode = on;
   document.body.classList.toggle('demo', on);
-  $('#btn-demo').setAttribute('aria-pressed', String(on));
+  if (on && panel.tab === 'debug') panel.selectTab('progress'); // 演示模式不显示"调试"页
+  $('#btn-demo').setAttribute('aria-checked', String(on));
   try {
     localStorage.setItem('yolohtml.demo', on ? '1' : '0');
   } catch {
@@ -2187,7 +2659,7 @@ function setDemoMode(on) {
       showConfirm();
     }
   } else {
-    if ($('#view-confirm').classList.contains('active')) tabs.select(built ? 'three' : 'debug');
+    if ($('#view-confirm').classList.contains('active') && !needConfirm()) tabs.select(built ? 'three' : 'debug');
     if (built && !transitionShown) {
       transitionPending = true;
       if ($('#view-three').classList.contains('active')) playTransition();
@@ -2197,6 +2669,7 @@ function setDemoMode(on) {
   renderStatus();
 }
 $('#btn-demo').addEventListener('click', () => setDemoMode(!demoMode));
+$('#demo-chip').addEventListener('click', () => setDemoMode(false));
 {
   let saved = null;
   try {
@@ -2212,7 +2685,7 @@ $('#btn-demo').addEventListener('click', () => setDemoMode(!demoMode));
 renderStatus();
 
 /* global __BUILD_VERSION__ */
-panel.message(`页面已就绪（版本 ${typeof __BUILD_VERSION__ === 'string' ? __BUILD_VERSION__ : 'dev'}）。`, 'ok');
+panel.message(`页面已就绪（版本 ${typeof __BUILD_VERSION__ === 'string' ? __BUILD_VERSION__ : 'dev'}）。`, 'info');
 
 // 真值演示不下载模型；真实照片在实际识别时按需初始化。
 

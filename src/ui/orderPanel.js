@@ -42,6 +42,8 @@ export function createOrderPanel({ panel, getParts, getPlanningOptions = () => (
   /** 自选清单：null = 全部分拣；否则 种类 → 数量 */
   let order = null;
   let note = '';
+  /** AI 说明数量怎么算的 */
+  let why = '';
   let usage = null;
   let cacheHit = false;
   let bodyElement = null;
@@ -278,7 +280,8 @@ export function createOrderPanel({ panel, getParts, getPlanningOptions = () => (
         </div>
         <p class="muted small ai-status" role="status">${esc(aiStatus)}</p>
         <p class="ai-cache-hint">缓存保留 24 小时 · 最多 50 条<br />重新生成将调用接口，成功后替换当前清单。</p>
-        <p class="note ai-note"${note ? '' : ' hidden'}>${esc(note)}</p>
+        <p class="ai-why"${why ? '' : ' hidden'}><b>怎么算的</b>${esc(why)}</p>
+        <p class="ai-note"${note ? '' : ' hidden'}><b>请留意</b>${esc(note)}</p>
         <p class="muted small ai-usage"${usage || cacheHit ? '' : ' hidden'}>${cacheHit ? '命中本地缓存，本次未调用接口（0 token）' : usage ? `本次 ${usage.totalTokens} tokens（输入 ${usage.promptTokens}，输出 ${usage.completionTokens}，其中思考 ${usage.reasoningTokens ?? 0}，服务端缓存命中 ${usage.cachedTokens}）` : ''}</p>
         <details class="ai-settings"${llm.apiKey ? '' : ' open'}>
           <summary>接口设置</summary>
@@ -317,7 +320,9 @@ export function createOrderPanel({ panel, getParts, getPlanningOptions = () => (
       const act = e.target.closest('[data-act]')?.dataset.act;
       if (act === 'all') {
         note = '';
+        why = '';
         body.querySelector('.ai-note').hidden = true;
+        body.querySelector('.ai-why').hidden = true;
         setOrder(null, body);
       } else if (act === 'none') setOrder({}, body);
       else if (act === 'csv') {
@@ -415,6 +420,7 @@ export function createOrderPanel({ panel, getParts, getPlanningOptions = () => (
       usage = res.usage;
       cacheHit = !!res.cacheHit;
       note = res.note;
+      why = res.why ?? '';
       replaceAiOrder(res.order);
       message(`AI 已替换清单：共 ${Object.values(order).reduce((s, n) => s + n, 0)} 个元件${cacheHit ? '（本地缓存）' : ''}${res.retried ? '（第一次回复格式不对，已自动重试）' : ''}`, 'ok');
       aiStatus = '';

@@ -7,6 +7,9 @@ import { buildBoardSVG, renderBoardToCanvas } from './ui/boardSheet.js';
 import { checkBoardPhoto, EDGE_NAMES } from './vision/boardCheck.js';
 import { applyH } from './vision/homography.js';
 import { loadImageFile, ImageFormatError } from './vision/image.js';
+import { initTheme } from './ui/theme.js';
+
+initTheme();
 
 const sheet = buildBoardSVG();
 document.getElementById('sheet-host').appendChild(sheet);

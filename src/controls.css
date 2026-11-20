@@ -1,127 +1,290 @@
-/* 通用控件和玻璃面（主页面、标定板页面、合成图页面共用） */
+/* ==========================================================================
+   通用控件与表面系统 (主页面、标定板页面、合成图页面共用)
+   ========================================================================== */
 
-/* ---------- 玻璃面 ---------- */
-/* 静止的玻璃：下面是不动的底色，不需要实时模糊 */
+/* ---------- 面板与玻璃浮层 ---------- */
 .topbar, .toolbar, .panel-section, .card, .sort-dock, .confirm-bar, .model-progress {
-  background: linear-gradient(180deg, var(--glass-hi), var(--glass));
-  border: 1px solid var(--glass-rim);
-  box-shadow: inset 0 1px 0 var(--glass-edge), 0 0 0 0.5px var(--glass-shade), var(--shadow);
-}
-/* 浮在画面上的玻璃：下面的内容会动，实时模糊（只有这几小块） */
-.view-tools, .box-tools, .inset, .toolbar {
-  background: var(--glass-float);
-  border: 1px solid var(--glass-rim);
-  box-shadow: inset 0 1px 0 var(--glass-edge), 0 0 0 0.5px var(--glass-shade), var(--shadow-float);
+  background: var(--glass);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
   -webkit-backdrop-filter: var(--blur);
   backdrop-filter: var(--blur);
 }
-/* 浏览器不支持模糊，或系统设置了"降低透明度"：换成几乎不透明的底，保证看得清 */
+
+/* 浮在动态画布上的控件：高透毛玻璃 + 柔和深阴影 */
+.view-tools, .box-tools, .inset, .toolbar {
+  background: var(--glass-float);
+  border: 1px solid var(--glass-rim);
+  box-shadow: var(--shadow-float);
+  -webkit-backdrop-filter: var(--blur);
+  backdrop-filter: var(--blur);
+}
+
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .view-tools, .box-tools, .inset, .toolbar, .sort-dock { background: var(--glass-solid); }
+  .topbar, .panel-section, .card, .view-tools, .box-tools, .inset, .toolbar, .sort-dock {
+    background: var(--glass-solid);
+  }
 }
 @media (prefers-reduced-transparency: reduce) {
-  .topbar, .toolbar, .panel-section, .card, .sort-dock, .confirm-bar, .model-progress, .view-tools, .box-tools, .inset {
+  .topbar, .panel-section, .card, .view-tools, .box-tools, .inset, .toolbar, .sort-dock {
     background: var(--glass-solid);
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
   }
-  body::before { display: none; }
 }
 
 /* ---------- 按钮、下拉框 ---------- */
-.btn, .select {
-  height: 36px;
-  padding: 0 16px;
-  border-radius: 999px;
-  border: 1px solid var(--glass-rim);
-  background: linear-gradient(180deg, var(--glass-hi), var(--glass));
-  box-shadow: inset 0 1px 0 var(--glass-edge), 0 0 0 0.5px var(--glass-shade), 0 1px 2px rgba(31, 30, 29, 0.05);
+.btn, .icon-btn, .select {
+  box-sizing: border-box;
+  height: var(--ctl-h);
+  padding: 0 14px;
+  border-radius: var(--radius-ctl);
+  border: 1px solid var(--line-strong);
+  background: var(--card);
+  box-shadow: var(--shadow-ctl);
   color: var(--text);
   font: inherit;
+  font-size: 13px;
   font-weight: 500;
+  letter-spacing: -0.005em;
+  line-height: 1;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 6px;
   white-space: nowrap;
   user-select: none;
   -webkit-tap-highlight-color: transparent;
-  transition: transform 0.12s ease, background-color 0.15s, color 0.15s, opacity 0.15s;
+  transition:
+    background-color 0.16s ease,
+    border-color 0.16s ease,
+    color 0.16s ease,
+    box-shadow 0.16s ease,
+    opacity 0.16s ease,
+    transform 0.1s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
-.btn:hover, .select:hover { background-color: var(--hover); }
-.btn:active:not(:disabled), .icon-btn:active:not(:disabled), .tab:active:not(:disabled) { transform: scale(0.96); }
-.btn:focus-visible, .select:focus-visible, .tab:focus-visible, .icon-btn:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+
+.btn:hover:not(:disabled),
+.icon-btn:hover:not(:disabled),
+.select:hover:not(:disabled) {
+  background-color: var(--surface-raised);
+  border-color: color-mix(in srgb, var(--text) 28%, transparent);
+  box-shadow: 0 2px 5px rgba(24, 23, 21, 0.08), inset 0 1px 0 var(--glass-edge);
 }
+
+.btn:active:not(:disabled),
+.icon-btn:active:not(:disabled),
+.tab:active:not(:disabled) {
+  transform: translateY(0.5px) scale(0.98);
+}
+
+.btn:focus-visible,
+.select:focus-visible,
+.tab:focus-visible,
+.icon-btn:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* 主要按钮：陶土渐变 + 顶部内高光 + 暖色投影 */
 .btn-primary {
-  background: linear-gradient(180deg, var(--accent-hi), var(--accent));
-  border-color: transparent;
-  color: #fff;
+  background: var(--accent-gradient);
+  border-color: color-mix(in srgb, var(--accent) 85%, #000);
+  color: #ffffff;
   font-weight: 600;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.38), 0 0 0 0.5px rgba(120, 50, 25, 0.35), 0 6px 16px -6px var(--accent-glow);
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.15);
+  box-shadow: var(--shadow-primary);
 }
-.btn-primary:hover { background: linear-gradient(180deg, var(--accent-hi), var(--accent-hover)); }
+.btn-primary:hover:not(:disabled) {
+  background: linear-gradient(180deg, var(--accent-hi) 0%, var(--accent) 100%);
+  border-color: var(--accent-hover);
+  box-shadow:
+    0 2px 6px rgba(160, 60, 25, 0.32),
+    0 6px 14px -2px rgba(200, 90, 50, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.32);
+}
+.btn-primary:focus-visible {
+  box-shadow: 0 0 0 3px var(--accent-glow), var(--shadow-primary);
+}
+
+/* 幽灵按钮：无边框，用在顶栏次要入口 */
+.btn-ghost {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  color: var(--text-2);
+}
+.btn-ghost:hover:not(:disabled) {
+  background: var(--hover);
+  border-color: transparent;
+  box-shadow: none;
+  color: var(--text);
+}
+
+/* 尺寸变体 */
+.btn-small, .icon-btn {
+  height: var(--ctl-h-sm);
+  padding: 0 10px;
+  font-size: 12.5px;
+  border-radius: 7px;
+}
+.btn-large {
+  height: 42px;
+  padding: 0 22px;
+  font-size: 14px;
+  border-radius: 10px;
+}
+
+/* 方形图标按钮（＋ − 等） */
+.icon-btn {
+  min-width: var(--ctl-h-sm);
+  padding: 0 8px;
+  font-size: 14.5px;
+}
+.icon-btn.text {
+  font-size: 12.5px;
+  padding: 0 10px;
+}
+
+/* 开关型按钮按下：琥珀微光底 + 陶土字 + 细描边 */
+.btn[aria-pressed="true"],
+.icon-btn[aria-pressed="true"] {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+  color: var(--accent);
+  font-weight: 600;
+  box-shadow: inset 0 1px 2px rgba(200, 90, 50, 0.12);
+}
+
+.btn:disabled, .icon-btn:disabled, .select:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+a.btn { text-decoration: none; }
+
+/* 下拉选择框 */
 .select {
   -webkit-appearance: none;
   appearance: none;
   justify-content: flex-start;
-  padding-right: 32px;
-  /* 右侧的小箭头用两块渐变拼成（不用内嵌 SVG 图片） */
+  padding-right: 28px;
   background-image:
     linear-gradient(45deg, transparent 50%, var(--text-2) 50%),
-    linear-gradient(135deg, var(--text-2) 50%, transparent 50%),
-    linear-gradient(180deg, var(--glass-hi), var(--glass));
+    linear-gradient(135deg, var(--text-2) 50%, transparent 50%);
   background-repeat: no-repeat;
-  background-size: 5px 5px, 5px 5px, auto;
-  background-position: right 17px center, right 12px center, 0 0;
+  background-size: 4.5px 4.5px, 4.5px 4.5px;
+  background-position: right 14px center, right 9.5px center;
   text-overflow: ellipsis;
 }
-a.btn { text-decoration: none; }
-.btn:disabled { opacity: 0.5; cursor: default; }
-.btn-ghost { background: transparent; border-color: transparent; box-shadow: none; color: var(--text-2); }
-.btn-ghost:hover { background: var(--hover); color: var(--text); }
-.btn-small { height: 30px; padding: 0 12px; font-size: 13px; }
-input[type='checkbox'], input[type='range'] { accent-color: var(--accent); }
 
-/* ---------- 分段控件（标签页） ---------- */
+/* 精致复选框与滑块 */
+input[type='checkbox'] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  border-radius: 4.5px;
+  border: 1.5px solid var(--line-strong);
+  background: var(--card);
+  box-shadow: var(--shadow-xs);
+  display: inline-grid;
+  place-content: center;
+  cursor: pointer;
+  flex: none;
+  transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+input[type='checkbox']:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+input[type='checkbox']::before {
+  content: '';
+  width: 8px;
+  height: 5px;
+  border-left: 1.8px solid #fff;
+  border-bottom: 1.8px solid #fff;
+  transform: translateY(-0.5px) rotate(-45deg) scale(0);
+  transition: transform 0.14s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+input[type='checkbox']:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+  box-shadow: 0 1px 2px rgba(200, 90, 50, 0.25);
+}
+input[type='checkbox']:checked::before {
+  transform: translateY(-0.5px) rotate(-45deg) scale(1);
+}
+input[type='checkbox']:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+input[type='range'] {
+  accent-color: var(--accent);
+}
+
+/* ---------- 分段控件（标签页、.seg） ---------- */
 .tabs {
   display: inline-flex;
   align-self: flex-start;
-  gap: 2px;
+  gap: 3px;
   padding: 3px;
-  border-radius: 999px;
+  border-radius: calc(var(--radius-ctl) + 3px);
   background: var(--tab-track);
-  box-shadow: inset 0 1px 2px rgba(31, 30, 29, 0.06);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-inset);
 }
 .tab {
-  padding: 6px 16px;
-  border: none;
-  border-radius: 999px;
+  height: calc(var(--ctl-h) - 4px);
+  padding: 0 16px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-ctl);
   background: transparent;
   color: var(--text-2);
   font: inherit;
+  font-size: 13px;
   font-weight: 500;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
-  transition: transform 0.12s ease, background-color 0.18s, color 0.18s;
+  transition:
+    background-color 0.18s ease,
+    color 0.18s ease,
+    box-shadow 0.18s ease,
+    transform 0.1s ease;
 }
-.tab:hover { color: var(--text); }
+.tab:hover:not(:disabled) {
+  color: var(--text);
+}
 .tab.active {
   background: var(--tab-on);
+  border-color: var(--line);
   color: var(--text);
-  box-shadow: inset 0 1px 0 var(--glass-edge), 0 0 0 0.5px var(--glass-shade), 0 2px 6px rgba(31, 30, 29, 0.10);
+  font-weight: 600;
+  box-shadow:
+    0 1px 3px rgba(24, 23, 21, 0.08),
+    inset 0 1px 0 var(--glass-edge);
 }
-.tab:disabled { opacity: 0.45; cursor: default; }
-.tab:disabled:hover { color: var(--text-2); }
+.tab:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+.tab:disabled:hover {
+  color: var(--text-2);
+}
 
 @media (pointer: coarse) {
   .btn, .select { height: 40px; }
-  .btn-small { height: 34px; }
-  .tab { padding: 8px 16px; }
+  .btn-small, .icon-btn { height: 34px; }
+  .icon-btn { min-width: 34px; }
+  .tab { height: 36px; }
+  input[type='checkbox'] { width: 18px; height: 18px; }
 }
-/* 动画默认始终显示，不跟随系统的"减少动态效果"（很多电脑为了省电或远程桌面把系统动画关了，页面会显得像坏了）。
-   需要跟随系统时在地址后加 ?motion=system（main.js 会在 <html> 上标 data-motion="system"），下面这类规则才生效。 */
+
 @media (prefers-reduced-motion: reduce) {
-  :root[data-motion='system'] :is(.btn, .select, .tab, .icon-btn) { transition: none; }
+  :root[data-motion='system'] :is(.btn, .select, .tab, .icon-btn, input[type='checkbox'], input[type='checkbox']::before) {
+    transition: none;
+  }
 }

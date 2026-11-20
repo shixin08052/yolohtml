@@ -44,8 +44,9 @@ export default defineConfig({
     // 运行时从 public/ort/ 按 env.wasm.wasmPaths 加载（scripts/copy-ort.mjs 复制），避免重复
     conditions: ['onnxruntime-web-use-extern-wasm', ...defaultClientConditions],
   },
-  // Worker 里有动态 import（按设备选 WebGPU / WASM 版本），需要 ES 模块格式
-  worker: { format: 'es' },
+  // Worker 里有动态 import（按设备选 WebGPU / WASM 版本），需要 ES 模块格式；
+  // 视觉计算 Worker 也要识别 ArUco 码，Worker 单独打包，js-aruco2 的转换要再挂一次
+  worker: { format: 'es', plugins: () => [jsArucoCommonJS()] },
   optimizeDeps: {
     // 开发模式的依赖预打包不走上面的 plugins，需要单独挂一次
     rolldownOptions: { plugins: [jsArucoCommonJS()] },

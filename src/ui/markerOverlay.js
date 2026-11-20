@@ -32,9 +32,16 @@ export function drawMarkers(ctx, markers, scale, dpr = 1) {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     const text = `ID ${m.id}`;
-    const w = ctx.measureText(text).width + fs * 0.8;
-    ctx.fillStyle = 'rgba(61, 123, 217, 0.92)';
-    ctx.fillRect(cx - w / 2, cy - fs * 0.75, w, fs * 1.5);
+    const w = ctx.measureText(text).width + fs * 0.9;
+    const h = fs * 1.55;
+    ctx.fillStyle = 'rgba(52, 116, 214, 0.94)';
+    if (ctx.roundRect) {
+      ctx.beginPath();
+      ctx.roundRect(cx - w / 2, cy - h / 2, w, h, fs * 0.38);
+      ctx.fill();
+    } else {
+      ctx.fillRect(cx - w / 2, cy - h / 2, w, h);
+    }
     ctx.fillStyle = '#fff';
     ctx.fillText(text, cx, cy);
   }

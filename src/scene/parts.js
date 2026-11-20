@@ -506,6 +506,13 @@ export function createPartsLayer({ requestRender, onFrame = () => {} }) {
       for (const it of items) it.text.classList.toggle('bad', set.has(it.part.id));
       requestRender();
     },
+    /** 外部联动高亮某个零件（例如鼠标悬停在右侧分拣步骤列表时），id 为 null 时取消高亮 */
+    setHighlighted(id) {
+      for (const it of items) {
+        it.text.classList.toggle('is-hover', id != null && it.part.id === id);
+      }
+      requestRender();
+    },
     get count() {
       return items.length;
     },

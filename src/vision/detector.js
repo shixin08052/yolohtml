@@ -2,7 +2,7 @@
 // - mock：合成图直接用真值里的框；其他照片读 public/samples/<照片名>.detections.json
 // - onnx：在 Web Worker 里用 onnxruntime-web 跑 YOLO（步骤 14，见 detector.worker.js、yolo.js）
 // 另外提供 .detections.json 的读写（手动框选工具保存 / 载入用）。
-import { CLASSES, DETECT, MODELS } from '../config.js';
+import { CLASSES, DETECT, MODELS, LED_COLORS } from '../config.js';
 import { nmsByClass } from './yolo.js';
 import { fetchResource } from './request.js';
 
@@ -57,6 +57,9 @@ export function serializeDetections(detections, { fileName, width, height }) {
       name: CLASSES[d.cls]?.name ?? d.name,
       score: Math.round(d.score * 100) / 100,
       box: d.box.map(r),
+      // 人工框、人工指定的 LED 颜色一起存下来，载入后不用重新改
+      ...(d.manual ? { manual: true } : {}),
+      ...(d.cls === 1 && d.color ? { color: d.color } : {}),
     })),
   };
 }
@@ -102,6 +105,8 @@ export function parseDetections(json, { width, height }) {
       name: CLASSES[cls].name,
       score: Number.isFinite(d.score) ? d.score : 1,
       box,
+      ...(d.manual === true ? { manual: true } : {}),
+      ...(cls === 1 && typeof d.color === 'string' && LED_COLORS[d.color] ? { color: d.color } : {}),
     });
   });
   return out;

@@ -11,7 +11,7 @@ async function until(predicate, timeout = 30000) {
   }
   throw new Error('等待页面状态超时');
 }
-async function mount(noWebGL, missingMock = false) {
+async function mount(noWebGL, missingMock = false, lowScore = false) {
   localStorage.setItem('yolohtml.demo', '0');
   const html = await (await fetch('../index.html')).text();
   const frame = document.createElement('iframe');
@@ -27,6 +27,16 @@ async function mount(noWebGL, missingMock = false) {
     };
     ${noWebGL ? `const original=HTMLCanvasElement.prototype.getContext;
     HTMLCanvasElement.prototype.getContext=function(kind,...args){return /webgl/i.test(kind)?null:original.call(this,kind,...args)};` : ''}
+    ${lowScore ? `const OriginalWorker=window.Worker;
+    window.Worker=class extends OriginalWorker {
+      constructor(...args) {
+        super(...args);
+        this.addEventListener('message',event=>{
+          const det=event.data.result?.dets?.find(d=>d.cls===2);
+          if(det){det.score=0.35;det.low=true;}
+        });
+      }
+    };` : ''}
   <\/script>`;
   frame.srcdoc = html.replace('<head>', `<head><base href="${new URL('../', location.href)}">${patch}`);
   fixture.replaceChildren(frame);
@@ -70,7 +80,9 @@ button.addEventListener('click', async () => {
     const { doc, win } = ctx;
     assert(doc.querySelector('#file-input').accept === 'image/jpeg,image/png,.jpg,.jpeg,.png', '上传格式声明错误');
     await selectSample(ctx, '45°', 'synth_45.png');
-    assert(doc.querySelector('.flowchart').textContent.includes('读取合成真值框'), '流程图未标记真值');
+    assert(doc.querySelector('.detection-source').textContent.includes('合成图真值框'), '状态未标记真值');
+    // 来源先显示，分段建场景随后完成；等开始按钮可用，避免点在旧的禁用状态上。
+    await until(() => !doc.querySelector('#dock-start').disabled);
     doc.querySelector('#dock-start').click();
     await until(() => !doc.querySelector('#dock-pause').disabled);
     assert(!doc.querySelector('#dock-phase').textContent.includes('等待开始'), '开始后仍显示等待开始');
@@ -158,6 +170,38 @@ button.addEventListener('click', async () => {
     input.dispatchEvent(new win.Event('change', { bubbles: true }));
     await until(() => doc.querySelector('.detection-source').textContent.includes('载入的检测文件'));
     assert(!doc.querySelector('#info-panel [data-key="detect"]').textContent.includes('推理后端'), '导入结果残留模型统计');
+    assert(win.__regressionErrors.length === 0, win.__regressionErrors.join('; '));
+  });
+  await runCase('重新识别后的低置信度结果仍需复核，连续重跑保留人工框', async () => {
+    // 注入一个低置信度框测试复核流程，不能要求训练改进后的模型永远漏检这张照片。
+    const ctx = await mount(false, false, true);
+    const { doc, win } = ctx;
+    await selectSample(ctx, 'IMG_9902', 'real/IMG_9902.jpg', null);
+    await until(() => doc.querySelector('#view-confirm').classList.contains('active'), 120000);
+    assert(doc.querySelector('.confirm-review-list').children.length > 0, '透明 LED 的低置信度结果没有提示复核');
+    doc.querySelector('[data-act="ok"]').click();
+    await until(() => !doc.querySelector('#dock-start').disabled);
+    doc.querySelector('#btn-det-rerun').click();
+    await until(() => doc.querySelector('#view-confirm').classList.contains('active'), 120000);
+    assert(doc.querySelector('#sort-dock').hidden, '沿用了上一套结果的确认，未复核就允许分拣');
+    doc.querySelector('#btn-det-edit').click();
+    doc.querySelector('#box-clear').click();
+    const json = {
+      image: 'IMG_9902.jpg', width: 3024, height: 4032,
+      detections: [{ cls: 0, name: '色环电阻', score: 1, manual: true, box: [1254, 1327, 1318, 1382] }],
+    };
+    const transfer = new win.DataTransfer();
+    transfer.items.add(new win.File([JSON.stringify(json)], 'manual.json', { type: 'application/json' }));
+    const input = doc.querySelector('#det-file');
+    input.files = transfer.files;
+    input.dispatchEvent(new win.Event('change', { bubbles: true }));
+    await until(() => doc.querySelector('.detection-source').textContent.includes('载入的检测文件'));
+    // 刚重跑就切换增强设置：第二次读取第一次的 pending 状态，人工框仍应保留。
+    doc.querySelector('#btn-det-rerun').click();
+    doc.querySelector('#det-color').click();
+    await until(() => doc.querySelector('.detection-source').textContent.includes('模型推理')
+      && doc.querySelector('#info-panel [data-key="detect"]')?.textContent.includes('推理后端'), 120000);
+    assert(doc.querySelector('.msgs').textContent.includes('保留 1 个人工框'), '连续重跑丢失人工框');
     assert(win.__regressionErrors.length === 0, win.__regressionErrors.join('; '));
   });
   if (savedMode == null) localStorage.removeItem('yolohtml.demo');

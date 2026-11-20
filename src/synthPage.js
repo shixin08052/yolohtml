@@ -11,6 +11,9 @@ import { toThree, cameraQuaternionFromR } from './math/coords.js';
 import { buildBoardSVG, renderBoardToCanvas } from './ui/boardSheet.js';
 import { drawTruth } from './ui/truthOverlay.js';
 import { detectMarkersInImage } from './vision/aruco.js';
+import { initTheme } from './ui/theme.js';
+
+initTheme();
 
 const W = 4032;
 const H = 3024;

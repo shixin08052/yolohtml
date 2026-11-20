@@ -180,6 +180,17 @@ let pixelCache = null; // { bitmap, data }
  * @param {ImageBitmap} bitmap
  * @returns {ImageData}
  */
+/**
+ * 把别处（视觉计算 Worker）读好的整张照片像素放进缓存，之后 bitmapPixels 直接用，主线程不必再读一遍
+ * @param {ImageBitmap} bitmap
+ * @param {ImageData} data
+ */
+export function primePixels(bitmap, data) {
+  if (pixelCache?.bitmap === bitmap) return;
+  if (data?.width !== bitmap.width || data?.height !== bitmap.height) return;
+  pixelCache = { bitmap, data };
+}
+
 export function bitmapPixels(bitmap) {
   if (pixelCache?.bitmap !== bitmap) {
     pixelCache = null; // 先放掉上一张，避免同时占两份内存

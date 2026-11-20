@@ -1,5 +1,6 @@
 # 步骤 13 训练 / 导出 / 标定所需。torch 不在这里：Colab 自带 CUDA 版；本地训练时到 pytorch.org 按 CUDA 版本装
-ultralytics>=8.4.0,<8.5   # 8.4.0 起支持 YOLO26
+ultralytics>=8.4.215,<8.5 # 本地光照增强版已验证的最低版本
+albumentations>=2.0.8,<3 # train_light.py 的自定义光照增强
 onnx
 onnxruntime
 onnxslim

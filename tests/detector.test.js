@@ -77,3 +77,16 @@ describe('检测结果文件', () => {
     expect(detectionsFromTruth({ parts: [...truth.parts, { cls: 5, x: 0, y: 0, heightMm: 1, box: [0, 0, 1, 1] }] })).toHaveLength(1);
   });
 });
+
+describe('人工指定的 LED 颜色随检测文件保存、载入', () => {
+  it('存下人工框和 LED 颜色；载入时只认合法的颜色', () => {
+    const img = { fileName: 'a.jpg', width: 100, height: 100 };
+    const json = serializeDetections([
+      { cls: 1, score: 1, box: [1, 1, 10, 10], manual: true, color: 'green' },
+      { cls: 0, score: 0.9, box: [20, 1, 30, 10] },
+    ], img);
+    expect(json.detections.map((d) => [d.manual, d.color])).toEqual([[true, 'green'], [undefined, undefined]]);
+    const back = parseDetections({ ...json, detections: [...json.detections, { cls: 1, box: [60, 1, 70, 10], color: 'pink' }] }, img);
+    expect(back.map((d) => [d.manual, d.color])).toEqual([[true, 'green'], [undefined, undefined], [undefined, undefined]]);
+  });
+});

@@ -1,5 +1,7 @@
 // 演示模式的"正视图 · 确认识别结果"：底板正射图（照片按单应性拉正），把识别到的元件按类别颜色框出来、编号，
 // 下方一条确认栏：确认后开始转场建模；也可以回到照片上修改框，或重新选照片。
+// 平时（非演示模式）有拿不准的零件时也用这一页做"复核"：拿不准的零件虚线框、标签带"?"，确认栏上列出来，
+// 点一下回到照片上选中那个框改。
 // outlineCorners、countByClass 是纯函数（便于测试）；createConfirmView 负责画布和按钮。
 import { partName, partColor } from '../robot/bins.js';
 import { createPanZoom } from './panZoom.js';
@@ -94,13 +96,25 @@ export const labelScale = (width) => Math.min(1, Math.max(0.78, width / 560));
 /** 零件的显示编号（从 1 开始，与导出的零件图片、分拣指令一致） */
 export const partNo = (p, i = 0) => (Number.isInteger(p.id) ? p.id : i) + 1;
 
+/** 判断颜色是否偏浅（用于浅色标签如透明 / 黄色 LED 切换深色文字以保证可读性） */
+function isLightHex(hex) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex);
+  if (!m) return false;
+  const n = parseInt(m[1], 16);
+  const r = (n >> 16) & 255;
+  const g = (n >> 8) & 255;
+  const b = n & 255;
+  return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.62;
+}
+
 /**
  * 在画布上框出元件（按类别颜色，编号 + 类别名的标签）
  * @param {CanvasRenderingContext2D} ctx
  * @param {{ parts: object[], classes: object[], body: (cls: number) => object, toScreen: (P: number[]) => number[],
- *           width: number, height?: number, scale?: number, pad?: number, avoid?: number[][] }} o scale：线宽、字号的倍数；avoid：标签要避开的区域
+ *           width: number, height?: number, scale?: number, pad?: number, avoid?: number[][], flagged?: Set<number> }} o
+ *   scale：线宽、字号的倍数；avoid：标签要避开的区域；flagged：拿不准的零件 id（虚线框、标签带"?"）
  */
-export function drawPartBoxes(ctx, { parts, classes, body, toScreen, width, height, scale = 1, pad = 1.5, avoid = [] }) {
+export function drawPartBoxes(ctx, { parts, classes, body, toScreen, width, height, scale = 1, pad = 1.5, avoid = [], flagged = new Set() }) {
   ctx.save();
   ctx.lineJoin = 'round';
   const boxes = [];
@@ -114,8 +128,11 @@ export function drawPartBoxes(ctx, { parts, classes, body, toScreen, width, heig
     ctx.fill();
     ctx.lineWidth = 2.5 * scale;
     ctx.strokeStyle = color;
+    const doubt = flagged.has(p.id);
+    if (doubt) ctx.setLineDash([5 * scale, 3.5 * scale]);
     ctx.stroke();
-    boxes.push({ pts, color, label: `${partNo(p, i)} ${partName(p)}` });
+    ctx.setLineDash([]);
+    boxes.push({ pts, color, label: `${doubt ? '? ' : ''}${partNo(p, i)} ${partName(p)}` });
   });
   // 标签：先量好大小，再避开别的框和已放好的标签摆放
   ctx.font = `600 ${12 * scale}px system-ui, "PingFang SC", "Microsoft YaHei", sans-serif`;
@@ -131,11 +148,17 @@ export function drawPartBoxes(ctx, { parts, classes, body, toScreen, width, heig
   const pos = placeLabels(items, width, H, 6 * scale, avoid);
   items.forEach((it, i) => {
     const [lx, ly] = pos[i];
+    const light = isLightHex(it.b.color);
     ctx.fillStyle = it.b.color;
     ctx.beginPath();
     ctx.roundRect(lx, ly, it.w, h, 5 * scale);
     ctx.fill();
-    ctx.fillStyle = '#fff';
+    if (light) {
+      ctx.strokeStyle = 'rgba(24, 23, 21, 0.22)';
+      ctx.lineWidth = 1 * scale;
+      ctx.stroke();
+    }
+    ctx.fillStyle = light ? '#181715' : '#fff';
     ctx.textBaseline = 'middle';
     ctx.fillText(it.b.label, lx + 5 * scale, ly + h / 2 + 0.5 * scale);
   });
@@ -148,7 +171,7 @@ const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&l
  * @param {{
  *   root: HTMLElement,               // #view-confirm
  *   onConfirm: () => void,
- *   onEdit: () => void,
+ *   onEdit: (detIndex?: number) => void,       // 回到照片上改框；从复核清单点进来时带上那个框的下标
  * }} deps
  */
 export function createConfirmView({ root, onConfirm, onEdit }) {
@@ -161,11 +184,14 @@ export function createConfirmView({ root, onConfirm, onEdit }) {
           <button type="button" class="icon-btn" data-zoom="in" aria-label="放大">＋</button>
           <button type="button" class="icon-btn text" data-zoom="reset">复位</button>
         </span>
-        <span class="hint hint-mouse">滚轮缩放 · 拖动平移 · 双击放大</span>
-        <span class="hint hint-touch">双指缩放 · 单指拖动 · 双击放大</span>
+        <span class="tip" tabindex="0" role="note" aria-label="操作提示：滚轮缩放 · 拖动平移 · 双击放大"><span class="tip-icon" aria-hidden="true">?</span><span class="tip-body" aria-hidden="true"><span class="hint-mouse">滚轮缩放 · 拖动平移 · 双击放大</span><span class="hint-touch">双指缩放 · 单指拖动 · 双击放大</span></span></span>
       </div>
     </div>
     <div class="confirm-bar">
+      <div class="confirm-review" hidden>
+        <div class="confirm-review-head"><b class="confirm-review-title"></b><span class="confirm-review-hint">点一个去照片上改框，或指定 LED 颜色；看过没问题也可以直接确认</span></div>
+        <div class="confirm-review-list" role="list"></div>
+      </div>
       <div class="confirm-text"><b>请确认识别结果</b><span class="confirm-source"></span><span class="confirm-sum"></span></div>
       <div class="confirm-actions">
         <button type="button" class="btn" data-act="edit">修改框选</button>
@@ -179,6 +205,12 @@ export function createConfirmView({ root, onConfirm, onEdit }) {
   const okBtn = root.querySelector('[data-act="ok"]');
   okBtn.addEventListener('click', () => onConfirm());
   root.querySelector('[data-act="edit"]').addEventListener('click', () => onEdit());
+  const review = root.querySelector('.confirm-review');
+  const reviewList = review.querySelector('.confirm-review-list');
+  reviewList.addEventListener('click', (e) => {
+    const item = e.target.closest('[data-det]');
+    if (item) onEdit(Number(item.dataset.det));
+  });
 
   /** 当前内容：{ image, toTex, parts, classes, body } */
   let data = null;
@@ -237,6 +269,7 @@ export function createConfirmView({ root, onConfirm, onEdit }) {
     panZoom.refit();
     const { z, tx, ty } = panZoom.view;
     const { image, toTex, parts, classes, body } = data;
+    const flagged = new Set((data.review ?? []).map((r) => r.id));
     const k = fit.k * z;
     const ox = fit.ox * z + tx;
     const oy = fit.oy * z + ty;
@@ -247,7 +280,7 @@ export function createConfirmView({ root, onConfirm, onEdit }) {
       return [ox + ((toTex[0][0] * X + toTex[0][1] * Y + toTex[0][2]) / w) * k, oy + ((toTex[1][0] * X + toTex[1][1] * Y + toTex[1][2]) / w) * k];
     };
     // 标签在屏幕上大小不变（放大后零件分开、标签不再互相挤）；窄屏上整体小一号
-    drawPartBoxes(ctx, { parts, classes, body, toScreen, width: W, height: H, scale: labelScale(W), avoid: [toolsBox] });
+    drawPartBoxes(ctx, { parts, classes, body, toScreen, width: W, height: H, scale: labelScale(W), avoid: [toolsBox], flagged });
   }
 
   new ResizeObserver(() => {
@@ -255,10 +288,29 @@ export function createConfirmView({ root, onConfirm, onEdit }) {
     draw();
   }).observe(canvas);
 
+  /** 确认栏上的复核清单 */
+  function renderReview(d) {
+    const list = d.review ?? [];
+    review.hidden = !list.length;
+    root.querySelector('.confirm-text > b').textContent = list.length ? '请复核识别结果' : '请确认识别结果';
+    if (!list.length) {
+      reviewList.replaceChildren();
+      return;
+    }
+    review.querySelector('.confirm-review-title').textContent = `${list.length} 个拿不准`;
+    const byId = new Map(d.parts.map((p, i) => [p.id, { p, i }]));
+    reviewList.innerHTML = list.map((r) => {
+      const { p, i } = byId.get(r.id) ?? { p: { id: r.id, cls: r.cls }, i: 0 };
+      return `<button type="button" class="review-item" role="listitem" data-det="${r.detIndex}" style="--c:${partColor(p)}" title="在照片上改这个框">`
+        + `<span class="review-no">${partNo(p, i)}</span><span class="review-name">${esc(partName(p))}</span><span class="review-why">${esc(r.reasons.join(' · '))}</span></button>`;
+    }).join('');
+  }
+
   return {
     /**
      * @param {{ image: CanvasImageSource & {width:number, height:number}, toTex: number[][], parts: object[],
-     *           classes: object[], body: (cls: number) => {minX:number, maxX:number, halfW:number} }} d
+     *           classes: object[], body: (cls: number) => {minX:number, maxX:number, halfW:number},
+     *           review?: { id: number, detIndex: number, cls: number, reasons: string[] }[] }} d review：拿不准的零件
      */
     show(d) {
       if (data?.image !== d.image) panZoom.reset(); // 换了照片：回到整图
@@ -269,10 +321,13 @@ export function createConfirmView({ root, onConfirm, onEdit }) {
         ? `识别到 <b>${d.parts.length}</b> 个元件：` + counts.map((c) => `<span class="confirm-chip" style="--c:${c.color}">${esc(c.name)} × ${c.n}</span>`).join('')
         : '没有识别到元件，可以"修改框选"手动框出来';
       okBtn.textContent = d.canBuild === false ? '确认，查看照片' : d.parts.length ? '确认，开始建模' : '仍然继续';
+      renderReview(d);
       draw();
     },
     clear() {
       data = null;
+      review.hidden = true;
+      reviewList.replaceChildren();
       sum.textContent = '';
       root.querySelector('.confirm-source').textContent = '';
       draw();

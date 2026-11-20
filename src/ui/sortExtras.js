@@ -3,6 +3,7 @@
 // - 分拣结果卡（分拣完成后盖在 3D 画面上：各类数量、用时、拨开次数、清单缺口、跳过详情）
 // - 机械臂指令表（弹窗：按执行顺序列出抓取点、夹爪、关节角——和导出的 CSV / JSON 是同一份数据）
 import { setButtonLoading } from './loading.js';
+import { createCodeField } from './codeField.js';
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
@@ -16,25 +17,38 @@ export function createHero(root, { onDemo }) {
   el.className = 'hero';
   el.innerHTML = `
     <div class="hero-card">
+      <p class="hero-kicker">识别 → 定位 → 执行</p>
       <h2>拍一张照片，机械臂就知道怎么分拣</h2>
       <p class="hero-sub">识别桌上的电阻和各色 LED，按真实尺寸重建 3D 场景，规划机械臂把它们分进料盒。</p>
-      <ol class="hero-steps">
-        <li><b>识别</b><span>定位码 + YOLO 找出每个元件</span></li>
-        <li><b>定位</b><span>换算成毫米坐标和朝向</span></li>
-        <li><b>执行</b><span>规划抓取，输出机械臂指令</span></li>
-      </ol>
       <div class="hero-actions">
-        <button type="button" class="btn btn-primary" data-hero="demo">一键看演示</button>
-        <label class="btn" for="file-input">上传自己的照片</label>
+        <button type="button" class="btn btn-primary btn-large" data-hero="demo">一键看演示</button>
+        <label class="btn btn-large" for="file-input">上传照片</label>
       </div>
-      <p class="muted small hero-hint">演示用一张实拍照片（10 个元件），全程在浏览器里运行。</p>
+      <p class="hero-hint">支持拖拽图片到窗口 · Ctrl + V 粘贴 · iPhone 13 Pro 主摄 1× 4:3 · 全程浏览器本地运行</p>
     </div>`;
   root.appendChild(el);
+  const field = createCodeField(el);
+  let leaveTimer = 0;
   const btn = el.querySelector('[data-hero="demo"]');
   btn.addEventListener('click', onDemo);
   return {
     setVisible(on) {
-      el.hidden = !on;
+      const showing = !el.hidden && !el.classList.contains('leaving');
+      if (showing === on) return;
+      clearTimeout(leaveTimer);
+      if (on) {
+        el.classList.remove('leaving');
+        el.hidden = false;
+        field.setActive(true);
+        return;
+      }
+      // 离开首页：淡出、内容轻轻上浮后再藏起来（下面的加载遮罩同时淡入，两者交叉过渡）
+      el.classList.add('leaving');
+      leaveTimer = setTimeout(() => {
+        el.hidden = true;
+        el.classList.remove('leaving');
+        field.setActive(false);
+      }, 520);
     },
     /** 示例列表还没读到时先禁用，按钮上转圈 */
     setReady(on) {

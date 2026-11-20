@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import jpeg from 'jpeg-js';
 import * as ort from 'onnxruntime-web';
+import { DETECT } from '../src/config.js';
 import { pyRound, letterboxParams, preprocess, unletterbox, iou, nmsByClass, outputLayout, postprocess, selectDetections } from '../src/vision/yolo.js';
 
 describe('前处理参数', () => {
@@ -143,16 +144,19 @@ describe('两档置信度选框', () => {
 // 这里用纯 JS 的 jpeg-js 解码，和 Python（PIL / libjpeg-turbo）解码出的像素平均差 0.5、最大 17；
 // 模型对同一零件给出的重复框（分数 0.3–0.75）对这点差异很敏感，所以先两边都做同类去重再比，
 // 置信度高（≥ 0.8）的框要求坐标差 < 5 像素、置信度差 < 0.1。浏览器（与 PIL 用同一个解码库）里逐框比较原始输出见 Playwright 测试。
-// 第三版模型 + 独立测试集照片（含透明 LED、挤在一起的 LED）对解码差异更敏感，实测：用 PIL 解码的像素喂给同一套 JS 推理，
-// 高分框坐标差 ≤ 0.43 像素、置信度差 ≤ 0.021；换成 jpeg-js 解码则坐标差最大 3.4 像素、置信度差最大 0.082。
+// 光照增强模型在 IMG_9902 的透明 LED 上只有 0.43–0.48 的置信度：两种解码下框宽相差约 32 px，IoU 约 0.67。
+// 高分框仍要求 IoU > 0.9、坐标差 < 5 px；低分框按检测评估的 IoU > 0.5 匹配，且必须一对一，不能拿同一个框匹配多个零件。
 const ROOT = path.resolve(__dirname, '..');
 const MODEL = path.join(ROOT, 'public/models/best.onnx');
+const MODEL_SIZE = fs.existsSync(MODEL) ? JSON.parse(fs.readFileSync(MODEL.replace(/\.onnx$/, '.json'), 'utf8')).imgsz : 1024;
 const REAL = path.join(ROOT, 'public/samples/real');
+const REAL_TRUTH = JSON.parse(fs.readFileSync(path.join(ROOT, 'tests/fixtures/realGroundTruth.json'), 'utf8')).photos;
 const samples = fs.existsSync(REAL) ? fs.readdirSync(REAL).filter((f) => f.endsWith('.jpg')) : [];
 
 describe.skipIf(!fs.existsSync(MODEL) || !samples.length)('真实模型：与 Python 推理结果一致', () => {
   let session;
   const results = {};
+  const pipelineResults = {};
 
   it('加载模型（onnxruntime-web，wasm 后端）', async () => {
     ort.env.wasm.numThreads = 1;
@@ -161,11 +165,13 @@ describe.skipIf(!fs.existsSync(MODEL) || !samples.length)('真实模型：与 Py
   }, 60000);
 
   for (const f of samples) {
-    it(`${f}：同类去重后框数相同、类别相同；高置信度的框坐标差 < 5 像素、置信度差 < 0.1`, async () => {
+    it(`${f}：一对一匹配数量和类别；高置信度框 IoU > 0.9、坐标差 < 5 像素、置信度差 < 0.1`, async () => {
       const img = jpeg.decode(fs.readFileSync(path.join(REAL, f)), { useTArray: true, formatAsRGBA: true, maxMemoryUsageInMB: 1024 });
-      const { tensor, params } = preprocess(img, 1024);
-      const res = await session.run({ images: new ort.Tensor('float32', tensor, [1, 3, 1024, 1024]) });
+      const { tensor, params } = preprocess(img, MODEL_SIZE);
+      const res = await session.run({ images: new ort.Tensor('float32', tensor, [1, 3, MODEL_SIZE, MODEL_SIZE]) });
       const out = res[session.outputNames[0]];
+      pipelineResults[f] = selectDetections(postprocess(out.data, out.dims, params, img.width, img.height,
+        { scoreThreshold: Math.min(DETECT.scoreThreshold, DETECT.lowThreshold), iouThreshold: DETECT.iouThreshold }), DETECT);
       const raw = postprocess(out.data, out.dims, params, img.width, img.height, { scoreThreshold: 0.4, iouThreshold: 0.5 });
       const dets = nmsByClass(raw, 0.7);
       const refJson = JSON.parse(fs.readFileSync(path.join(REAL, f.replace(/\.jpg$/, '.detections.json')), 'utf8'));
@@ -174,10 +180,12 @@ describe.skipIf(!fs.existsSync(MODEL) || !samples.length)('真实模型：与 Py
       expect(dets.length).toBe(ref.length);
       let maxDiff = 0;
       let maxScore = 0;
-      for (const r of ref) {
-        const m = dets.reduce((b, d) => (d.cls === r.cls && (!b || iou(d.box, r.box) > iou(b.box, r.box)) ? d : b), null);
+      const unmatched = new Set(dets);
+      for (const r of [...ref].sort((a, b) => b.score - a.score)) {
+        const m = [...unmatched].reduce((b, d) => (d.cls === r.cls && (!b || iou(d.box, r.box) > iou(b.box, r.box)) ? d : b), null);
         expect(m).not.toBeNull();
-        expect(iou(m.box, r.box)).toBeGreaterThan(0.9);
+        unmatched.delete(m);
+        expect(iou(m.box, r.box)).toBeGreaterThan(r.score >= 0.8 ? 0.9 : 0.5);
         if (r.score < 0.8) continue;
         maxDiff = Math.max(maxDiff, ...m.box.map((v, i) => Math.abs(v - r.box[i])));
         maxScore = Math.max(maxScore, Math.abs(m.score - r.score));
@@ -186,6 +194,21 @@ describe.skipIf(!fs.existsSync(MODEL) || !samples.length)('真实模型：与 Py
       expect(maxDiff).toBeLessThan(5);
       expect(maxScore).toBeLessThan(0.1);
     }, 60000);
+
+    it(`${f}：网页选框与人工真值一对一匹配，不漏检、不多框（IoU > 0.5）`, () => {
+      const truth = REAL_TRUTH[f];
+      expect(truth).toBeDefined();
+      const unmatched = new Set(pipelineResults[f]);
+      expect(unmatched.size).toBe(truth.boxes.length);
+      for (const g of truth.boxes) {
+        const candidate = [...unmatched].filter((d) => d.cls === g.cls)
+          .sort((a, b) => iou(b.box, g.box) - iou(a.box, g.box))[0];
+        expect(candidate).toBeDefined();
+        expect(iou(candidate.box, g.box)).toBeGreaterThan(0.5);
+        unmatched.delete(candidate);
+      }
+      expect(unmatched.size).toBe(0);
+    });
   }
 
   it('同类去重不会多出框（第一版模型在旧照片上有重复框会被去掉；第二、三版模型在对比照片上没有重复框）', () => {

@@ -11,84 +11,196 @@ body {
   color: var(--text);
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 .toolbar {
   position: sticky;
-  top: 12px;
-  z-index: 3;
+  top: 14px;
+  z-index: 10;
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-height: 56px;
-  margin: 12px 12px 0;
-  padding: 8px 10px 8px 18px;
+  gap: 10px;
+  min-height: 54px;
+  margin: 14px 16px 0;
+  padding: 8px 12px 8px 18px;
   border-radius: var(--radius-lg);
 }
-.title { font-size: 17px; font-weight: 650; letter-spacing: -0.01em; }
+.title {
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+}
 .spacer { flex: 1; }
 
 .layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
-  gap: 20px;
-  padding: 20px;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: 22px;
+  padding: 20px 18px 28px;
+  max-width: 1480px;
+  margin: 0 auto;
   align-items: start;
 }
 .sheet-wrap { min-width: 0; }
+.sheet-host {
+  padding: 16px;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  box-shadow: var(--shadow-inset);
+}
 .sheet-host svg.sheet {
   display: block;
   width: 100%;
   height: auto;
   background: #fff;
-  border-radius: 4px;
-  box-shadow: 0 1px 3px rgba(31, 30, 29, 0.12), 0 8px 24px rgba(31, 30, 29, 0.08);
+  border-radius: 6px;
+  box-shadow:
+    0 1px 3px rgba(24, 23, 21, 0.10),
+    0 12px 32px -4px rgba(24, 23, 21, 0.08);
 }
 
 .card {
   border-radius: var(--radius);
-  padding: 14px 16px;
+  padding: 16px 18px;
   margin-bottom: 14px;
 }
-.card h3 { margin: 0 0 8px; font-size: 15px; font-weight: 650; letter-spacing: -0.01em; }
+.card h3 {
+  margin: 0 0 10px;
+  font-size: 14.5px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
 .muted { color: var(--text-2); }
-.card p { margin: 0 0 10px; line-height: 1.55; }
-.steps { margin: 0; padding-left: 20px; line-height: 1.7; }
-.steps b { font-weight: 600; }
+.card p {
+  margin: 0 0 10px;
+  line-height: 1.6;
+  font-size: 13px;
+}
+.steps {
+  margin: 0;
+  padding-left: 20px;
+  line-height: 1.75;
+  font-size: 13px;
+}
+.steps li + li { margin-top: 3px; }
+.steps b { font-weight: 600; color: var(--text); }
 
-.check-result { line-height: 1.7; font-variant-numeric: tabular-nums; }
-.check-result .ok { color: var(--ok); }
-.check-result .bad { color: var(--err); }
-.check-result table { width: 100%; border-collapse: collapse; margin-top: 6px; }
-.check-result td { padding: 2px 0; }
+.check-result {
+  line-height: 1.7;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.check-result .ok { color: var(--ok); font-weight: 500; }
+.check-result .bad { color: var(--err); font-weight: 500; }
+.check-result table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 8px;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.check-result td {
+  padding: 4px 0;
+  border-bottom: 1px solid var(--line-subtle);
+}
+.check-result tr:last-child td { border-bottom: none; }
 .check-result td:last-child { text-align: right; }
-.check-result .warn { color: var(--warn); }
-.check-result .verdict { font-weight: 600; margin-top: 10px; }
-.check-result ul { margin: 4px 0 0; padding-left: 18px; }
-.check-result h4 { margin: 10px 0 2px; font-size: 13px; font-weight: 600; color: var(--text-2); }
-.tips { margin: 0 0 12px; padding-left: 18px; line-height: 1.6; }
-.legend { margin: 8px 2px 0; font-size: 13px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
-.swatch-id { color: #c96442; font-weight: 600; }
-.sw { display: inline-block; width: 14px; height: 0; border-top: 2px solid; margin-left: 10px; }
+.check-result .warn { color: var(--warn); font-weight: 500; }
+.check-result .verdict {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 650;
+  margin-top: 10px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: var(--hover);
+}
+.check-result .verdict.ok { background: var(--ok-soft); }
+.check-result .verdict.warn { background: var(--warn-soft); }
+.check-result .verdict.bad { background: var(--err-soft); }
+.check-result ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+.check-result h4 {
+  margin: 12px 0 4px;
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--text-2);
+}
+.tips {
+  margin: 0 0 14px;
+  padding-left: 18px;
+  line-height: 1.65;
+  font-size: 12.5px;
+}
+.legend {
+  margin: 10px 4px 0;
+  font-size: 12.5px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+.swatch-id {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.sw {
+  display: inline-block;
+  width: 14px;
+  height: 0;
+  border-top: 2px solid;
+  margin-left: 10px;
+}
 .sw:first-child { margin-left: 0; }
 .sw-green { border-color: #3b9e5a; }
 .sw-orange { border-color: #c96442; border-top-style: dashed; }
 .sw-blue { border-color: #3d7bd9; }
-.sw-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #e03c31; }
-.photo-panel { margin-top: 20px; scroll-margin-top: 76px; }
+.sw-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #e03c31;
+}
+.photo-panel {
+  margin-top: 20px;
+  scroll-margin-top: 76px;
+}
 #photo-result { margin-top: 12px; }
-.photo-canvas { display: block; width: 100%; height: auto; border-radius: 6px; background: var(--surface); }
+.photo-canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
 
 .check-preview {
   display: block;
   width: 100%;
-  margin-top: 10px;
-  border-radius: 6px;
+  margin-top: 12px;
+  border-radius: 8px;
   border: 1px solid var(--line);
 }
 
 @media (max-width: 900px) {
-  .layout { grid-template-columns: minmax(0, 1fr); padding: 16px 12px; }
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 16px 12px;
+  }
+  .sheet-host { padding: 10px; }
 }
 
 /* 打印：只保留标定板，按实际尺寸输出 */
@@ -100,7 +212,8 @@ body {
     background: #fff;
   }
   .toolbar, .side, .legend, .photo-panel, .screen-only { display: none !important; }
-  .layout { display: block; padding: 0; }
+  .layout { display: block; padding: 0; max-width: none; }
+  .sheet-host { padding: 0; border: 0; background: none; box-shadow: none; }
   .sheet-host svg.sheet {
     width: 297mm;
     height: 210mm;

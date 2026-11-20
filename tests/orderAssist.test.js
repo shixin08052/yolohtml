@@ -97,6 +97,13 @@ describe('DeepSeek 清单接口', () => {
     expect(() => parseOrderReply('好的，需要三个电阻')).toThrow('JSON');
   });
 
+  it('w 是数量怎么算的（只认字符串）', () => {
+    expect(parseOrderReply('{"r":3,"R":3,"w":"三颗红灯各串一个限流电阻"}')).toEqual({ order: { resistor: 3, 'led-red': 3 }, note: '', why: '三颗红灯各串一个限流电阻' });
+    expect(parseOrderReply('{"r":4,"w":7}')).toEqual({ order: { resistor: 4 }, note: '' });
+    expect(() => parseOrderReply('{"r":{"220":2}}')).toThrow();
+    expect(systemPrompt()).toContain('"w":');
+  });
+
   it('说明太长时断在标点处并加省略号', () => {
     expect(clipNote('  每灯  一个电阻 ')).toBe('每灯 一个电阻');
     const long = clipNote(`${'每路指示灯串一个限流电阻，'.repeat(8)}完`);

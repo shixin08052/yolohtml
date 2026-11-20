@@ -253,6 +253,17 @@ export function createDebugView(canvas) {
       fit();
       draw();
     },
+    /** 把原图上的一个框 [x1, y1, x2, y2] 放大到画布中间（四周留出约两倍框大小的余地，看得到旁边的零件） */
+    focus(box) {
+      if (!image) return;
+      if (!view.fitted) fit();
+      const w = Math.max(1, box[2] - box[0]);
+      const h = Math.max(1, box[3] - box[1]);
+      view.s = clampScale(Math.min(canvas.width / (w * 5), canvas.height / (h * 5)));
+      view.tx = canvas.width / 2 - ((box[0] + box[2]) / 2) * view.s;
+      view.ty = canvas.height / 2 - ((box[1] + box[3]) / 2) * view.s;
+      draw();
+    },
     /** 以画布中心缩放 k 倍 */
     zoomBy(k) {
       if (!image) return;

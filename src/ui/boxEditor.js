@@ -1,7 +1,11 @@
 // 手动框选工具：在调试视图上拖出矩形框、选类别、移动 / 拉伸、删除。
 // 坐标一律为原图像素。作为 debugView 的指针工具使用（setTool(editor.tool)）。
-import { CLASSES } from '../config.js';
+import { CLASSES, LED_COLORS } from '../config.js';
 import { placeLabels } from './confirmView.js';
+import { placeNewBox, withUid } from '../vision/review.js';
+
+/** 人工指定的 LED 颜色（标签上显示） */
+const attrText = (d) => (d.cls === 1 && LED_COLORS[d.color] ? ` · ${LED_COLORS[d.color].name}` : '');
 
 /** 新框的最小边长（画布像素）；拖得比这还短算一次点击 */
 const MIN_DRAG_PX = 6;
@@ -37,7 +41,7 @@ export function drawDetections(ctx, boxes, scale, dpr = 1, { selected = -1, draf
       ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
     }
     const fit = d.fit === 'split' ? ' · 拆开' : d.fit === 'trim' ? ' · 按尺寸' : '';
-    const text = `${CLASSES[d.cls]?.name ?? d.name ?? d.cls}${d.origin === 'color' ? ' · 颜色' : showScore && d.score < 1 ? ` ${d.score.toFixed(2)}` : ''}${fit}`;
+    const text = `${CLASSES[d.cls]?.name ?? d.name ?? d.cls}${attrText(d)}${d.manual ? ' · 人工' : d.origin === 'color' ? ' · 颜色' : showScore && d.score < 1 ? ` ${d.score.toFixed(2)}` : ''}${fit}`;
     labels.push({ text, color, bbox: [x1, y1, x2, y2], w: ctx.measureText(text).width + 2 * pad, h: fs + 2 * pad });
     if (sel) {
       const h = (4 * dpr) / scale;
@@ -55,7 +59,13 @@ export function drawDetections(ctx, boxes, scale, dpr = 1, { selected = -1, draf
   labels.forEach((l, i) => {
     const [lx, ly] = pos[i];
     ctx.fillStyle = l.color;
-    ctx.fillRect(lx, ly, l.w, l.h);
+    ctx.beginPath();
+    if (ctx.roundRect) {
+      ctx.roundRect(lx, ly, l.w, l.h, 3.5 * dpr / scale);
+      ctx.fill();
+    } else {
+      ctx.fillRect(lx, ly, l.w, l.h);
+    }
     ctx.fillStyle = '#fff';
     ctx.fillText(l.text, lx + pad, ly + l.h - pad);
   });
@@ -74,7 +84,8 @@ export function drawDetections(ctx, boxes, scale, dpr = 1, { selected = -1, draf
  *   getScale: () => number,                 // 当前视图缩放比（原图 1 像素 = 多少画布像素）
  *   dpr?: () => number,
  *   redraw: () => void,
- *   onChange: (boxes: import('../state.js').Detection[]) => void,  // 框增删改后
+ *   onChange: (boxes: import('../state.js').Detection[], info?: { replaced: number, inside: number }) => void,
+ *     // 框增删改后；新画的框替换了几个重叠的框（replaced），落在哪个大得多的框里（inside，下标，-1 = 没有）
  *   onSelect?: (index: number) => void,
  *   imageSize: () => {width:number, height:number}|null,
  * }} deps
@@ -171,9 +182,14 @@ export function createBoxEditor({ getScale, dpr = () => window.devicePixelRatio 
           select(-1); // 点在空白处：取消选中
           return;
         }
-        boxes.push({ cls, name: CLASSES[cls].name, score: 1, box: [x1, y1, x2, y2] });
+        // 与已有框重叠很多：当作重画那一个，替换掉（不重复）
+        const box = [x1, y1, x2, y2];
+        const { replace, inside } = placeNewBox(boxes, box);
+        const insideBox = inside >= 0 ? boxes[inside] : null;
+        boxes = boxes.filter((_, i) => !replace.includes(i));
+        boxes.push(withUid({ cls, name: CLASSES[cls].name, score: 1, box, manual: true }, 'm'));
         select(boxes.length - 1);
-        onChange(boxes.slice());
+        onChange(boxes.slice(), { replaced: replace.length, inside: insideBox ? boxes.indexOf(insideBox) : -1 });
       } else if (d.moved) {
         redraw();
         onChange(boxes.slice());
@@ -206,14 +222,29 @@ export function createBoxEditor({ getScale, dpr = () => window.devicePixelRatio 
     get cls() {
       return cls;
     },
-    /** 设置新框的类别；有选中框时同时改它的类别 */
+    /** 设置新框的类别；有选中框时同时改它的类别（换了类别，原来指定的颜色不再适用） */
     setClass(c) {
       cls = c;
       if (selected >= 0 && boxes[selected].cls !== c) {
-        boxes[selected] = { ...boxes[selected], cls: c, name: CLASSES[c].name };
+        boxes[selected] = { ...boxes[selected], cls: c, name: CLASSES[c].name, color: undefined };
         redraw();
         onChange(boxes.slice());
       }
+    },
+    /**
+     * 给选中的框（或 indices 指定的几个框）指定 LED 颜色；值为 undefined 时恢复自动识别
+     * @param {{ color?: string }} attrs
+     * @param {number[]} [indices]
+     */
+    setAttr(attrs, indices = selected >= 0 ? [selected] : []) {
+      if (!indices.length) return;
+      for (const i of indices) boxes[i] = { ...boxes[i], ...attrs };
+      redraw();
+      onChange(boxes.slice());
+    },
+    /** 选中第 i 个框（-1 取消） */
+    select(i) {
+      select(i >= 0 && i < boxes.length ? i : -1);
     },
     deleteSelected() {
       if (selected < 0) return;

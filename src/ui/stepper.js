@@ -4,8 +4,9 @@ import { STEPS, stageIndex } from '../state.js';
 /**
  * @param {HTMLOListElement} el
  * @param {import('../state.js').Store} store
+ * @param {(stepKey: string) => void} [onStepClick] 点击已完成或当前步骤时的回调
  */
-export function createStepper(el, store) {
+export function createStepper(el, store, onStepClick) {
   el.innerHTML = '';
   const items = STEPS.map((s, i) => {
     const li = document.createElement('li');
@@ -13,6 +14,11 @@ export function createStepper(el, store) {
     li.dataset.key = s.key;
     // 圆点和文字包在 .pill 里：当前步骤的高亮只罩住它，不罩住前面的连接线
     li.innerHTML = `<span class="pill"><span class="dot">${i + 1}</span><span class="label">${s.label}</span></span>`;
+    li.addEventListener('click', () => {
+      if (li.classList.contains('done') || li.classList.contains('active') || li.classList.contains('error')) {
+        onStepClick?.(s.key);
+      }
+    });
     el.appendChild(li);
     return li;
   });

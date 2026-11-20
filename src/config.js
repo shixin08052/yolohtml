@@ -73,7 +73,8 @@ export const BINS = [
 //   贴在一起的两颗 LED 的框重叠不多（并排紧贴、斜 45° 并排都约 0.2），0.7 不会误删
 // 低置信度补漏：透明 LED 反差小，分数常在 0.3 多（实测 0.38）；lowThreshold–scoreThreshold 之间的框只在与已保留的框都几乎不重叠
 //   （IoU ≤ lowMaxIou）时补上——低分框多半是同一零件的重复框（与高分框重叠约 0.8），这样不会多出来
-export const DETECT = { imgsz: 1024, scoreThreshold: 0.4, lowThreshold: 0.25, lowMaxIou: 0.3, iouThreshold: 0.5, dedupIou: 0.7 };
+// 1280 为密集透明 LED 保留更多细节；置信度和去重阈值保持既有验证口径。
+export const DETECT = { imgsz: 1280, scoreThreshold: 0.4, lowThreshold: 0.25, lowMaxIou: 0.3, iouThreshold: 0.5, dedupIou: 0.7 };
 
 // 模型文件（public/models/，步骤 13 导出）：parts 为零件模型，coco 为官方 COCO 模型（调试用）
 export const MODELS = {
