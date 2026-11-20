@@ -124,15 +124,17 @@ export function createWorld(container) {
     console.warn('3D 初始化失败，保留照片识别功能：', err);
     return unavailableWorld(container);
   }
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  // 手机等触屏设备显存与填充率受限：适当降低 DPR 与阴影贴图开销，保证滑动旋转满帧流畅
+  const coarse = typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches;
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, coarse ? 1.5 : 2));
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.AgXToneMapping ?? THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.02;
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-  // 手机等触屏设备显存紧：阴影贴图小一档
-  const coarse = typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches;
-  const shadowSize = !coarse && renderer.capabilities.maxTextureSize >= 4096 ? 4096 : 2048;
+  renderer.shadowMap.type = coarse ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
+  renderer.shadowMap.autoUpdate = false;
+  renderer.shadowMap.needsUpdate = true;
+  const shadowSize = !coarse && renderer.capabilities.maxTextureSize >= 4096 ? 4096 : coarse ? 1024 : 2048;
   container.appendChild(renderer.domElement);
 
   // CSS2D 标签层：叠在画布上，不拦截鼠标
@@ -409,12 +411,16 @@ export function createWorld(container) {
     controls.enabled = on;
   }
 
-  // 按需渲染：控制器变化、窗口变化、内容变化时渲染；阻尼动画期间持续渲染
+  // 按需渲染：内容变化（requestRender）时重算阴影贴图；仅相机旋转/平移（requestCameraRender）时复用现有阴影贴图，大幅提升手机滑动帧率
   let needRender = true;
   function requestRender() {
     needRender = true;
+    renderer.shadowMap.needsUpdate = true;
   }
-  controls.addEventListener('change', requestRender);
+  function requestCameraRender() {
+    needRender = true;
+  }
+  controls.addEventListener('change', requestCameraRender);
 
   // 画面区域（容器内 CSS px）。转场 / 对比时只在照片比例的这块区域里渲染，
   // 画布本身尺寸不变——每帧改画布尺寸会清空绘图缓冲，造成闪烁
@@ -453,7 +459,8 @@ export function createWorld(container) {
   }
 
   let sized = false;
-  function resize() {
+  let prewarmed = false;
+  function resize({ skipRender = false } = {}) {
     const w = container.clientWidth;
     const h = container.clientHeight;
     if (w === 0 || h === 0) return; // 标签页隐藏时跳过
@@ -469,13 +476,36 @@ export function createWorld(container) {
       sized = true;
       setDefaultView();
     }
-    // 改尺寸会清空画布，立刻重画，避免露出一帧空白
-    render();
+    // 改尺寸会清空画布，立刻重画，避免露出一帧空白（即将立刻进入转场时跳过这次多余渲染）
+    if (!skipRender) render();
+  }
+
+  /** 在正视图等待确认期间提前编译 3D 着色器与上传纹理，使点击"确认，开始建模"立即响应不卡顿 */
+  function prewarm() {
+    if (prewarmed) return;
+    const host = container.clientWidth > 0 ? container : container.parentElement;
+    const w = host?.clientWidth || 800;
+    const h = host?.clientHeight || 600;
+    if (size.w === 0 || size.h === 0) {
+      size = { w, h };
+      renderer.setSize(w, h);
+      updateAspect();
+      layoutLabels();
+      if (!sized && controlsActive) {
+        sized = true;
+        setDefaultView();
+      }
+    }
+    renderer.compile?.(scene, camera);
+    renderer.shadowMap.needsUpdate = true;
+    renderer.render(scene, camera);
+    prewarmed = true;
   }
 
   const letterbox = new THREE.Color();
   function render() {
     needRender = false;
+    prewarmed = true;
     if (frame) {
       // 区域外填视图底色，区域内照常渲染场景
       const bg = renderer.getClearColor(new THREE.Color());
@@ -498,20 +528,35 @@ export function createWorld(container) {
   }
 
   /**
-   * 零件标签避让：挤在一起的零件标签会叠成一团、谁也看不清。每帧按顺序摆，和已显示的标签重叠的先藏起来；
-   * 拉近视角零件分开后自然又显示出来
+   * 零件标签避让：直接解析 CSS2DRenderer 写入的 translate(Xpx, Ypx) 坐标并批量写入 classList，
+   * 避免每帧在循环里交替读 getBoundingClientRect() 与写 class 触发移动端同步强制回流（Layout Thrashing）。
    */
+  const TRANSLATE_RE = /translate\(([-\d.]+)px,\s*([-\d.]+)px\)/;
   function declutterTags() {
     const tags = labelRenderer.domElement.querySelectorAll('.part-tag');
     if (tags.length < 2) return;
-    const shown = [];
+    const candidates = [];
     for (const el of tags) {
       if (el.style.display === 'none') continue; // 在相机背后（CSS2DRenderer 藏起来的）
-      const r = el.getBoundingClientRect();
-      if (!r.width) continue;
-      const hit = shown.some((q) => r.left < q.right - 2 && q.left < r.right - 2 && r.top < q.bottom - 2 && q.top < r.bottom - 2);
-      el.classList.toggle('tag-hidden', hit);
-      if (!hit) shown.push(r);
+      const m = TRANSLATE_RE.exec(el.style.transform);
+      if (m) {
+        const cx = Number(m[1]);
+        const cy = Number(m[2]);
+        const w = el._tagW || (el._tagW = el.offsetWidth || 78);
+        const h = el._tagH || (el._tagH = el.offsetHeight || 22);
+        candidates.push({ el, left: cx - w / 2, right: cx + w / 2, top: cy - h, bottom: cy });
+      } else {
+        const r = el.getBoundingClientRect();
+        if (r.width) candidates.push({ el, left: r.left, right: r.right, top: r.top, bottom: r.bottom });
+      }
+    }
+    const shown = [];
+    for (const c of candidates) {
+      const hit = shown.some((q) => c.left < q.right - 2 && q.left < c.right - 2 && c.top < q.bottom - 2 && q.top < c.bottom - 2);
+      if (c.el.classList.contains('tag-hidden') !== hit) {
+        c.el.classList.toggle('tag-hidden', hit);
+      }
+      if (!hit) shown.push(c);
     }
   }
 
@@ -532,6 +577,10 @@ export function createWorld(container) {
     camera,
     controls,
     resize,
+    prewarm,
+    get prewarmed() {
+      return prewarmed;
+    },
     render,
     setFrame,
     requestRender,
@@ -567,7 +616,7 @@ function unavailableWorld(container) {
     renderer: { domElement: canvas },
     scene: new THREE.Scene(),
     camera: new THREE.PerspectiveCamera(),
-    resize: noop, render: noop, setFrame: noop, requestRender: noop,
+    resize: noop, prewarm: noop, prewarmed: true, render: noop, setFrame: noop, requestRender: noop,
     setDefaultView: noop, flyToPoints: noop, setFocusPoints: noop, setBasePoints: noop,
     setAxesVisible: noop, setControlsActive: noop, pickPlane: () => null, raycasterFromClient: () => null,
   };

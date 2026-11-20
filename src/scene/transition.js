@@ -9,8 +9,8 @@ import * as THREE from 'three';
 
 export const easeInOutCubic = (t) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
 
-/** 转场各段时长（ms） */
-export const TRANSITION_MS = { hold: 300, fade: 1000, fly: 2000, settle: 300 };
+/** 转场各段时长（ms）：点击确认建模后立即进入渐显与生长过渡，减少等待感 */
+export const TRANSITION_MS = { hold: 60, fade: 950, fly: 1850, settle: 200 };
 
 /**
  * @param {{
@@ -55,10 +55,12 @@ export function createTransition({ world, container, overlay, phone, onGrow = ()
     for (const k of ['left', 'top', 'width', 'height', 'right', 'bottom']) overlay.style[k] = '';
   }
 
-  /** 把照片画到覆盖层（分辨率跟容器走，最多 2048 宽） */
+  /** 把照片画到覆盖层（分辨率跟容器走，移动端限制在 1080 宽避免 12MP 大图同步绘制卡顿） */
   function drawOverlay(bitmap, r) {
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const w = Math.min(2048, Math.round(r.w * dpr));
+    const coarse = typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches;
+    const dpr = Math.min(window.devicePixelRatio || 1, coarse ? 1.5 : 2);
+    const maxW = coarse ? 1080 : 2048;
+    const w = Math.max(1, Math.min(maxW, Math.round(r.w * dpr)));
     overlay.width = w;
     overlay.height = Math.round((w * bitmap.height) / bitmap.width);
     overlay.getContext('2d').drawImage(bitmap, 0, 0, overlay.width, overlay.height);
@@ -97,11 +99,12 @@ export function createTransition({ world, container, overlay, phone, onGrow = ()
     stop();
     setMode('playing');
     world.setControlsActive(false);
-    // 手机、零件第一次出现时才编译着色器、生成阴影会卡一下：先让它们全部可见完整渲染一帧
-    // （同一个任务里照片随即盖上，这一帧不会被看到）
-    phone.setOpacity(1);
-    onGrow(1);
-    world.render();
+    // 若尚未在确认页后台预热过着色器，则在转场前预渲染一帧；已预热时跳过同步阻塞渲染，让按钮点击瞬时响应
+    if (!world.prewarmed) {
+      phone.setOpacity(1);
+      onGrow(1);
+      world.render();
+    }
     const aspect = intrinsics.width / intrinsics.height;
     const r0 = fitRect(aspect);
     setRect(r0);

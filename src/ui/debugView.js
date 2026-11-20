@@ -18,7 +18,17 @@ export function createDebugView(canvas) {
   const overlays = new Map();
   // 视图变换：画布像素 = 原图像素 × s + (tx, ty)
   const view = { s: 1, tx: 0, ty: 0, fitted: false };
-  const dpr = () => window.devicePixelRatio || 1;
+  const dpr = () => Math.min(2, window.devicePixelRatio || 1);
+  let cachedRect = null;
+  let drawQueued = false;
+  const scheduleDraw = () => {
+    if (drawQueued) return;
+    drawQueued = true;
+    requestAnimationFrame(() => {
+      drawQueued = false;
+      draw();
+    });
+  };
 
   function fit() {
     if (!image) return;
@@ -61,9 +71,9 @@ export function createDebugView(canvas) {
     if (!view.fitted) fit();
     if (!view.fitted) return; // 画布太小，等下一次尺寸变化
     ctx.setTransform(view.s, 0, 0, view.s, view.tx, view.ty);
-    // 放大很多时关掉平滑，便于看清像素
+    // 放大很多时关掉平滑，便于看清像素；拖动/捏合时用低开销平滑防止移动端掉帧
     ctx.imageSmoothingEnabled = view.s < 2;
-    ctx.imageSmoothingQuality = 'high';
+    ctx.imageSmoothingQuality = pointers.size > 0 ? 'low' : 'high';
     ctx.drawImage(image, 0, 0);
     for (const fn of overlays.values()) {
       ctx.save();
@@ -89,8 +99,8 @@ export function createDebugView(canvas) {
   }
 
   /** 客户端坐标 → 画布设备像素 */
-  const toCanvas = (clientX, clientY) => {
-    const r = canvas.getBoundingClientRect();
+  const toCanvas = (clientX, clientY, useCache = false) => {
+    const r = (useCache && cachedRect) ? cachedRect : (cachedRect = canvas.getBoundingClientRect());
     return [(clientX - r.left) * dpr(), (clientY - r.top) * dpr()];
   };
 
@@ -171,18 +181,18 @@ export function createDebugView(canvas) {
     if (pinch && pointers.size >= 2) {
       const [a, b] = twoPointers();
       const dist = Math.hypot(a.x - b.x, a.y - b.y) || 1;
-      const mid = toCanvas((a.x + b.x) / 2, (a.y + b.y) / 2);
+      const mid = toCanvas((a.x + b.x) / 2, (a.y + b.y) / 2, true);
       // 捏合开始时两指中点下的原图点，跟随当前中点移动
       const ix = (pinch.mid[0] - pinch.tx) / pinch.s;
       const iy = (pinch.mid[1] - pinch.ty) / pinch.s;
       view.s = clampScale(pinch.s * (dist / pinch.dist));
       view.tx = mid[0] - ix * view.s;
       view.ty = mid[1] - iy * view.s;
-      draw();
+      scheduleDraw();
     } else if (pan) {
       view.tx = pan.tx + (e.clientX - pan.x) * dpr();
       view.ty = pan.ty + (e.clientY - pan.y) * dpr();
-      draw();
+      scheduleDraw();
     }
   });
 
@@ -193,6 +203,7 @@ export function createDebugView(canvas) {
     if (toolPointer === e.pointerId) {
       pointers.delete(e.pointerId);
       toolPointer = null;
+      cachedRect = null;
       if (e.type === 'pointercancel') tool.cancel?.();
       else tool.up(...toImage(e.clientX, e.clientY));
       return;
@@ -204,7 +215,9 @@ export function createDebugView(canvas) {
     else {
       pan = null;
       pinch = null;
+      cachedRect = null;
       canvas.style.cursor = tool?.cursor ?? '';
+      scheduleDraw(); // 松手后恢复 high 采样质量重画一帧
       // 轻点（几乎没移动）才算一次点击
       if (e.pointerType !== 'mouse' && start && Math.hypot(e.clientX - start.x, e.clientY - start.y) < 10) {
         const now = performance.now();

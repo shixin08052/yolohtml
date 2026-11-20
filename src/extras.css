@@ -377,11 +377,11 @@
   border-bottom: none;
 }
 .order-table td:first-child {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-height: 34px;
   font-weight: 500;
+}
+.order-table td:first-child .dot {
+  margin-right: 7px;
+  vertical-align: -1px;
 }
 .order-table .num { font-variant-numeric: tabular-nums; }
 .order-table tr.none td:first-child,

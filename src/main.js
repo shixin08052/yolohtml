@@ -558,7 +558,7 @@ function plainTexture(design, { frame, toBoard }) {
 const tabs = createTabs($('.main'), (view) => {
   if (view === 'confirm') confirmView.redraw();
   if (view === 'three') {
-    world.resize();
+    world.resize({ skipRender: transitionPending });
     if (transitionPending) playTransition();
   } else {
     transition.cancel();
@@ -2863,6 +2863,10 @@ function showConfirm() {
   });
   updateDemoTabs();
   tabs.select('confirm');
+  // 用户浏览正视图期间，在后台空闲帧提前预热 3D 着色器与纹理上传，点"确认，开始建模"即可瞬时进入转场
+  if (world.available && !world.prewarmed) {
+    setTimeout(() => world.prewarm?.(), 80);
+  }
 }
 
 function setDemoMode(on) {

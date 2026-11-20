@@ -37,6 +37,7 @@ export function zoomAt(v, mx, my, z) {
  */
 export function createPanZoom(canvas, { getFit, onChange }) {
   let view = { z: 1, tx: 0, ty: 0 };
+  let cachedRect = null;
   const size = () => [canvas.clientWidth, canvas.clientHeight];
 
   function set(next) {
@@ -47,8 +48,8 @@ export function createPanZoom(canvas, { getFit, onChange }) {
     canvas.style.cursor = view.z > 1.001 ? 'grab' : '';
     onChange();
   }
-  const local = (e) => {
-    const r = canvas.getBoundingClientRect();
+  const local = (e, useCache = false) => {
+    const r = (useCache && cachedRect) ? cachedRect : (cachedRect = canvas.getBoundingClientRect());
     return [e.clientX - r.left, e.clientY - r.top];
   };
 
@@ -81,7 +82,7 @@ export function createPanZoom(canvas, { getFit, onChange }) {
 
   canvas.addEventListener('pointerdown', (e) => {
     if (!getFit() || (e.pointerType === 'mouse' && e.button !== 0)) return;
-    const [x, y] = local(e);
+    const [x, y] = local(e, false);
     pointers.set(e.pointerId, { x, y });
     canvas.setPointerCapture(e.pointerId);
     if (pointers.size >= 2) startPinch();
@@ -89,7 +90,7 @@ export function createPanZoom(canvas, { getFit, onChange }) {
   });
   canvas.addEventListener('pointermove', (e) => {
     if (!pointers.has(e.pointerId)) return;
-    const [x, y] = local(e);
+    const [x, y] = local(e, true);
     pointers.set(e.pointerId, { x, y });
     if (pinch && pointers.size >= 2) {
       const [a, b] = two();
@@ -109,13 +110,15 @@ export function createPanZoom(canvas, { getFit, onChange }) {
   const end = (e) => {
     if (!pointers.has(e.pointerId)) return;
     const start = pan && pointers.size === 1 ? pan : null;
-    const [x, y] = local(e);
+    const [x, y] = local(e, true);
     pointers.delete(e.pointerId);
     if (pointers.size >= 2) startPinch();
     else if (pointers.size === 1) startPan();
     else {
       pan = null;
       pinch = null;
+      cachedRect = null;
+      onChange(); // 交互结束时补绘一帧高质量平滑
       // 触屏上浏览器不一定发 dblclick，自己判断两次轻点
       if (e.type === 'pointerup' && e.pointerType !== 'mouse' && start && Math.hypot(x - start.x, y - start.y) < 10) {
         const now = performance.now();
@@ -133,6 +136,9 @@ export function createPanZoom(canvas, { getFit, onChange }) {
   return {
     get view() {
       return view;
+    },
+    get interacting() {
+      return pointers.size > 0;
     },
     /** 画布大小或内容变了：保持缩放，重新限制范围（不触发 onChange） */
     refit() {

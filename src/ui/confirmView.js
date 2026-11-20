@@ -252,7 +252,7 @@ export function createConfirmView({ root, onConfirm, onEdit }) {
   root.querySelector('[data-zoom="reset"]').addEventListener('click', () => panZoom.reset());
 
   function draw() {
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
     const W = canvas.clientWidth;
     const H = canvas.clientHeight;
     if (!W || !H) return;
@@ -273,7 +273,8 @@ export function createConfirmView({ root, onConfirm, onEdit }) {
     const k = fit.k * z;
     const ox = fit.ox * z + tx;
     const oy = fit.oy * z + ty;
-    ctx.imageSmoothingQuality = 'high';
+    // 滑动 / 捏合过程中使用硬件双线性滤波避免移动端高分辨率重采样掉帧，松手静止时恢复高质量平滑
+    ctx.imageSmoothingQuality = panZoom.interacting ? 'low' : 'high';
     ctx.drawImage(image, ox, oy, image.width * k, image.height * k);
     const toScreen = ([X, Y]) => {
       const w = toTex[2][0] * X + toTex[2][1] * Y + toTex[2][2];
