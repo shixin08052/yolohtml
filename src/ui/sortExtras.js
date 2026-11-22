@@ -10,9 +10,9 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&
 /**
  * 首页引导
  * @param {HTMLElement} root 视图容器（.views）
- * @param {{ onDemo: () => void }} deps
+ * @param {{ onDemo: () => void, onStream?: () => void }} deps
  */
-export function createHero(root, { onDemo }) {
+export function createHero(root, { onDemo, onStream }) {
   const el = document.createElement('div');
   el.className = 'hero';
   el.innerHTML = `
@@ -23,14 +23,17 @@ export function createHero(root, { onDemo }) {
       <div class="hero-actions">
         <button type="button" class="btn btn-primary btn-large" data-hero="demo">一键看演示</button>
         <label class="btn btn-large" for="file-input">上传照片</label>
+        <button type="button" class="btn btn-large" data-hero="stream">手机串流</button>
       </div>
-      <p class="hero-hint">支持拖拽图片到窗口 · Ctrl + V 粘贴 · iPhone 13 Pro 主摄 1× 4:3 · 全程浏览器本地运行</p>
+      <p class="hero-hint">支持手机扫码拍原图直传 · 拖拽图片到窗口 · Ctrl + V 粘贴 · 全程浏览器本地识别</p>
     </div>`;
   root.appendChild(el);
   const field = createCodeField(el);
   let leaveTimer = 0;
   const btn = el.querySelector('[data-hero="demo"]');
   btn.addEventListener('click', onDemo);
+  const streamBtn = el.querySelector('[data-hero="stream"]');
+  if (streamBtn && onStream) streamBtn.addEventListener('click', onStream);
   return {
     setVisible(on) {
       const showing = !el.hidden && !el.classList.contains('leaving');

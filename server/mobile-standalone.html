@@ -1,0 +1,952 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#141311" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#f3f1ec" media="(prefers-color-scheme: light)" />
+    <title>手机串流端 · 视觉分拣数字孪生</title>
+    <style>
+      :root {
+        --bg: #f3f1ec;
+        --surface: #faf9f5;
+        --card: #ffffff;
+        --line: rgba(24, 23, 21, 0.10);
+        --line-strong: rgba(24, 23, 21, 0.18);
+        --text: #181715;
+        --text-2: #5c5852;
+        --text-3: #8c877e;
+        --accent: #c85a32;
+        --accent-hi: #df6d43;
+        --accent-soft: rgba(200, 90, 50, 0.12);
+        --ok: #2d7a47;
+        --ok-soft: rgba(45, 122, 71, 0.13);
+        --warn: #b26b10;
+        --warn-soft: rgba(178, 107, 16, 0.14);
+        --err: #c93b2b;
+        --err-soft: rgba(201, 59, 43, 0.13);
+        --mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+        --sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Helvetica Neue', sans-serif;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #121211;
+          --surface: #181716;
+          --card: #22211f;
+          --line: rgba(255, 250, 240, 0.10);
+          --line-strong: rgba(255, 250, 240, 0.18);
+          --text: #f3f0ea;
+          --text-2: #b5afa4;
+          --text-3: #807b72;
+          --accent: #df6d43;
+          --accent-hi: #ef7f55;
+          --accent-soft: rgba(223, 109, 67, 0.16);
+          --ok: #4ec177;
+          --ok-soft: rgba(78, 193, 119, 0.16);
+          --warn: #e6a83c;
+          --warn-soft: rgba(230, 168, 60, 0.16);
+          --err: #f06558;
+          --err-soft: rgba(240, 101, 88, 0.16);
+        }
+      }
+      * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+      html, body {
+        margin: 0;
+        padding: 0;
+        min-height: 100%;
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--sans);
+        font-size: 14px;
+        line-height: 1.5;
+      }
+      body {
+        padding: env(safe-area-inset-top) 14px calc(22px + env(safe-area-inset-bottom));
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+      }
+      .wrap {
+        width: 100%;
+        max-width: 480px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        padding-top: 12px;
+      }
+      .top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-weight: 700;
+        font-size: 15px;
+        letter-spacing: -0.01em;
+      }
+      .brand svg {
+        width: 22px;
+        height: 22px;
+        color: var(--accent);
+        flex-shrink: 0;
+      }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 5px 10px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 600;
+        background: var(--card);
+        border: 1px solid var(--line);
+        color: var(--text-2);
+        white-space: nowrap;
+      }
+      .pill .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--text-3);
+      }
+      .pill.ok { background: var(--ok-soft); color: var(--ok); border-color: transparent; }
+      .pill.ok .dot { background: var(--ok); }
+      .pill.warn { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
+      .pill.warn .dot { background: var(--warn); }
+      .pill.err { background: var(--err-soft); color: var(--err); border-color: transparent; }
+      .pill.err .dot { background: var(--err); }
+
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 15px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.04);
+      }
+      .room-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      .room-label {
+        font-size: 12px;
+        color: var(--text-3);
+      }
+      .room-code {
+        font-family: var(--mono);
+        font-size: 20px;
+        font-weight: 700;
+        letter-spacing: 0.14em;
+        color: var(--text);
+      }
+      .room-form {
+        display: flex;
+        gap: 8px;
+        margin-top: 10px;
+      }
+      .room-input {
+        flex: 1;
+        min-width: 0;
+        height: 40px;
+        border-radius: 10px;
+        border: 1px solid var(--line-strong);
+        background: var(--surface);
+        color: var(--text);
+        padding: 0 12px;
+        font-family: var(--mono);
+        font-size: 16px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+      .seg {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 4px;
+        padding: 4px;
+        border-radius: 12px;
+        background: var(--surface);
+        border: 1px solid var(--line);
+      }
+      .seg button {
+        border: 0;
+        background: transparent;
+        color: var(--text-2);
+        font: 600 13.5px/1 var(--sans);
+        padding: 10px 8px;
+        border-radius: 9px;
+        cursor: pointer;
+        transition: background 0.18s, color 0.18s;
+      }
+      .seg button.active {
+        background: var(--card);
+        color: var(--text);
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+      }
+
+      .btn {
+        appearance: none;
+        border: 1px solid var(--line-strong);
+        background: var(--surface);
+        color: var(--text);
+        border-radius: 12px;
+        font: 600 14px/1.2 var(--sans);
+        padding: 11px 16px;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        text-decoration: none;
+        user-select: none;
+        transition: transform 0.08s, opacity 0.15s, background 0.15s;
+      }
+      .btn:active:not(:disabled) { transform: scale(0.98); }
+      .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+      .btn-primary {
+        border-color: transparent;
+        background: linear-gradient(180deg, var(--accent-hi), var(--accent));
+        color: #fff;
+        box-shadow: 0 4px 14px rgba(200, 90, 50, 0.28);
+      }
+      .btn-big {
+        width: 100%;
+        padding: 16px 18px;
+        font-size: 16px;
+        border-radius: 14px;
+      }
+      .btn-sm {
+        padding: 7px 12px;
+        font-size: 12.5px;
+        border-radius: 9px;
+      }
+      .btn svg {
+        width: 19px;
+        height: 19px;
+        flex-shrink: 0;
+      }
+      .shoot-stack {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .tips {
+        margin: 12px 0 0;
+        padding: 10px 12px;
+        border-radius: 10px;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        color: var(--text-2);
+        font-size: 12.5px;
+      }
+      .tips p { margin: 0 0 4px; }
+      .tips p:last-child { margin-bottom: 0; }
+
+      .status-box {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .status-top {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+      }
+      .thumb {
+        width: 64px;
+        height: 48px;
+        border-radius: 8px;
+        object-fit: cover;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        flex-shrink: 0;
+      }
+      .status-meta { min-width: 0; flex: 1; }
+      .status-title {
+        font-weight: 600;
+        font-size: 13.5px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .status-sub {
+        font-size: 12px;
+        color: var(--text-2);
+      }
+      .bar {
+        height: 6px;
+        border-radius: 999px;
+        background: var(--surface);
+        overflow: hidden;
+      }
+      .bar > i {
+        display: block;
+        height: 100%;
+        width: 0%;
+        background: var(--accent);
+        border-radius: 999px;
+        transition: width 0.14s linear;
+      }
+      .pc-echo {
+        padding: 9px 11px;
+        border-radius: 10px;
+        font-size: 13px;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        color: var(--text-2);
+      }
+      .pc-echo.ok { background: var(--ok-soft); color: var(--ok); border-color: transparent; }
+      .pc-echo.warn { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
+      .pc-echo.err { background: var(--err-soft); color: var(--err); border-color: transparent; }
+
+      .live-wrap {
+        position: relative;
+        width: 100%;
+        aspect-ratio: 4 / 3;
+        background: #0d0d0c;
+        border-radius: 12px;
+        overflow: hidden;
+        border: 1px solid var(--line);
+      }
+      .live-wrap video {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+      }
+      .guide {
+        position: absolute;
+        inset: 10%;
+        pointer-events: none;
+      }
+      .guide span {
+        position: absolute;
+        width: 22px;
+        height: 22px;
+        border: 2.5px solid rgba(255, 255, 255, 0.85);
+      }
+      .guide .tl { top: 0; left: 0; border-right: 0; border-bottom: 0; border-radius: 4px 0 0 0; }
+      .guide .tr { top: 0; right: 0; border-left: 0; border-bottom: 0; border-radius: 0 4px 0 0; }
+      .guide .bl { bottom: 0; left: 0; border-right: 0; border-top: 0; border-radius: 0 0 0 4px; }
+      .guide .br { bottom: 0; right: 0; border-left: 0; border-top: 0; border-radius: 0 0 4px 0; }
+      .live-badge {
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        padding: 4px 9px;
+        border-radius: 999px;
+        background: rgba(16, 15, 14, 0.72);
+        color: #fff;
+        font: 600 11.5px/1.2 var(--mono);
+      }
+      .live-controls {
+        display: flex;
+        gap: 8px;
+        margin-top: 10px;
+      }
+      .live-controls .btn { flex: 1; }
+      .notice {
+        padding: 12px;
+        border-radius: 12px;
+        background: var(--warn-soft);
+        color: var(--text);
+        font-size: 13px;
+      }
+      .notice b { color: var(--warn); display: block; margin-bottom: 4px; }
+      .notice code {
+        display: inline-block;
+        padding: 2px 6px;
+        border-radius: 5px;
+        background: var(--card);
+        font-family: var(--mono);
+        font-size: 12px;
+        word-break: break-all;
+      }
+      .history-list {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        margin-top: 10px;
+      }
+      .history-item {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px;
+        border-radius: 10px;
+        background: var(--surface);
+        border: 1px solid var(--line);
+      }
+      .history-item img {
+        width: 44px;
+        height: 34px;
+        border-radius: 6px;
+        object-fit: cover;
+        flex-shrink: 0;
+      }
+      .history-item .meta { min-width: 0; flex: 1; }
+      .history-item .name {
+        font-size: 12.5px;
+        font-weight: 600;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .history-item .sub { font-size: 11.5px; color: var(--text-3); }
+      .toast {
+        position: fixed;
+        left: 50%;
+        bottom: calc(20px + env(safe-area-inset-bottom));
+        transform: translateX(-50%);
+        max-width: calc(100vw - 28px);
+        padding: 9px 14px;
+        border-radius: 999px;
+        background: rgba(24, 23, 21, 0.92);
+        color: #fff;
+        font-size: 13px;
+        z-index: 99;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+      }
+      [hidden] { display: none !important; }
+    </style>
+  </head>
+  <body>
+    <main class="wrap">
+      <header class="top">
+        <div class="brand">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4.5 9V6.5a2 2 0 0 1 2-2H9M15 4.5h2.5a2 2 0 0 1 2 2V9M19.5 15v2.5a2 2 0 0 1-2 2H15M9 19.5H6.5a2 2 0 0 1-2-2V15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+            <circle cx="12" cy="12" r="3.2" fill="currentColor" />
+          </svg>
+          <span>手机串流端</span>
+        </div>
+        <span id="conn-pill" class="pill warn"><i class="dot"></i><span id="conn-text">正在连接…</span></span>
+      </header>
+
+      <section class="card">
+        <div class="room-row">
+          <div>
+            <div class="room-label">当前房间配对码</div>
+            <div id="room-display" class="room-code">------</div>
+          </div>
+          <button type="button" class="btn btn-sm" id="btn-change-room">切换房间</button>
+        </div>
+        <form id="room-form" class="room-form" hidden>
+          <input id="room-input" class="room-input" maxlength="8" autocomplete="off" placeholder="输入 6 位配对码" />
+          <button type="submit" class="btn btn-primary btn-sm">连接</button>
+        </form>
+      </section>
+
+      <div class="seg" role="tablist" aria-label="拍摄模式">
+        <button type="button" role="tab" id="tab-photo" class="active" aria-selected="true">原图拍照直传</button>
+        <button type="button" role="tab" id="tab-live" aria-selected="false">实时取景串流</button>
+      </div>
+
+      <!-- 模式 1：原图拍照 / 相册直传（HTTP 与 HTTPS 均可直接用，保留原始分辨率与 EXIF） -->
+      <section id="panel-photo" class="card">
+        <div class="shoot-stack">
+          <label class="btn btn-primary btn-big" for="cam-input">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+              <circle cx="12" cy="13" r="4" />
+            </svg>
+            拍摄原图并发送到电脑
+          </label>
+          <label class="btn btn-big" for="album-input">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="3" y="3" width="18" height="18" rx="2" />
+              <circle cx="8.5" cy="8.5" r="1.5" />
+              <path d="m21 15-5-5L5 21" />
+            </svg>
+            从相册选图（支持多选）
+          </label>
+          <input id="cam-input" type="file" accept="image/jpeg,image/png,.jpg,.jpeg,.png" capture="environment" hidden />
+          <input id="album-input" type="file" accept="image/jpeg,image/png,.jpg,.jpeg,.png" multiple hidden />
+        </div>
+        <div class="tips">
+          <p><strong>原图无损模式</strong>：直接调用手机原生相机，保留 1200 万像素清晰度与 EXIF 焦距信息，识别 2 mm 电阻与透明 LED 最准。</p>
+          <p>建议横向 4:3、主摄 1× 拍摄，确保底板四角定位码完整入画。</p>
+        </div>
+      </section>
+
+      <!-- 模式 2：实时取景串流（HTTPS 下可用，支持电脑端实时画面预览 + 远程快门） -->
+      <section id="panel-live" class="card" hidden>
+        <div id="live-insecure" class="notice" hidden>
+          <b>当前为 HTTP 访问，手机浏览器禁止直接调取实时摄像头</b>
+          <p style="margin: 0 0 8px;">iOS Safari 与 Android Chrome 仅允许在 <code>https://</code> 域名下打开实时视频流。现在可直接切回「原图拍照直传」（HTTP 完美可用，画质更高），或在服务器绑定域名后运行：</p>
+          <p style="margin: 0 0 10px;"><code>sudo bash install.sh --https 你的域名</code></p>
+          <button type="button" class="btn btn-primary btn-sm" id="btn-back-photo">切回原图拍照直传</button>
+        </div>
+
+        <div id="live-area" hidden>
+          <div class="live-wrap">
+            <video id="live-video" playsinline autoplay muted></video>
+            <div class="guide" aria-hidden="true">
+              <span class="tl"></span><span class="tr"></span>
+              <span class="bl"></span><span class="br"></span>
+            </div>
+            <div id="live-badge" class="live-badge">待机</div>
+          </div>
+          <div class="live-controls">
+            <button type="button" class="btn btn-primary" id="btn-live-snap">拍高清图发给电脑</button>
+            <button type="button" class="btn btn-sm" id="btn-live-toggle" style="flex:0 0 auto;">暂停串流</button>
+            <button type="button" class="btn btn-sm" id="btn-live-flip" style="flex:0 0 auto;">切换镜头</button>
+          </div>
+          <p class="status-sub" style="margin: 8px 0 0;">开启后电脑端可实时看到画面，也可由电脑端一键远程触发拍照识别。</p>
+        </div>
+      </section>
+
+      <!-- 上传进度与电脑端识别结果回显 -->
+      <section id="status-card" class="card status-box" hidden>
+        <div class="status-top">
+          <img id="status-thumb" class="thumb" alt="最近照片" />
+          <div class="status-meta">
+            <div id="status-title" class="status-title">准备就绪</div>
+            <div id="status-sub" class="status-sub">等待拍摄</div>
+          </div>
+        </div>
+        <div class="bar" aria-hidden="true"><i id="status-bar"></i></div>
+        <div id="pc-echo" class="pc-echo" hidden></div>
+      </section>
+
+      <section id="history-card" class="card" hidden>
+        <div class="room-label">本次已发送（点“重发”可再次推送）</div>
+        <div id="history-list" class="history-list"></div>
+      </section>
+    </main>
+
+    <div id="toast" class="toast" hidden role="status"></div>
+
+    <script>
+      (() => {
+        const $ = (id) => document.getElementById(id);
+        const query = new URLSearchParams(location.search);
+        const pathMatch = location.pathname.match(/^\/m\/([A-Za-z0-9]{4,12})\/?$/);
+        const token = query.get('token') || '';
+        const cleanRoom = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12);
+
+        let room = cleanRoom(pathMatch?.[1] || query.get('room') || localStorage.getItem('st.mobile.room') || '');
+        let ws = null;
+        let wsTimer = 0;
+        let pingTimer = 0;
+        let retryMs = 1000;
+        let pcCount = 0;
+        let uploading = false;
+        let mode = 'photo';
+        let liveStream = null;
+        let liveSending = false;
+        let liveTimer = 0;
+        let liveFrames = 0;
+        let liveFpsTs = 0;
+        let facingMode = 'environment';
+        let previewCanvas = null;
+        let previewCtx = null;
+        const history = [];
+
+        const deviceLabel = (() => {
+          const ua = navigator.userAgent || '';
+          if (/iPhone/i.test(ua)) return 'iPhone';
+          if (/iPad/i.test(ua)) return 'iPad';
+          if (/Android/i.test(ua)) return 'Android 手机';
+          return '移动设备';
+        })();
+
+        const showToast = (msg) => {
+          const el = $('toast');
+          el.textContent = msg;
+          el.hidden = false;
+          clearTimeout(showToast._t);
+          showToast._t = setTimeout(() => { el.hidden = true; }, 2800);
+        };
+
+        const setPill = (kind, text) => {
+          const pill = $('conn-pill');
+          pill.className = 'pill ' + kind;
+          $('conn-text').textContent = text;
+        };
+
+        const formatRoom = (c) => (c.length === 6 ? c.slice(0, 3) + ' ' + c.slice(3) : c || '未配对');
+        const fmtSize = (b) => (b >= 1048576 ? (b / 1048576).toFixed(2) + ' MB' : Math.round(b / 1024) + ' KB');
+
+        const setEcho = (text, level = '') => {
+          const el = $('pc-echo');
+          if (!text) { el.hidden = true; return; }
+          el.hidden = false;
+          el.className = 'pc-echo' + (level ? ' ' + level : '');
+          el.textContent = text;
+        };
+
+        const renderRoom = () => {
+          $('room-display').textContent = formatRoom(room);
+          $('room-input').value = room;
+          if (!room) {
+            $('room-form').hidden = false;
+            setPill('warn', '请输入房间码');
+          }
+        };
+
+        const wsUrl = () => {
+          const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+          const p = new URLSearchParams({ room, role: 'phone', device: deviceLabel });
+          if (token) p.set('token', token);
+          return `${proto}//${location.host}/ws?${p.toString()}`;
+        };
+
+        const sendJson = (obj) => {
+          if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
+        };
+
+        const connectWs = () => {
+          clearTimeout(wsTimer);
+          clearInterval(pingTimer);
+          if (ws) {
+            ws.onclose = ws.onerror = ws.onmessage = null;
+            try { ws.close(); } catch {}
+            ws = null;
+          }
+          if (!room) return;
+          setPill('warn', '正在连接服务器…');
+          const sock = new WebSocket(wsUrl());
+          ws = sock;
+          sock.onopen = () => {
+            retryMs = 1000;
+            setPill('warn', '已连服务器 · 等电脑');
+            sendJson({ type: 'stream_state', live: liveSending, mode });
+            pingTimer = setInterval(() => sendJson({ type: 'ping', ts: Date.now() }), 20000);
+          };
+          sock.onmessage = (ev) => {
+            if (typeof ev.data !== 'string') return;
+            let msg;
+            try { msg = JSON.parse(ev.data); } catch { return; }
+            if (msg.type === 'room_state') {
+              pcCount = Number(msg.pcCount) || 0;
+              if (pcCount > 0) setPill('ok', `已连接电脑 (${pcCount})`);
+              else setPill('warn', '等待电脑端上线');
+            } else if (msg.type === 'pc_status') {
+              $('status-card').hidden = false;
+              setEcho(`电脑端：${msg.text || ''}`, msg.level || '');
+            } else if (msg.type === 'shutter') {
+              if (mode === 'live' && liveStream) {
+                showToast('收到电脑远程快门，正在抓取高清图…');
+                snapFromLive(true);
+              } else {
+                showToast('电脑请求拍照，请点“拍摄原图并发送到电脑”');
+              }
+            }
+          };
+          sock.onclose = () => {
+            clearInterval(pingTimer);
+            if (ws !== sock) return;
+            setPill('err', '连接断开，重连中…');
+            wsTimer = setTimeout(connectWs, retryMs);
+            retryMs = Math.min(8000, Math.round(retryMs * 1.6));
+          };
+          sock.onerror = () => {
+            try { sock.close(); } catch {}
+          };
+        };
+
+        const validateMagic = async (blob) => {
+          const buf = new Uint8Array(await blob.slice(0, 12).arrayBuffer());
+          const jpeg = buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff;
+          const png = buf[0] === 137 && buf[1] === 80 && buf[2] === 78 && buf[3] === 71;
+          if (jpeg) return 'image/jpeg';
+          if (png) return 'image/png';
+          const tag = String.fromCharCode(...buf.slice(4, 12));
+          if (tag.startsWith('ftyp') && /^(heic|heix|hevc|heim|heis|mif1|msf1)$/i.test(tag.slice(4, 8))) {
+            throw new Error('检测到 HEIC 格式：请在 iPhone 设置 → 相机 → 格式 中选择“兼容性最佳”，或用下方相机按钮直接拍摄。');
+          }
+          throw new Error('仅支持 JPEG 或 PNG 原图。');
+        };
+
+        const pushHistory = (file, url) => {
+          history.unshift({ file, url, name: file.name, size: file.size, time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) });
+          if (history.length > 6) {
+            const old = history.pop();
+            try { URL.revokeObjectURL(old.url); } catch {}
+          }
+          const card = $('history-card');
+          const list = $('history-list');
+          card.hidden = history.length === 0;
+          list.innerHTML = '';
+          history.forEach((item, idx) => {
+            const row = document.createElement('div');
+            row.className = 'history-item';
+            row.innerHTML = `<img src="${item.url}" alt="" /><div class="meta"><div class="name"></div><div class="sub"></div></div><button type="button" class="btn btn-sm">重发</button>`;
+            row.querySelector('.name').textContent = item.name;
+            row.querySelector('.sub').textContent = `${fmtSize(item.size)} · ${item.time}`;
+            row.querySelector('button').addEventListener('click', () => uploadPhoto(item.file, 'upload', true));
+            list.appendChild(row);
+          });
+        };
+
+        const uploadPhoto = async (file, captureMode = 'upload', skipHistory = false) => {
+          if (!room) {
+            showToast('请先输入 6 位房间码');
+            return;
+          }
+          if (uploading) {
+            showToast('上一张仍在发送，请稍候…');
+            return;
+          }
+          uploading = true;
+          const card = $('status-card');
+          const bar = $('status-bar');
+          const thumbUrl = URL.createObjectURL(file);
+          card.hidden = false;
+          $('status-thumb').src = thumbUrl;
+          $('status-title').textContent = file.name || 'IMG_CAPTURE.jpg';
+          $('status-sub').textContent = `校验图片格式 (${fmtSize(file.size)})…`;
+          bar.style.width = '4%';
+          setEcho('');
+
+          try {
+            const mime = await validateMagic(file);
+            const url = `/api/rooms/${encodeURIComponent(room)}/photo`;
+            await new Promise((resolve, reject) => {
+              const xhr = new XMLHttpRequest();
+              xhr.open('POST', url, true);
+              xhr.setRequestHeader('Content-Type', mime);
+              xhr.setRequestHeader('X-File-Name', encodeURIComponent(file.name || `photo_${Date.now()}.jpg`));
+              xhr.setRequestHeader('X-Capture-Mode', captureMode);
+              if (token) xhr.setRequestHeader('X-Relay-Token', token);
+              xhr.upload.onprogress = (ev) => {
+                if (ev.lengthComputable) {
+                  const pct = Math.min(99, Math.max(5, Math.round((ev.loaded / ev.total) * 100)));
+                  bar.style.width = pct + '%';
+                  $('status-sub').textContent = `正在发送 ${pct}% · ${fmtSize(ev.loaded)} / ${fmtSize(ev.total)}`;
+                }
+              };
+              xhr.onload = () => {
+                if (xhr.status >= 200 && xhr.status < 300) resolve(xhr.responseText);
+                else {
+                  let msg = `上传失败 (HTTP ${xhr.status})`;
+                  try { msg = JSON.parse(xhr.responseText).error || msg; } catch {}
+                  reject(new Error(msg));
+                }
+              };
+              xhr.onerror = () => reject(new Error('网络中断，请检查服务器连接'));
+              xhr.send(file);
+            });
+            bar.style.width = '100%';
+            $('status-sub').textContent = `发送完成 (${fmtSize(file.size)}) · ${pcCount > 0 ? '已推送至电脑' : '已暂存到房间，待电脑上线接收'}`;
+            setEcho(pcCount > 0 ? '已送达电脑，等待识别反馈…' : '电脑尚未连接，连上后可从最近队列载入', pcCount > 0 ? '' : 'warn');
+            if (!skipHistory) pushHistory(file, thumbUrl);
+            else setTimeout(() => URL.revokeObjectURL(thumbUrl), 5000);
+            showToast('照片已发送到电脑');
+          } catch (err) {
+            bar.style.width = '0%';
+            $('status-sub').textContent = '发送失败';
+            setEcho(err.message || '上传失败', 'err');
+            URL.revokeObjectURL(thumbUrl);
+          } finally {
+            uploading = false;
+          }
+        };
+
+        const handleFiles = async (fileList) => {
+          const files = Array.from(fileList || []);
+          for (const f of files) {
+            await uploadPhoto(f, 'upload', false);
+          }
+        };
+
+        $('cam-input').addEventListener('change', (e) => {
+          const files = e.target.files;
+          if (files?.length) handleFiles(files);
+          e.target.value = '';
+        });
+        $('album-input').addEventListener('change', (e) => {
+          const files = e.target.files;
+          if (files?.length) handleFiles(files);
+          e.target.value = '';
+        });
+
+        /* ---------------- 实时取景串流模式（HTTPS / localhost） ---------------- */
+        const stopLive = () => {
+          clearTimeout(liveTimer);
+          liveSending = false;
+          if (liveStream) {
+            for (const t of liveStream.getTracks()) t.stop();
+            liveStream = null;
+          }
+          const v = $('live-video');
+          if (v) v.srcObject = null;
+          $('live-badge').textContent = '已停止';
+          sendJson({ type: 'stream_state', live: false, mode });
+        };
+
+        const scheduleLiveFrame = () => {
+          if (!liveSending || !liveStream) return;
+          liveTimer = setTimeout(sendOnePreviewFrame, 140); // ~7 fps，兼顾流畅与 4G/5G 低流量
+        };
+
+        const sendOnePreviewFrame = () => {
+          if (!liveSending || !liveStream) return;
+          const video = $('live-video');
+          if (!video.videoWidth || !video.videoHeight || !ws || ws.readyState !== 1 || ws.bufferedAmount > 120000) {
+            return scheduleLiveFrame();
+          }
+          const targetW = Math.min(640, video.videoWidth);
+          const targetH = Math.round((video.videoHeight / video.videoWidth) * targetW);
+          if (!previewCanvas) {
+            previewCanvas = document.createElement('canvas');
+            previewCtx = previewCanvas.getContext('2d');
+          }
+          if (previewCanvas.width !== targetW || previewCanvas.height !== targetH) {
+            previewCanvas.width = targetW;
+            previewCanvas.height = targetH;
+          }
+          previewCtx.drawImage(video, 0, 0, targetW, targetH);
+          previewCanvas.toBlob(
+            (blob) => {
+              if (blob && ws && ws.readyState === 1 && ws.bufferedAmount < 180000) {
+                ws.send(blob);
+                liveFrames++;
+                const now = performance.now();
+                if (!liveFpsTs) liveFpsTs = now;
+                else if (now - liveFpsTs >= 1000) {
+                  const fps = Math.round((liveFrames * 1000) / (now - liveFpsTs));
+                  $('live-badge').textContent = `LIVE · ${video.videoWidth}×${video.videoHeight} · ${fps} fps`;
+                  liveFrames = 0;
+                  liveFpsTs = now;
+                }
+              }
+              scheduleLiveFrame();
+            },
+            'image/jpeg',
+            0.58,
+          );
+        };
+
+        const startLive = async () => {
+          const canLive = window.isSecureContext && !!navigator.mediaDevices?.getUserMedia;
+          $('live-insecure').hidden = canLive;
+          $('live-area').hidden = !canLive;
+          if (!canLive) return;
+
+          stopLive();
+          $('live-badge').textContent = '正在启动相机…';
+          try {
+            liveStream = await navigator.mediaDevices.getUserMedia({
+              audio: false,
+              video: {
+                facingMode: { ideal: facingMode },
+                width: { ideal: 1920 },
+                height: { ideal: 1440 },
+                aspectRatio: { ideal: 4 / 3 },
+              },
+            });
+            const video = $('live-video');
+            video.srcObject = liveStream;
+            await video.play();
+            liveSending = true;
+            liveFrames = 0;
+            liveFpsTs = 0;
+            $('btn-live-toggle').textContent = '暂停串流';
+            $('live-badge').textContent = `LIVE · ${video.videoWidth}×${video.videoHeight}`;
+            sendJson({ type: 'stream_state', live: true, mode: 'live', width: video.videoWidth, height: video.videoHeight });
+            scheduleLiveFrame();
+          } catch (err) {
+            $('live-badge').textContent = '相机打开失败';
+            showToast('无法访问相机：' + (err.message || err.name));
+          }
+        };
+
+        const snapFromLive = async (fromRemote = false) => {
+          if (!liveStream) return;
+          const btn = $('btn-live-snap');
+          btn.disabled = true;
+          try {
+            let blob = null;
+            const track = liveStream.getVideoTracks()[0];
+            if (track && typeof window.ImageCapture === 'function') {
+              try {
+                const ic = new window.ImageCapture(track);
+                blob = await ic.takePhoto();
+              } catch {
+                blob = null;
+              }
+            }
+            if (!blob) {
+              const video = $('live-video');
+              const c = document.createElement('canvas');
+              c.width = video.videoWidth || 1280;
+              c.height = video.videoHeight || 960;
+              c.getContext('2d').drawImage(video, 0, 0, c.width, c.height);
+              blob = await new Promise((res) => c.toBlob(res, 'image/jpeg', 0.94));
+            }
+            if (!blob) throw new Error('抓拍失败');
+            const name = `${fromRemote ? 'remote' : 'live'}_${new Date().toISOString().replace(/[:.T-]/g, '').slice(0, 14)}.jpg`;
+            const file = new File([blob], name, { type: blob.type || 'image/jpeg' });
+            await uploadPhoto(file, 'snapshot', false);
+          } catch (err) {
+            showToast(err.message || '抓拍失败');
+          } finally {
+            btn.disabled = false;
+          }
+        };
+
+        const switchMode = (next) => {
+          mode = next;
+          $('tab-photo').classList.toggle('active', next === 'photo');
+          $('tab-photo').setAttribute('aria-selected', String(next === 'photo'));
+          $('tab-live').classList.toggle('active', next === 'live');
+          $('tab-live').setAttribute('aria-selected', String(next === 'live'));
+          $('panel-photo').hidden = next !== 'photo';
+          $('panel-live').hidden = next !== 'live';
+          if (next === 'live') startLive();
+          else stopLive();
+        };
+
+        $('tab-photo').addEventListener('click', () => switchMode('photo'));
+        $('tab-live').addEventListener('click', () => switchMode('live'));
+        $('btn-back-photo').addEventListener('click', () => switchMode('photo'));
+        $('btn-live-snap').addEventListener('click', () => snapFromLive(false));
+        $('btn-live-toggle').addEventListener('click', () => {
+          if (!liveStream) return startLive();
+          liveSending = !liveSending;
+          $('btn-live-toggle').textContent = liveSending ? '暂停串流' : '继续串流';
+          $('live-badge').textContent = liveSending ? 'LIVE · 恢复中' : '已暂停';
+          sendJson({ type: 'stream_state', live: liveSending, mode: 'live' });
+          if (liveSending) scheduleLiveFrame();
+        });
+        $('btn-live-flip').addEventListener('click', () => {
+          facingMode = facingMode === 'environment' ? 'user' : 'environment';
+          startLive();
+        });
+
+        $('btn-change-room').addEventListener('click', () => {
+          const form = $('room-form');
+          form.hidden = !form.hidden;
+          if (!form.hidden) $('room-input').focus();
+        });
+        $('room-form').addEventListener('submit', (e) => {
+          e.preventDefault();
+          const next = cleanRoom($('room-input').value);
+          if (next.length < 4) {
+            showToast('请输入有效的房间配对码');
+            return;
+          }
+          room = next;
+          try { localStorage.setItem('st.mobile.room', room); } catch {}
+          $('room-form').hidden = true;
+          renderRoom();
+          connectWs();
+        });
+
+        window.addEventListener('pagehide', stopLive);
+
+        if (room) {
+          try { localStorage.setItem('st.mobile.room', room); } catch {}
+        }
+        renderRoom();
+        if (room) connectWs();
+      })();
+    </script>
+  </body>
+</html>

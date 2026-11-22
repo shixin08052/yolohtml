@@ -60,6 +60,7 @@ import { createHero, createResultCard, createInstructionsDialog } from './ui/sor
 import { createViewLoader, LOADER_HIDE_MS } from './ui/loading.js';
 import { trackEdits, mergeEdits, reviewReasons, withUid } from './vision/review.js';
 import { initTheme, getThemeMode, cycleThemeMode } from './ui/theme.js';
+import { createPhoneStream } from './ui/phoneStream.js';
 
 initTheme();
 
@@ -109,7 +110,11 @@ const debugView = createDebugView($('#debug-canvas'));
 
 const world = createWorld($('#three-container'));
 // 首页引导：还没有照片时盖在视图上
-const hero = createHero($('.views'), { onDemo: () => loadSampleByKey(DEMO_SAMPLE) });
+let phoneStream = null;
+const hero = createHero($('.views'), {
+  onDemo: () => loadSampleByKey(DEMO_SAMPLE),
+  onStream: () => phoneStream?.open(),
+});
 hero.setReady(false);
 // 读取照片时盖在视图上的加载遮罩
 const viewLoader = createViewLoader($('.views'));
@@ -2937,4 +2942,40 @@ panel.message(`页面已就绪（版本 ${typeof __BUILD_VERSION__ === 'string' 
 // 真值演示不下载模型；真实照片在实际识别时按需初始化。
 
 // 调试用：在控制台访问
-window.__twin = { store, panel, debugView, fitDetections, world, phone, transition, partsLayer, boxEditor, arm, armGoto, sortPlayer, getOnnxDetector, colorCandidates, get detResult() { return detResult; }, get sortPlan() { return sortPlan; }, get calib() { return calib; } };
+phoneStream = createPhoneStream({
+  mountRoot: $('.views'),
+  onPhoto: (file) => handleUploadFile(file),
+  isBusyEditing: () => boxEditing,
+  onStateChange: ({ connected, phoneCount, live }) => {
+    const btn = $('#btn-stream');
+    if (!btn) return;
+    btn.classList.toggle('is-connected', connected && phoneCount === 0);
+    btn.classList.toggle('is-paired', connected && phoneCount > 0);
+    btn.classList.toggle('is-live', connected && phoneCount > 0 && live);
+    btn.title = !connected
+      ? '手机扫码实时串流照片到电脑'
+      : phoneCount > 0
+        ? (live ? '手机已连接 · 实时取景串流中' : '手机已连接 · 拍照原图直传就绪')
+        : '中转服务已连接 · 等待手机扫码';
+  },
+  message: (text, level) => panel.message(text, level),
+});
+$('#btn-stream')?.addEventListener('click', () => phoneStream.toggle());
+
+store.on('stage:imageLoaded', (st) => {
+  phoneStream?.sendPcStatus('detecting', `已读取 ${st.image?.fileName ?? '照片'}，正在识别定位码与元件…`, '');
+});
+store.on('stage:sceneBuilt', (st) => {
+  const parts = st.parts ?? [];
+  const resCount = parts.filter((p) => p.cls === 0).length;
+  const ledCount = parts.filter((p) => p.cls === 1).length;
+  const detail = parts.length
+    ? `识别完成：共 ${parts.length} 个元件（电阻 ${resCount}，LED ${ledCount}）`
+    : '底板已定位，未检测到元件';
+  phoneStream?.sendPcStatus('sceneBuilt', detail, parts.length ? 'ok' : 'warn');
+});
+store.on('error', ({ reason }) => {
+  phoneStream?.sendPcStatus('error', reason || '识别失败', 'err');
+});
+
+window.__twin = { store, panel, debugView, fitDetections, world, phone, phoneStream, transition, partsLayer, boxEditor, arm, armGoto, sortPlayer, getOnnxDetector, colorCandidates, get detResult() { return detResult; }, get sortPlan() { return sortPlan; }, get calib() { return calib; } };
