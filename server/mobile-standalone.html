@@ -844,6 +844,13 @@
             const video = $('live-video');
             video.srcObject = liveStream;
             await video.play();
+            if (!video.videoWidth) {
+              await new Promise((res) => {
+                const done = () => res();
+                video.addEventListener('loadedmetadata', done, { once: true });
+                setTimeout(done, 800);
+              });
+            }
             liveSending = true;
             liveFrames = 0;
             liveFpsTs = 0;

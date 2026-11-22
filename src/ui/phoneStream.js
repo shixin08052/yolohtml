@@ -6,6 +6,7 @@ const STORAGE_URL = 'yolohtml.relayUrl';
 const STORAGE_TOKEN = 'yolohtml.relayToken';
 const STORAGE_AUTO = 'yolohtml.relayAutoLoad';
 const SESSION_ROOM = 'yolohtml.relayRoom';
+export const DEFAULT_RELAY_URL = 'https://forward.davidshi.codes';
 
 const esc = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -65,7 +66,8 @@ export function createPhoneStream({ mountRoot, onPhoto, isBusyEditing = () => fa
   } catch {
     // 无存储权限时忽略
   }
-  const initialUrl = normalizeRelayUrl(q.get('relay') || savedUrl);
+  const explicitUrl = normalizeRelayUrl(q.get('relay') || savedUrl);
+  const initialUrl = explicitUrl;
   const initialToken = q.get('relayToken') || savedToken;
 
   let serverUrl = initialUrl;
@@ -73,6 +75,7 @@ export function createPhoneStream({ mountRoot, onPhoto, isBusyEditing = () => fa
   let room = savedRoom;
   let connected = false;
   let connecting = false;
+  let userDisconnected = false;
   let phoneCount = 0;
   let phoneDevices = [];
   let liveActive = false;
@@ -118,7 +121,7 @@ export function createPhoneStream({ mountRoot, onPhoto, isBusyEditing = () => fa
       <div class="stream-server">
         <label class="stream-label" for="sp-url">中转服务器地址</label>
         <div class="stream-row">
-          <input id="sp-url" class="stream-input" type="text" placeholder="例如 http://服务器IP:8787" spellcheck="false" autocomplete="off" />
+          <input id="sp-url" class="stream-input" type="text" placeholder="例如 https://forward.davidshi.codes" spellcheck="false" autocomplete="off" />
           <button type="button" class="btn btn-primary btn-small" id="sp-connect">连接</button>
           <button type="button" class="btn btn-small" id="sp-disconnect" hidden>断开</button>
         </div>
@@ -507,7 +510,7 @@ export function createPhoneStream({ mountRoot, onPhoto, isBusyEditing = () => fa
     $p('sp-mixed-warn').hidden = true;
 
     if (!norm) {
-      setError('请输入有效的中转服务器地址（例如 http://服务器IP:8787）。');
+      setError('请输入有效的中转服务器地址（例如 https://forward.davidshi.codes）。');
       return;
     }
     urlInput.value = norm;
@@ -612,16 +615,26 @@ export function createPhoneStream({ mountRoot, onPhoto, isBusyEditing = () => fa
   };
 
   /* ---------------- 交互事件绑定 ---------------- */
-  $p('sp-connect').addEventListener('click', () => connect());
+  $p('sp-connect').addEventListener('click', () => {
+    userDisconnected = false;
+    connect();
+  });
   $p('sp-disconnect').addEventListener('click', () => {
+    userDisconnected = true;
     disconnect();
     message('已断开手机照片串流连接', 'info');
   });
   urlInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !connected && !connecting) connect();
+    if (e.key === 'Enter' && !connected && !connecting) {
+      userDisconnected = false;
+      connect();
+    }
   });
   tokenInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !connected && !connecting) connect();
+    if (e.key === 'Enter' && !connected && !connecting) {
+      userDisconnected = false;
+      connect();
+    }
   });
   $p('sp-toggle-token').addEventListener('click', () => {
     const row = $p('sp-token-row');
@@ -670,10 +683,18 @@ export function createPhoneStream({ mountRoot, onPhoto, isBusyEditing = () => fa
     panel.hidden = false;
     updateStatusUi();
     if (!connected && !connecting) {
-      const found = await probeSameOrigin();
-      if (found && urlInput.value === location.origin) {
-        connect();
-      } else if (q.get('relay') && urlInput.value) {
+      if (!explicitUrl && !urlInput.value.trim() && !/\.github\.io$/i.test(location.hostname)) {
+        const found = await probeSameOrigin();
+        if (found) {
+          urlInput.value = location.origin;
+          serverUrl = location.origin;
+        }
+      }
+      if (!urlInput.value.trim()) {
+        urlInput.value = DEFAULT_RELAY_URL;
+        serverUrl = DEFAULT_RELAY_URL;
+      }
+      if (!userDisconnected && urlInput.value.trim()) {
         connect();
       } else {
         urlInput.focus();

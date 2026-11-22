@@ -13,37 +13,38 @@
 
 ## 快速安装（Linux 服务器）
 
-### 方案 A：纯 IP 直连 + 同时托管网页端（推荐，无域名即可完整使用）
+### 方案 A：HTTPS / WSS 域名模式（推荐，支持 GitHub Pages / 展示包一键直连 + 实时视频取景）
+
+确认域名（如 `forward.davidshi.codes`）已添加 `A` 记录指向服务器 IP，并在云服务器安全组放行 **TCP 80 与 443**，然后 SSH 登录服务器执行：
+
+```bash
+# 仅跑轻量中转服务（推荐搭配 GitHub Pages 或本机展示包，服务器内存占用 < 40 MB）
+curl -fsSL https://raw.githubusercontent.com/shixin08052/yolohtml/main/server/install.sh | sudo bash -s -- --https forward.davidshi.codes
+```
+
+如果想让 `https://forward.davidshi.codes/` 同时直接托管电脑端网页界面，加上 `--with-web`：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/shixin08052/yolohtml/main/server/install.sh | sudo bash -s -- --https forward.davidshi.codes --with-web
+```
+
+脚本会自动完成：
+- 安装 Node.js 22 LTS 与中转服务（`systemd` 守护 + 开机自启）；
+- 自动放行本机 `ufw` / `firewalld` 的 80 与 443 端口；
+- 若 80/443 空闲，自动安装 Caddy（含静态二进制兜底）并向 Let's Encrypt 申请免费 HTTPS 证书，同时保护 `/etc/caddy/Caddyfile` 已有站点；
+- 若 80/443 已被现有 Nginx 占用，自动生成可直接引用的 Nginx 反代模板 `/opt/sorting-twin-relay/nginx-<域名>.conf` 并给出接入指引，绝不破坏已有网站。
+
+### 方案 B：纯 IP 直连（无域名时使用）
 
 在云服务器安全组放行 **TCP 8787**，然后 SSH 登录服务器执行：
 
 ```bash
+# 纯 IP + 同时托管网页端
 curl -fsSL https://raw.githubusercontent.com/shixin08052/yolohtml/main/server/install.sh | sudo bash -s -- --with-web
-```
 
-安装完成后，任意电脑打开 `http://<你的服务器IP>:8787/`（演示模式 `http://<你的服务器IP>:8787/?demo`），点击顶栏 **「手机串流」** 即可自动识别中转服务并弹出二维码，手机微信或相机扫码即可连拍。
-
-### 方案 B：仅运行轻量中转服务（搭配本机展示包使用）
-
-如果你在展示电脑上运行本机离线展示包（`启动展示.cmd`，打开 `http://127.0.0.1:17826/`），服务器只需跑极轻量的中转程序（内存占用 < 40 MB）：
-
-```bash
+# 或仅跑轻量中转（搭配本机离线展示包 http://127.0.0.1:17826/）
 curl -fsSL https://raw.githubusercontent.com/shixin08052/yolohtml/main/server/install.sh | sudo bash
 ```
-
-然后在电脑页面的「手机串流」中填入 `http://<你的服务器IP>:8787` 即可（仅传输照片，模型与 3D 资源完全走本机，零公网带宽消耗）。
-
-### 方案 C：开启 HTTPS / WSS（支持 GitHub Pages 直连 + 手机实时视频取景）
-
-如果希望从 `https://shixin08052.github.io/yolohtml/` 直接连入，或启用手机浏览器 **实时取景串流**：
-
-- 任意域名（无论国外还是国内 DNS 提供商，海外服务器均无需备案），添加一条 `A` 记录指向服务器 IP，放行 **TCP 80 与 443** 后执行：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/shixin08052/yolohtml/main/server/install.sh | sudo bash -s -- --https cam.yourdomain.com --with-web
-```
-
-脚本会自动安装 Caddy 并申请免费 Let's Encrypt 证书。
 
 ## 可选参数
 

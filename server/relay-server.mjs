@@ -533,6 +533,7 @@ export function createRelayServer(options = {}) {
     ws.on('pong', () => { client.alive = true; });
 
     ws.on('text', (raw) => {
+      client.alive = true;
       room.lastActive = Date.now();
       let msg;
       try { msg = JSON.parse(raw); } catch { return; }
@@ -568,6 +569,7 @@ export function createRelayServer(options = {}) {
 
     // 二进制帧：手机实时取景 JPEG 预览流 -> 转发给电脑端（带背压丢帧，保证低延迟）
     ws.on('binary', (buf) => {
+      client.alive = true;
       if (role !== 'phone' || !buf.length) return;
       room.lastActive = Date.now();
       for (const pc of room.pcs) {

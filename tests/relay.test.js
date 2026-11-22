@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import http from 'node:http';
 import { createRelayServer } from '../server/relay-server.mjs';
-import { normalizeRelayUrl, isMixedContentBlocked } from '../src/ui/phoneStream.js';
+import { normalizeRelayUrl, isMixedContentBlocked, DEFAULT_RELAY_URL } from '../src/ui/phoneStream.js';
 import { readExif } from '../src/vision/image.js';
 
 let activeServer = null;
@@ -63,6 +63,7 @@ describe('中转地址规范化与混合内容检查', () => {
   it('正确识别 HTTPS 页面连接公网 HTTP 中转时的混合内容拦截', () => {
     expect(isMixedContentBlocked('http://198.51.100.10:8787', 'https:')).toBe(true);
     expect(isMixedContentBlocked('https://cam.example.com', 'https:')).toBe(false);
+    expect(isMixedContentBlocked(DEFAULT_RELAY_URL, 'https:')).toBe(false);
     expect(isMixedContentBlocked('http://127.0.0.1:8787', 'https:')).toBe(false);
     expect(isMixedContentBlocked('http://198.51.100.10:8787', 'http:')).toBe(false);
   });
