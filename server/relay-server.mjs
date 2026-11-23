@@ -6,7 +6,7 @@
 // 3. 自带移动端拍摄页（/m/:room）与可选静态前端托管（--web-dir）
 import http from 'node:http';
 import https from 'node:https';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
 import { extname, join, resolve, sep } from 'node:path';
@@ -17,6 +17,23 @@ const HERE = resolve(fileURLToPath(new URL('.', import.meta.url)));
 const MOBILE_HTML_PATH = join(HERE, 'mobile-standalone.html');
 const ROOM_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const ROOM_RE = /^[A-Z0-9]{4,12}$/;
+const SESSION_PROTOCOL = 'sorting-twin.v1';
+const PREVIEW_CODECS = ['h264', 'vp8'];
+const PREVIEW_MAGIC = 0x53545031;
+const VIDEO_SOFT_INFLIGHT = 6;
+const VIDEO_MAX_INFLIGHT = 10;
+const VIDEO_KEYFRAME_MAX_INFLIGHT = 14;
+const JPEG_MAX_INFLIGHT = 2;
+const PC_QUEUE_CONGESTED = 4;
+const RELAY_KEYFRAME_COOLDOWN_MS = 450;
+const FEEDBACK_INTERVAL_MS = 200;
+const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
+const newCredential = () => randomBytes(32).toString('base64url');
+const credentialHash = (value) => createHash('sha256').update(value).digest();
+
+function bearerToken(req) {
+  return /^Bearer ([^\s]+)$/i.exec(req.headers.authorization || '')?.[1] || '';
+}
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -134,8 +151,8 @@ async function readBody(req, maxBytes) {
 
 function setCorsHeaders(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-File-Name, X-Capture-Mode, X-Relay-Token');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-File-Name, X-Capture-Mode, X-Relay-Token');
   res.setHeader('Access-Control-Expose-Headers', 'X-File-Name, Content-Length');
   res.setHeader('Access-Control-Allow-Private-Network', 'true');
 }
@@ -156,6 +173,8 @@ function sendJson(res, status, data) {
  *   host?: string,
  *   webDir?: string | null,
  *   token?: string,
+ *   accessKey?: string,
+ *   inviteTtlMs?: number,
  *   maxPhotoBytes?: number,
  *   maxMemoryBytes?: number,
  *   maxRooms?: number,
@@ -170,6 +189,10 @@ export function createRelayServer(options = {}) {
   const host = options.host ?? '0.0.0.0';
   const webDir = options.webDir ? resolve(options.webDir) : null;
   const token = String(options.token || '').trim();
+  const accessKey = String(options.accessKey || '').trim();
+  const accessKeyHash = accessKey ? credentialHash(accessKey) : null;
+  const authMode = accessKeyHash ? 'pairing' : token ? 'shared' : 'none';
+  const inviteTtlMs = options.inviteTtlMs ?? 5 * 60 * 1000;
   const maxPhotoBytes = options.maxPhotoBytes ?? 25 * 1024 * 1024;
   const maxMemoryBytes = options.maxMemoryBytes ?? 150 * 1024 * 1024;
   const maxRooms = options.maxRooms ?? 60;
@@ -203,6 +226,29 @@ export function createRelayServer(options = {}) {
     }
   };
 
+  const retireRoom = (room) => {
+    rooms.delete(room.code);
+    for (const client of [...room.pcs, ...room.phones]) client.ws.close(4001, 'Room closed');
+    for (const photo of [...room.photos]) removePhotoFromRoom(room, photo.id);
+  };
+
+  const issueInvite = (room, now) => {
+    const auth = room.auth;
+    const expiresAt = Math.min(now + inviteTtlMs, auth.expiresAt);
+    const invite = newCredential();
+    auth.inviteHash = credentialHash(invite);
+    auth.inviteExpiresAt = expiresAt;
+    auth.inviteVersion += 1;
+    return { invite, inviteVersion: auth.inviteVersion, inviteExpiresInMs: expiresAt - now };
+  };
+
+  const checkRoomSession = (room, role, credential) => {
+    const auth = room?.auth;
+    if (!credential || !auth || auth.expiresAt <= Date.now()) return false;
+    const expected = role === 'pc' ? auth.pcHash : auth.phoneHash;
+    return Boolean(expected && timingSafeEqual(expected, credentialHash(credential)));
+  };
+
   const getOrCreateRoom = (code, allowCreate = true) => {
     let room = rooms.get(code);
     if (room) {
@@ -218,10 +264,8 @@ export function createRelayServer(options = {}) {
           if (!victim || r.lastActive < victim.lastActive) victim = r;
         }
       }
-      if (victim) {
-        for (const p of [...victim.photos]) removePhotoFromRoom(victim, p.id);
-        rooms.delete(victim.code);
-      } else {
+      if (victim) retireRoom(victim);
+      else {
         return null;
       }
     }
@@ -232,6 +276,11 @@ export function createRelayServer(options = {}) {
       pcs: new Set(),
       phones: new Set(),
       photos: [],
+      lastFeedbackAt: 0,
+      lastFeedbackCongested: false,
+      lastFeedbackSevere: false,
+      lastFeedbackReceivers: -1,
+      lastFeedbackInFlight: 0,
     };
     rooms.set(code, room);
     return room;
@@ -251,12 +300,76 @@ export function createRelayServer(options = {}) {
       ts: p.ts,
       url: `/api/rooms/${room.code}/photo/${p.id}`,
     })),
+    ...(room.auth && {
+      inviteVersion: room.auth.inviteVersion,
+      invitePending: Boolean(room.auth.inviteHash && room.auth.inviteExpiresAt > Date.now()),
+    }),
   });
 
   const broadcastRoomState = (room) => {
     const payload = { type: 'room_state', ...roomSnapshot(room) };
     for (const c of room.pcs) c.ws.sendJson(payload);
-    for (const c of room.phones) c.ws.sendJson(payload);
+    const phoneState = room.auth ? { type: 'room_state', room: room.code, pcCount: room.pcs.size } : payload;
+    const pcs = [...room.pcs];
+    const activeReceivers = pcs.filter((pc) => pc.previewVisible && pc.ws.readyState === 1).length;
+    const previewCodecs = pcs.length && room.phones.size === 1
+      ? PREVIEW_CODECS.filter((codec) => pcs.every((pc) => pc.previewCodecs.includes(codec)))
+      : [];
+    const phonePayload = { ...phoneState, previewCodecs, activeReceivers };
+    for (const c of room.phones) c.ws.sendJson(phonePayload);
+  };
+
+  const requestPhoneKeyframe = (room, pc, now) => {
+    if (now - pc.lastRelayKeyframeAt < RELAY_KEYFRAME_COOLDOWN_MS) return;
+    pc.lastRelayKeyframeAt = now;
+    for (const phone of room.phones) phone.ws.sendJson({ type: 'preview_keyframe' });
+  };
+
+  const sendPreviewFeedback = (room, now, force = false) => {
+    if (!room.phones.size) return;
+    let activeReceivers = 0;
+    let maxInFlight = 0;
+    let maxQueue = 0;
+    let congested = false;
+    let severe = false;
+    let hasAckPeer = false;
+    for (const pc of room.pcs) {
+      if (pc.ws.readyState !== 1 || !pc.previewVisible) continue;
+      activeReceivers++;
+      if (pc.ackEnabled) hasAckPeer = true;
+      const inFlight = pc.ackEnabled ? Math.max(0, pc.previewSent - pc.previewAcked) : 0;
+      if (inFlight > maxInFlight) maxInFlight = inFlight;
+      if (pc.previewQueue > maxQueue) maxQueue = pc.previewQueue;
+      const pcSevere = pc.awaitingKeyframe
+        || pc.ws.bufferedAmount >= 262144
+        || (pc.ackEnabled && inFlight >= VIDEO_MAX_INFLIGHT);
+      const pcCongested = pcSevere
+        || pc.ws.bufferedAmount >= 131072
+        || (pc.ackEnabled && (inFlight >= VIDEO_SOFT_INFLIGHT || pc.previewQueue >= PC_QUEUE_CONGESTED || Boolean(pc.pendingJpeg)));
+      if (pcSevere) severe = true;
+      if (pcCongested) congested = true;
+    }
+    const windowOpened = (maxInFlight < JPEG_MAX_INFLIGHT && room.lastFeedbackInFlight >= JPEG_MAX_INFLIGHT)
+      || (maxInFlight === 0 && room.lastFeedbackInFlight > 0);
+    const changed = congested !== room.lastFeedbackCongested
+      || severe !== room.lastFeedbackSevere
+      || activeReceivers !== room.lastFeedbackReceivers
+      || windowOpened;
+    if (!force && !changed && (!hasAckPeer || now - room.lastFeedbackAt < FEEDBACK_INTERVAL_MS)) return;
+    room.lastFeedbackAt = now;
+    room.lastFeedbackCongested = congested;
+    room.lastFeedbackSevere = severe;
+    room.lastFeedbackReceivers = activeReceivers;
+    room.lastFeedbackInFlight = maxInFlight;
+    const feedback = {
+      type: 'preview_feedback',
+      congested,
+      severe,
+      inFlight: maxInFlight,
+      queue: maxQueue,
+      activeReceivers,
+    };
+    for (const phone of room.phones) phone.ws.sendJson(feedback);
   };
 
   const checkToken = (req, urlObj) => {
@@ -335,7 +448,8 @@ export function createRelayServer(options = {}) {
         version: '1.0.0',
         rooms: rooms.size,
         uptimeSec: Math.floor((Date.now() - startedAt) / 1000),
-        authRequired: Boolean(token),
+        authRequired: authMode !== 'none',
+        authMode,
         staticHosted: Boolean(webDir),
       });
     }
@@ -347,6 +461,7 @@ export function createRelayServer(options = {}) {
       res.statusCode = 200;
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
       res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Referrer-Policy', 'no-referrer');
       res.setHeader('Content-Length', buf.length);
       if (req.method === 'HEAD') res.end();
       else res.end(buf);
@@ -355,28 +470,73 @@ export function createRelayServer(options = {}) {
 
     // 3. 房间与照片 API
     if (pathname.startsWith('/api/rooms')) {
-      if (!checkToken(req, urlObj)) {
+      if (!accessKeyHash && !checkToken(req, urlObj)) {
         return sendJson(res, 401, { ok: false, error: '访问口令无效或缺失（X-Relay-Token）' });
       }
+      const credential = accessKeyHash ? bearerToken(req) : '';
+      const deny = () => sendJson(res, 401, { ok: false, error: '凭证无效或已过期，请重新连接或扫码' });
 
       // POST /api/rooms — 创建新房间
       if (req.method === 'POST' && pathname === '/api/rooms') {
+        if (accessKeyHash && (!credential || !timingSafeEqual(accessKeyHash, credentialHash(credential)))) return deny();
         const code = generateRoomCode(rooms);
         const room = getOrCreateRoom(code, true);
         if (!room) return sendJson(res, 503, { ok: false, error: '活跃房间数已达上限，请稍后重试' });
+        let pairing = {};
+        if (accessKeyHash) {
+          const pcSession = newCredential();
+          const now = Date.now();
+          room.auth = {
+            pcHash: credentialHash(pcSession),
+            phoneHash: null,
+            expiresAt: now + SESSION_TTL_MS,
+            inviteVersion: 0,
+          };
+          pairing = { pcSession, ...issueInvite(room, now) };
+        }
         return sendJson(res, 201, {
           ok: true,
           room: room.code,
           expiresInSec: Math.floor(roomTtlMs / 1000),
+          ...pairing,
         });
+      }
+
+      const pairingMatch = pathname.match(/^\/api\/rooms\/([A-Za-z0-9]{4,12})\/(pair|invite)$/);
+      if (accessKeyHash && req.method === 'POST' && pairingMatch) {
+        const room = rooms.get(pairingMatch[1].toUpperCase());
+        const now = Date.now();
+        const auth = room?.auth;
+        if (pairingMatch[2] === 'pair') {
+          if (!credential || !auth?.inviteHash || auth.inviteExpiresAt <= now ||
+              !timingSafeEqual(auth.inviteHash, credentialHash(credential))) return deny();
+          auth.inviteHash = null;
+          const phoneSession = newCredential();
+          auth.phoneHash = credentialHash(phoneSession);
+          room.lastActive = now;
+          broadcastRoomState(room);
+          return sendJson(res, 201, { ok: true, phoneSession });
+        }
+        if (!checkRoomSession(room, 'pc', credential)) return deny();
+        auth.phoneHash = null;
+        for (const client of room.phones) client.ws.close(4001, 'Phone unpaired');
+        room.lastActive = now;
+        return sendJson(res, 201, { ok: true, ...issueInvite(room, now) });
       }
 
       // GET /api/rooms/:code — 查询房间状态
       const roomMatch = pathname.match(/^\/api\/rooms\/([A-Za-z0-9]{4,12})$/);
+      if (accessKeyHash && req.method === 'DELETE' && roomMatch) {
+        const room = rooms.get(roomMatch[1].toUpperCase());
+        if (!checkRoomSession(room, 'pc', credential)) return deny();
+        retireRoom(room);
+        return sendJson(res, 200, { ok: true });
+      }
       if (req.method === 'GET' && roomMatch) {
         const code = roomMatch[1].toUpperCase();
         if (!ROOM_RE.test(code)) return sendJson(res, 400, { ok: false, error: '房间码格式无效' });
-        const room = getOrCreateRoom(code, true);
+        const room = accessKeyHash ? rooms.get(code) : getOrCreateRoom(code, true);
+        if (accessKeyHash && !checkRoomSession(room, 'pc', credential)) return deny();
         if (!room) return sendJson(res, 503, { ok: false, error: '活跃房间数已达上限' });
         return sendJson(res, 200, { ok: true, ...roomSnapshot(room) });
       }
@@ -386,7 +546,8 @@ export function createRelayServer(options = {}) {
       if (req.method === 'POST' && uploadMatch) {
         const code = uploadMatch[1].toUpperCase();
         if (!ROOM_RE.test(code)) return sendJson(res, 400, { ok: false, error: '房间码格式无效' });
-        const room = getOrCreateRoom(code, true);
+        const room = accessKeyHash ? rooms.get(code) : getOrCreateRoom(code, true);
+        if (accessKeyHash && !checkRoomSession(room, 'phone', credential)) return deny();
         if (!room) return sendJson(res, 503, { ok: false, error: '活跃房间数已达上限' });
         let rawBody;
         try {
@@ -394,6 +555,7 @@ export function createRelayServer(options = {}) {
         } catch (err) {
           return sendJson(res, err.statusCode || 400, { ok: false, error: err.message });
         }
+        if (accessKeyHash && (rooms.get(code) !== room || !checkRoomSession(room, 'phone', credential))) return deny();
         let imgBuf = rawBody;
         let rawName = req.headers['x-file-name'] || '';
         const ct = String(req.headers['content-type'] || '');
@@ -444,6 +606,7 @@ export function createRelayServer(options = {}) {
         const code = photoMatch[1].toUpperCase();
         const id = photoMatch[2];
         const room = rooms.get(code);
+        if (accessKeyHash && !checkRoomSession(room, 'pc', credential)) return deny();
         const photo = room?.photos.find((p) => p.id === id);
         if (!photo) return sendJson(res, 404, { ok: false, error: '照片不存在或已过期' });
         room.lastActive = Date.now();
@@ -501,30 +664,56 @@ export function createRelayServer(options = {}) {
       socket.destroy();
       return;
     }
-    if (!checkToken(req, urlObj)) {
+    const code = String(urlObj.searchParams.get('room') || '').toUpperCase().trim();
+    const role = urlObj.searchParams.get('role') === 'phone' ? 'phone' : 'pc';
+    const existingRoom = rooms.get(code);
+    const protocols = String(req.headers['sec-websocket-protocol'] || '').split(',').map((item) => item.trim());
+    const session = protocols[1]?.match(/^session\.([A-Za-z0-9_-]{43})$/)?.[1];
+    const authorized = accessKeyHash
+      ? protocols[0] === SESSION_PROTOCOL && checkRoomSession(existingRoom, role, session)
+      : checkToken(req, urlObj);
+    if (!authorized) {
       socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
       socket.destroy();
       return;
     }
-    const code = String(urlObj.searchParams.get('room') || '').toUpperCase().trim();
-    const role = urlObj.searchParams.get('role') === 'phone' ? 'phone' : 'pc';
     const device = String(urlObj.searchParams.get('device') || (role === 'phone' ? '手机' : '电脑')).slice(0, 48);
     if (!ROOM_RE.test(code)) {
       socket.write('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
       socket.destroy();
       return;
     }
-    const room = getOrCreateRoom(code, true);
+    const room = accessKeyHash ? existingRoom : getOrCreateRoom(code, true);
     if (!room) {
       socket.write('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n');
       socket.destroy();
       return;
     }
 
-    const ws = acceptWebSocket(req, socket, head, { maxPayloadBytes: 2 * 1024 * 1024 });
+    const ws = acceptWebSocket(req, socket, head, {
+      maxPayloadBytes: 2 * 1024 * 1024,
+      protocol: accessKeyHash ? SESSION_PROTOCOL : '',
+    });
     if (!ws) return;
+    ws.on('error', () => ws.terminate());
 
-    const client = { ws, role, device, live: false, alive: true };
+    const client = {
+      ws,
+      role,
+      device,
+      live: false,
+      alive: true,
+      previewCodecs: [],
+      lastKeyframeRequest: 0,
+      ackEnabled: false,
+      previewVisible: true,
+      previewSent: 0,
+      previewAcked: 0,
+      previewQueue: 0,
+      awaitingKeyframe: false,
+      pendingJpeg: null,
+      lastRelayKeyframeAt: 0,
+    };
     const bucket = role === 'phone' ? room.phones : room.pcs;
     bucket.add(client);
     room.lastActive = Date.now();
@@ -534,16 +723,23 @@ export function createRelayServer(options = {}) {
 
     ws.on('text', (raw) => {
       client.alive = true;
-      room.lastActive = Date.now();
+      const now = Date.now();
+      room.lastActive = now;
       let msg;
       try { msg = JSON.parse(raw); } catch { return; }
       if (!msg || typeof msg !== 'object') return;
       if (msg.type === 'ping') {
-        ws.sendJson({ type: 'pong', ts: msg.ts ?? Date.now() });
+        ws.sendJson({ type: 'pong', ts: msg.ts ?? now });
         return;
       }
       if (role === 'phone' && msg.type === 'stream_state') {
         client.live = Boolean(msg.live);
+        if (!client.live) {
+          for (const pc of room.pcs) {
+            pc.pendingJpeg = null;
+            pc.awaitingKeyframe = false;
+          }
+        }
         const ev = {
           type: 'stream_state',
           live: client.live,
@@ -554,8 +750,51 @@ export function createRelayServer(options = {}) {
         };
         for (const pc of room.pcs) pc.ws.sendJson(ev);
         broadcastRoomState(room);
+      } else if (role === 'pc' && msg.type === 'preview_codecs' && Array.isArray(msg.codecs)) {
+        if (msg.ack === true) client.ackEnabled = true;
+        const accepted = PREVIEW_CODECS.filter((codec) => msg.codecs.includes(codec));
+        if (accepted.join() !== client.previewCodecs.join()) {
+          client.previewCodecs = accepted;
+          client.awaitingKeyframe = false;
+          broadcastRoomState(room);
+        }
+      } else if (role === 'pc' && msg.type === 'preview_ack') {
+        client.ackEnabled = true;
+        const ackCount = Math.max(0, Math.floor(Number(msg.count) || 0));
+        if (ackCount > client.previewAcked) {
+          client.previewAcked = Math.min(ackCount, client.previewSent);
+        }
+        client.previewQueue = Math.max(0, Math.floor(Number(msg.queue) || 0));
+        // JPEG 单槽覆盖模式：收到 ACK 腾出窗口后立即发送最新一帧
+        if (
+          client.pendingJpeg &&
+          client.previewVisible &&
+          client.ws.readyState === 1 &&
+          client.ws.bufferedAmount < 131072 &&
+          client.previewSent - client.previewAcked < JPEG_MAX_INFLIGHT
+        ) {
+          const nextBuf = client.pendingJpeg;
+          client.pendingJpeg = null;
+          if (client.ws.sendBinary(nextBuf)) client.previewSent++;
+        }
+        sendPreviewFeedback(room, now);
+      } else if (role === 'pc' && msg.type === 'preview_visible') {
+        const visible = Boolean(msg.visible);
+        if (visible !== client.previewVisible) {
+          client.previewVisible = visible;
+          client.pendingJpeg = null;
+          client.awaitingKeyframe = Boolean(client.previewCodecs.length);
+          if (!visible) client.lastRelayKeyframeAt = 0;
+          broadcastRoomState(room);
+          if (visible && client.previewCodecs.length) requestPhoneKeyframe(room, client, now);
+        }
+      } else if (role === 'pc' && msg.type === 'preview_keyframe') {
+        if (!client.previewCodecs.length || now - client.lastKeyframeRequest < 250) return;
+        client.lastKeyframeRequest = now;
+        client.awaitingKeyframe = true;
+        for (const phone of room.phones) phone.ws.sendJson({ type: 'preview_keyframe' });
       } else if (role === 'pc' && msg.type === 'shutter') {
-        for (const phone of room.phones) phone.ws.sendJson({ type: 'shutter', ts: Date.now() });
+        for (const phone of room.phones) phone.ws.sendJson({ type: 'shutter', ts: now });
       } else if (role === 'pc' && msg.type === 'pc_status') {
         const ev = {
           type: 'pc_status',
@@ -567,22 +806,84 @@ export function createRelayServer(options = {}) {
       }
     });
 
-    // 二进制帧：手机实时取景 JPEG 预览流 -> 转发给电脑端（带背压丢帧，保证低延迟）
+    // 二进制帧：手机预览 -> 电脑（JPEG 单槽覆盖 / 视频帧按 GOP 感知丢包 + ACK 端到端流控）
     ws.on('binary', (buf) => {
       client.alive = true;
       if (role !== 'phone' || !buf.length) return;
-      room.lastActive = Date.now();
+      const now = Date.now();
+      room.lastActive = now;
+      const isVideo = buf.length > 10 && buf.readUInt32BE(0) === PREVIEW_MAGIC;
+      const isKeyframe = isVideo && buf[9] === 1;
+      let congestionEvent = false;
+      let feedbackDirty = false;
+
       for (const pc of room.pcs) {
-        if (pc.ws.readyState === 1 && pc.ws.bufferedAmount < 262144) {
-          pc.ws.sendBinary(buf);
+        if (pc.ws.readyState !== 1) continue;
+        if (!pc.previewVisible) {
+          if (isVideo) pc.awaitingKeyframe = true;
+          else pc.pendingJpeg = null;
+          continue;
+        }
+        if (isVideo) {
+          pc.pendingJpeg = null;
+          const inFlight = pc.ackEnabled ? Math.max(0, pc.previewSent - pc.previewAcked) : 0;
+          if (pc.awaitingKeyframe) {
+            if (!isKeyframe) {
+              requestPhoneKeyframe(room, pc, now);
+              continue;
+            }
+            const canResume = pc.ws.bufferedAmount < 262144
+              && (!pc.ackEnabled || inFlight < VIDEO_KEYFRAME_MAX_INFLIGHT);
+            if (!canResume) {
+              requestPhoneKeyframe(room, pc, now);
+              congestionEvent = true;
+              continue;
+            }
+            pc.awaitingKeyframe = false;
+            feedbackDirty = true;
+            if (pc.ws.sendBinary(buf)) pc.previewSent++;
+            continue;
+          }
+          const limit = isKeyframe ? VIDEO_KEYFRAME_MAX_INFLIGHT : VIDEO_MAX_INFLIGHT;
+          const congested = pc.ws.bufferedAmount >= 262144
+            || (pc.ackEnabled && (inFlight >= limit || pc.previewQueue >= 6));
+          if (congested) {
+            pc.awaitingKeyframe = true;
+            requestPhoneKeyframe(room, pc, now);
+            congestionEvent = true;
+            continue;
+          }
+          if (pc.ws.sendBinary(buf)) pc.previewSent++;
+          continue;
+        }
+
+        // JPEG 降级路径：启用 ACK 的电脑使用单槽覆盖（Latest-Frame-Only），旧客户端保持缓冲上限兜底
+        pc.awaitingKeyframe = false;
+        if (pc.ackEnabled) {
+          const inFlight = Math.max(0, pc.previewSent - pc.previewAcked);
+          if (inFlight < JPEG_MAX_INFLIGHT && pc.ws.bufferedAmount < 131072) {
+            pc.pendingJpeg = null;
+            if (pc.ws.sendBinary(buf)) pc.previewSent++;
+          } else {
+            pc.pendingJpeg = buf;
+            congestionEvent = true;
+          }
+        } else if (pc.ws.bufferedAmount < 262144) {
+          if (pc.ws.sendBinary(buf)) pc.previewSent++;
         }
       }
+
+      if (congestionEvent || feedbackDirty) sendPreviewFeedback(room, now, congestionEvent);
     });
 
     ws.on('close', () => {
       bucket.delete(client);
       if (role === 'phone' && client.live) {
-        for (const pc of room.pcs) pc.ws.sendJson({ type: 'stream_state', live: false, device: client.device });
+        for (const pc of room.pcs) {
+          pc.pendingJpeg = null;
+          pc.awaitingKeyframe = false;
+          pc.ws.sendJson({ type: 'stream_state', live: false, device: client.device });
+        }
       }
       broadcastRoomState(room);
     });
@@ -591,7 +892,12 @@ export function createRelayServer(options = {}) {
   // 定时清理过期空闲房间 & 心跳保活
   const gcTimer = setInterval(() => {
     const now = Date.now();
-    for (const [code, room] of rooms) {
+    for (const room of rooms.values()) {
+      if (room.auth?.expiresAt <= now ||
+          (room.pcs.size === 0 && room.phones.size === 0 && now - room.lastActive > roomTtlMs)) {
+        retireRoom(room);
+        continue;
+      }
       for (const c of [...room.pcs, ...room.phones]) {
         if (!c.alive) {
           c.ws.terminate();
@@ -599,10 +905,6 @@ export function createRelayServer(options = {}) {
         }
         c.alive = false;
         c.ws.ping();
-      }
-      if (room.pcs.size === 0 && room.phones.size === 0 && now - room.lastActive > roomTtlMs) {
-        for (const p of [...room.photos]) removePhotoFromRoom(room, p.id);
-        rooms.delete(code);
       }
     }
   }, 30000);
@@ -642,6 +944,7 @@ function parseCliArgs(argv) {
     host: process.env.HOST || '0.0.0.0',
     webDir: process.env.WEB_DIR || '',
     token: process.env.RELAY_TOKEN || '',
+    accessKey: process.env.RELAY_ACCESS_KEY || '',
     tlsCert: process.env.TLS_CERT || '',
     tlsKey: process.env.TLS_KEY || '',
   };
@@ -675,7 +978,8 @@ if (isDirectRun) {
   console.log(`[sorting-twin-relay] mobile capture: ${proto}://<YOUR_IP>:${info.port}/m`);
   if (info.webDir) console.log(`[sorting-twin-relay] hosting static web app from: ${info.webDir}`);
   else console.log('[sorting-twin-relay] relay-only mode (no static web dir configured)');
-  if (cfg.token) console.log('[sorting-twin-relay] token authentication enabled');
+  if (cfg.accessKey) console.log('[sorting-twin-relay] one-time phone pairing enabled');
+  else if (cfg.token) console.log('[sorting-twin-relay] token authentication enabled');
   const shutdown = () => {
     console.log('\n[sorting-twin-relay] shutting down...');
     relay.close().then(() => process.exit(0));

@@ -2946,7 +2946,8 @@ phoneStream = createPhoneStream({
   mountRoot: $('.views'),
   onPhoto: (file) => handleUploadFile(file),
   isBusyEditing: () => boxEditing,
-  onStateChange: ({ connected, phoneCount, live }) => {
+  onStateChange: ({ connected, phoneCount, live, panelOpen }) => {
+    hero.setPaused(connected && live && panelOpen);
     const btn = $('#btn-stream');
     if (!btn) return;
     btn.classList.toggle('is-connected', connected && phoneCount === 0);

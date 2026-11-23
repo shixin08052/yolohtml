@@ -6,8 +6,24 @@ import { clearOrderCache } from '../llm/orderCache.js';
 import { toCsv } from '../experiment.js';
 import { downloadText } from './download.js';
 
+/* global __BUNDLED_DEEPSEEK_KEY__ */
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const LLM_KEY = 'yolohtml.deepseek';
+const BUNDLED_DEEPSEEK_KEY = typeof __BUNDLED_DEEPSEEK_KEY__ === 'string' ? __BUNDLED_DEEPSEEK_KEY__.trim() : '';
+
+/** 仅在未指定或指向官方 DeepSeek HTTPS 接口地址时返回构建期注入的演示 API Key */
+export function resolveDefaultDeepSeekKey(baseURL = '', bundledKey = BUNDLED_DEEPSEEK_KEY) {
+  const key = String(bundledKey || '').trim();
+  if (!key) return '';
+  const url = String(baseURL || '').trim();
+  if (!url) return key;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'https:' && parsed.hostname === 'api.deepseek.com' ? key : '';
+  } catch {
+    return '';
+  }
+}
 const EFFORT_LABELS = ['关闭', '低', '高', 'Ultra'];
 const EFFORT_HINTS = ['直接生成，节省 token', '轻量思考，适合简单需求', '深入推理，适合复杂电路', '充分推理，耗时与 token 用量更高'];
 
@@ -54,6 +70,9 @@ export function createOrderPanel({ panel, getParts, getPlanningOptions = () => (
   let busyAct = 'ai'; // 是哪个按钮发起的（转圈画在它上面）
   let busy = null; // 正在请求大模型时的 AbortController
   let llm = { model: DEFAULT_MODEL, apiKey: '', baseURL: '', reasoningEffort: 'none', useCache: true, ...loadLlm() };
+  if (!String(llm.apiKey || '').trim()) {
+    llm.apiKey = resolveDefaultDeepSeekKey(llm.baseURL);
+  }
   llm.reasoningEffort = normalizeEffort(llm.reasoningEffort);
   llm.useCache = llm.useCache !== false;
   let draft = '';
@@ -381,9 +400,15 @@ export function createOrderPanel({ panel, getParts, getPlanningOptions = () => (
         continue;
       }
       input.addEventListener('change', () => {
-        llm = { ...llm, [input.dataset.llm]: input.type === 'checkbox' ? input.checked : input.value.trim() };
+        const keyName = input.dataset.llm;
+        llm = { ...llm, [keyName]: input.type === 'checkbox' ? input.checked : input.value.trim() };
+        if (keyName === 'baseURL' && BUNDLED_DEEPSEEK_KEY && llm.apiKey === BUNDLED_DEEPSEEK_KEY && !resolveDefaultDeepSeekKey(llm.baseURL)) {
+          llm.apiKey = '';
+          const keyInput = body.querySelector('[data-llm="apiKey"]');
+          if (keyInput) keyInput.value = '';
+        }
         saveLlm(llm);
-        if (input.dataset.llm === 'model') refreshEffort(body);
+        if (keyName === 'model') refreshEffort(body);
       });
     }
   }

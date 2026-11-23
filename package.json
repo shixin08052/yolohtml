@@ -1,7 +1,7 @@
 {
   "name": "sorting-twin",
   "private": true,
-  "version": "1.2.2",
+  "version": "1.2.7",
   "type": "module",
   "scripts": {
     "predev": "node scripts/copy-ort.mjs",

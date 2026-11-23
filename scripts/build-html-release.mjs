@@ -8,6 +8,8 @@ import { verifyHtmlRelease } from './verify-html-release.mjs';
 if (process.platform !== 'win32') throw new Error('Build this Windows HTML demonstration package on Windows.');
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
+const hasBundledRelayKey = Boolean(String(process.env.SORTING_TWIN_DEMO_RELAY_KEY || '').trim());
+const hasBundledDeepSeekKey = Boolean(String(process.env.SORTING_TWIN_DEMO_DEEPSEEK_KEY || '').trim());
 const output = join(root, 'release');
 const name = `SortingTwin-v${pkg.version}-html-windows`;
 const directory = join(output, name);
@@ -43,9 +45,17 @@ const instructions = `视觉分拣数字孪生系统 v${pkg.version} · Windows 
 
 展示内容
 - 内置模型、WASM 和 6 张示例，可离线识别、3D 展示、选择元件清单、分拣及导出指令。
-- AI 助手使用 DeepSeek，需联网并填写自己的 API Key；离线时使用手动元件清单。
-- 接口设置和缓存保存在当前电脑的浏览器中；此包不包含任何 API Key。
+- AI 助手使用 DeepSeek，${hasBundledDeepSeekKey ? '此演示包已内置演示 API Key（可直接联网使用，请勿公开发布）' : '需联网并填写自己的 API Key'}；离线时使用手动元件清单。
+- 接口设置和缓存保存在当前电脑的浏览器中；${hasBundledDeepSeekKey ? '可在“接口设置”中随时修改或清空 API Key。' : '此包不包含任何 API Key。'}
 - 仅按所选清单收集元件；挡路元件移动到板上空位，优先处理遮挡最少的目标。
+
+手机串流（需联网）
+${hasBundledRelayKey
+  ? `1. 在电脑页面点“手机串流”，将自动使用此演示包内置的电脑访问密钥连接 https://forward.davidshi.codes。
+2. 如需更换密钥或连接其他中转服务器，可点“访问密钥”手动修改。此包内置演示密钥，请仅用于个人演示，勿公开发布。`
+  : `1. 在电脑页面点“手机串流”，连接 https://forward.davidshi.codes，输入电脑访问密钥。
+2. 可勾选“在此浏览器记住密钥”。下次请继续用同一浏览器和本地地址；取消勾选可清除保存的密钥。展示包不包含密钥。`}
+3. 用手机扫描二维码，试拍原图或切换到实时取景。二维码 5 分钟内有效，用过或过期后，从电脑端点“重新配对”即可换码。
 
 打开其他页面
 - 完整模式：启动窗口中“完整模式”对应的地址。
@@ -66,7 +76,7 @@ const instructions = `视觉分拣数字孪生系统 v${pkg.version} · Windows 
 release-manifest.json 记录各文件 SHA-256；ZIP 同目录的 .sha256 文件用于核对压缩包完整性。
 `;
 await writeFile(join(directory, '使用说明.txt'), '\uFEFF' + instructions.replace(/\n/g, '\r\n'));
-await writeFile(join(directory, 'release-info.json'), JSON.stringify({ generatedBy, version: pkg.version, platform: 'Windows 10/11', format: 'static-html', builtAt: new Date().toISOString() }, null, 2));
+await writeFile(join(directory, 'release-info.json'), JSON.stringify({ generatedBy, version: pkg.version, platform: 'Windows 10/11', format: 'static-html', bundledRelayKey: hasBundledRelayKey, bundledDeepSeekKey: hasBundledDeepSeekKey, builtAt: new Date().toISOString() }, null, 2));
 
 // 随静态产物保留生产依赖的授权文本与模型原始授权说明。
 const licenses = join(directory, 'licenses');

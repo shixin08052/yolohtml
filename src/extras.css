@@ -1096,6 +1096,12 @@ body.demo-wait .info-panel .panel-section[data-key="order"] { display: none; }
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .stream-panel { background: var(--glass-solid); }
 }
+/* 实时取景串流时关闭浮层实时模糊，降低合成线程负担 */
+.stream-panel.is-live-preview {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  background: var(--glass-solid);
+}
 .stream-head {
   display: flex;
   align-items: flex-start;
@@ -1179,7 +1185,14 @@ body.demo-wait .info-panel .panel-section[data-key="order"] { display: none; }
   outline-offset: -1px;
 }
 .stream-token-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
   margin-top: 8px;
+}
+.stream-token-row .stream-input {
+  flex-basis: 160px;
 }
 .stream-server-foot {
   display: flex;

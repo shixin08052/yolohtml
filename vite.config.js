@@ -4,6 +4,8 @@ import { execSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
 const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'));
+const bundledRelayKey = String(process.env.SORTING_TWIN_DEMO_RELAY_KEY || '').trim();
+const bundledDeepSeekKey = String(process.env.SORTING_TWIN_DEMO_DEEPSEEK_KEY || '').trim();
 
 /** 版本号：package.json 的版本 + git 提交短哈希 + 构建时间（显示在页面上，便于确认浏览器拿到的是不是最新版） */
 function buildVersion() {
@@ -38,7 +40,11 @@ export default defineConfig({
   // 相对路径，便于部署到 GitHub Pages 的子路径（/yolohtml/）
   base: './',
   plugins: [jsArucoCommonJS()],
-  define: { __BUILD_VERSION__: JSON.stringify(buildVersion()) },
+  define: {
+    __BUILD_VERSION__: JSON.stringify(buildVersion()),
+    __BUNDLED_RELAY_KEY__: JSON.stringify(bundledRelayKey),
+    __BUNDLED_DEEPSEEK_KEY__: JSON.stringify(bundledDeepSeekKey),
+  },
   resolve: {
     // onnxruntime-web 默认入口会把 wasm 文件一起打包进 assets（约 42 MB）；这个条件选用"外部 wasm"版本，
     // 运行时从 public/ort/ 按 env.wasm.wasmPaths 加载（scripts/copy-ort.mjs 复制），避免重复

@@ -46,6 +46,12 @@ curl -fsSL https://raw.githubusercontent.com/shixin08052/yolohtml/main/server/in
 curl -fsSL https://raw.githubusercontent.com/shixin08052/yolohtml/main/server/install.sh | sudo bash
 ```
 
+## 电脑密钥与一次性扫码配对
+
+在 `/etc/sorting-twin-relay.env` 中设置 `RELAY_ACCESS_KEY`，使用随机生成的高强度密钥（例如 `openssl rand -hex 32` 的输出），然后重启 `sorting-twin-relay`。电脑在「手机串流」中输入密钥后创建房间，手机扫描二维码进入，可继续使用原图直传、实时取景和远程快门。此模式需要配套的新版电脑端，公网访问使用 HTTPS。
+
+二维码 5 分钟内有效且只能兑换一次。每个房间可配对一台手机，短线重连可继续使用原会话。电脑点「重新配对」可撤销手机权限并生成新二维码，点「断开」会关闭整个房间。房间会话最长 8 小时。设置 `RELAY_ACCESS_KEY` 后，旧 `RELAY_TOKEN` 不再用于鉴权。
+
 ## 可选参数
 
 | 参数 | 说明 |

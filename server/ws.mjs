@@ -5,10 +5,8 @@ import { EventEmitter } from 'node:events';
 
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 
-/** 构造服务端发往客户端的 WebSocket 帧（服务端发送不掩码） */
-export function encodeFrame(opcode, payloadBuf) {
-  const payload = Buffer.isBuffer(payloadBuf) ? payloadBuf : Buffer.from(payloadBuf ?? '');
-  const len = payload.length;
+/** 构造 WebSocket 帧头（服务端发送不掩码） */
+function encodeHeader(opcode, len) {
   let header;
   if (len < 126) {
     header = Buffer.allocUnsafe(2);
@@ -25,7 +23,29 @@ export function encodeFrame(opcode, payloadBuf) {
     header[1] = 127;
     header.writeBigUInt64BE(BigInt(len), 2);
   }
-  return Buffer.concat([header, payload]);
+  return header;
+}
+
+/** 构造服务端发往客户端的 WebSocket 帧（服务端发送不掩码） */
+export function encodeFrame(opcode, payloadBuf) {
+  const payload = Buffer.isBuffer(payloadBuf) ? payloadBuf : Buffer.from(payloadBuf ?? '');
+  const header = encodeHeader(opcode, payload.length);
+  return payload.length ? Buffer.concat([header, payload]) : header;
+}
+
+/** 按 32 位整字解掩码，避免逐字节 XOR 循环 */
+function unmaskPayload(src, dataOffset, maskOffset, payloadLen) {
+  const payload = Buffer.allocUnsafe(payloadLen);
+  const mask32 = src.readUInt32BE(maskOffset);
+  let i = 0;
+  const end4 = payloadLen - 3;
+  for (; i < end4; i += 4) {
+    payload.writeUInt32BE((src.readUInt32BE(dataOffset + i) ^ mask32) >>> 0, i);
+  }
+  for (; i < payloadLen; i++) {
+    payload[i] = src[dataOffset + i] ^ src[maskOffset + (i & 3)];
+  }
+  return payload;
 }
 
 /**
@@ -33,7 +53,7 @@ export function encodeFrame(opcode, payloadBuf) {
  * @param {import('node:http').IncomingMessage} req
  * @param {import('node:net').Socket} socket
  * @param {Buffer} head
- * @param {{ maxPayloadBytes?: number }} [opts]
+ * @param {{ maxPayloadBytes?: number, protocol?: string }} [opts]
  */
 export function acceptWebSocket(req, socket, head, opts = {}) {
   const maxPayloadBytes = opts.maxPayloadBytes ?? 4 * 1024 * 1024;
@@ -49,12 +69,16 @@ export function acceptWebSocket(req, socket, head, opts = {}) {
     'HTTP/1.1 101 Switching Protocols\r\n' +
     'Upgrade: websocket\r\n' +
     'Connection: Upgrade\r\n' +
-    `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
+    `Sec-WebSocket-Accept: ${accept}\r\n` +
+    (opts.protocol ? `Sec-WebSocket-Protocol: ${opts.protocol}\r\n` : '') +
+    '\r\n',
   );
 
   const ws = new EventEmitter();
   let closed = false;
-  let rxBuf = Buffer.alloc(0);
+  let rxChunks = [];
+  let rxOffset = 0;
+  let rxBytes = 0;
   let fragOpcode = 0;
   let fragChunks = [];
   let fragBytes = 0;
@@ -63,17 +87,29 @@ export function acceptWebSocket(req, socket, head, opts = {}) {
     if (closed) return;
     closed = true;
     ws.readyState = 3;
-    rxBuf = Buffer.alloc(0);
+    rxChunks = [];
+    rxOffset = 0;
+    rxBytes = 0;
     fragChunks = [];
     ws.emit('close', code, reason);
   };
 
-  const writeRaw = (buf) => {
+  const writeFrame = (opcode, payloadBuf) => {
     if (closed || socket.destroyed || !socket.writable) return false;
+    const payload = Buffer.isBuffer(payloadBuf) ? payloadBuf : Buffer.from(payloadBuf ?? '');
+    const header = encodeHeader(opcode, payload.length);
     try {
-      socket.write(buf);
+      if (payload.length) {
+        socket.cork();
+        socket.write(header);
+        socket.write(payload);
+        socket.uncork();
+      } else {
+        socket.write(header);
+      }
       return true;
     } catch {
+      try { socket.uncork(); } catch {}
       return false;
     }
   };
@@ -83,18 +119,18 @@ export function acceptWebSocket(req, socket, head, opts = {}) {
     get: () => (socket.destroyed ? Infinity : socket.writableLength),
   });
 
-  ws.sendText = (text) => writeRaw(encodeFrame(0x1, Buffer.from(String(text), 'utf8')));
+  ws.sendText = (text) => writeFrame(0x1, Buffer.from(String(text), 'utf8'));
   ws.sendJson = (obj) => ws.sendText(JSON.stringify(obj));
-  ws.sendBinary = (buf) => writeRaw(encodeFrame(0x2, buf));
-  ws.ping = (payload = '') => writeRaw(encodeFrame(0x9, Buffer.from(payload)));
-  ws.pong = (payload = '') => writeRaw(encodeFrame(0xa, payload));
+  ws.sendBinary = (buf) => writeFrame(0x2, buf);
+  ws.ping = (payload = '') => writeFrame(0x9, Buffer.from(payload));
+  ws.pong = (payload = '') => writeFrame(0xa, payload);
   ws.close = (code = 1000, reason = '') => {
     if (closed) return;
     const reasonBuf = Buffer.from(String(reason), 'utf8').subarray(0, 120);
     const body = Buffer.allocUnsafe(2 + reasonBuf.length);
     body.writeUInt16BE(code, 0);
     reasonBuf.copy(body, 2);
-    writeRaw(encodeFrame(0x8, body));
+    writeFrame(0x8, body);
     socket.end();
     markClosed(code, reason);
   };
@@ -108,10 +144,54 @@ export function acceptWebSocket(req, socket, head, opts = {}) {
     socket.destroy();
   };
 
+  const peekByte = (index) => {
+    let rem = index;
+    for (let i = 0; i < rxChunks.length; i++) {
+      const c = rxChunks[i];
+      const start = i === 0 ? rxOffset : 0;
+      const avail = c.length - start;
+      if (rem < avail) return c[start + rem];
+      rem -= avail;
+    }
+    return 0;
+  };
+
+  const pullBytes = (length) => {
+    const first = rxChunks[0];
+    const firstAvail = first.length - rxOffset;
+    if (firstAvail >= length) {
+      const slice = first.subarray(rxOffset, rxOffset + length);
+      rxOffset += length;
+      rxBytes -= length;
+      if (rxOffset === first.length) {
+        rxChunks.shift();
+        rxOffset = 0;
+      }
+      return slice;
+    }
+    const out = Buffer.allocUnsafe(length);
+    let written = 0;
+    while (written < length) {
+      const c = rxChunks[0];
+      const start = rxOffset;
+      const take = Math.min(c.length - start, length - written);
+      c.copy(out, written, start, start + take);
+      written += take;
+      rxBytes -= take;
+      if (start + take === c.length) {
+        rxChunks.shift();
+        rxOffset = 0;
+      } else {
+        rxOffset = start + take;
+      }
+    }
+    return out;
+  };
+
   const processBuffer = () => {
-    while (!closed && rxBuf.length >= 2) {
-      const b0 = rxBuf[0];
-      const b1 = rxBuf[1];
+    while (!closed && rxBytes >= 2) {
+      const b0 = peekByte(0);
+      const b1 = peekByte(1);
       const fin = (b0 & 0x80) !== 0;
       const rsv = b0 & 0x70;
       const opcode = b0 & 0x0f;
@@ -121,12 +201,13 @@ export function acceptWebSocket(req, socket, head, opts = {}) {
 
       if (rsv !== 0) return fail(1002, 'RSV bits not supported');
       if (payloadLen === 126) {
-        if (rxBuf.length < 4) return;
-        payloadLen = rxBuf.readUInt16BE(2);
+        if (rxBytes < 4) return;
+        payloadLen = (peekByte(2) << 8) | peekByte(3);
         offset = 4;
       } else if (payloadLen === 127) {
-        if (rxBuf.length < 10) return;
-        const bigLen = rxBuf.readBigUInt64BE(2);
+        if (rxBytes < 10) return;
+        let bigLen = 0n;
+        for (let i = 2; i < 10; i++) bigLen = (bigLen << 8n) | BigInt(peekByte(i));
         if (bigLen > BigInt(maxPayloadBytes)) return fail(1009, 'Frame too large');
         payloadLen = Number(bigLen);
         offset = 10;
@@ -135,19 +216,18 @@ export function acceptWebSocket(req, socket, head, opts = {}) {
 
       const maskLen = masked ? 4 : 0;
       const frameEnd = offset + maskLen + payloadLen;
-      if (rxBuf.length < frameEnd) return;
+      if (rxBytes < frameEnd) return;
 
-      const payload = Buffer.allocUnsafe(payloadLen);
-      if (masked) {
-        const maskOffset = offset;
-        const dataOffset = offset + 4;
-        for (let i = 0; i < payloadLen; i++) {
-          payload[i] = rxBuf[dataOffset + i] ^ rxBuf[maskOffset + (i & 3)];
-        }
+      const frame = pullBytes(frameEnd);
+      let payload;
+      if (payloadLen === 0) {
+        payload = Buffer.alloc(0);
+      } else if (masked) {
+        payload = unmaskPayload(frame, offset + 4, offset, payloadLen);
       } else {
-        rxBuf.copy(payload, 0, offset, frameEnd);
+        payload = Buffer.allocUnsafe(payloadLen);
+        frame.copy(payload, 0, offset, frameEnd);
       }
-      rxBuf = rxBuf.subarray(frameEnd);
 
       // 控制帧（0x8 关闭 / 0x9 Ping / 0xA Pong）可穿插在分片之间
       if (opcode >= 0x8) {
@@ -198,8 +278,9 @@ export function acceptWebSocket(req, socket, head, opts = {}) {
   };
 
   socket.on('data', (chunk) => {
-    if (closed) return;
-    rxBuf = rxBuf.length ? Buffer.concat([rxBuf, chunk]) : chunk;
+    if (closed || !chunk.length) return;
+    rxChunks.push(chunk);
+    rxBytes += chunk.length;
     processBuffer();
   });
   socket.on('error', (err) => {
@@ -209,7 +290,8 @@ export function acceptWebSocket(req, socket, head, opts = {}) {
   socket.on('close', () => markClosed(1006, ''));
 
   if (head && head.length) {
-    rxBuf = Buffer.from(head);
+    rxChunks.push(Buffer.from(head));
+    rxBytes += head.length;
     processBuffer();
   }
   return ws;

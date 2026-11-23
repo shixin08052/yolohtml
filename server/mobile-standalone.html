@@ -527,24 +527,59 @@
         const query = new URLSearchParams(location.search);
         const pathMatch = location.pathname.match(/^\/m\/([A-Za-z0-9]{4,12})\/?$/);
         const token = query.get('token') || '';
+        const invite = new URLSearchParams(location.hash.slice(1)).get('invite');
+        const sessionKey = 'st.mobile.pairing';
+        const sessionProtocol = 'sorting-twin.v1';
         const cleanRoom = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12);
 
-        let room = cleanRoom(pathMatch?.[1] || query.get('room') || localStorage.getItem('st.mobile.room') || '');
+        let room = cleanRoom(pathMatch?.[1] || query.get('room') || '');
+        let pairingAuth = Boolean(invite);
+        let phoneSession = '';
+        let reconnectFailures = 0;
         let ws = null;
         let wsTimer = 0;
         let pingTimer = 0;
         let retryMs = 1000;
         let pcCount = 0;
+        let pcActiveReceivers = 0;
+        let pcPreviewCodecs = [];
+        let remoteCongested = false;
+        let remoteSevere = false;
+        let remoteInFlight = 0;
+        let remoteFeedbackAt = 0;
         let uploading = false;
         let mode = 'photo';
         let liveStream = null;
         let liveSending = false;
-        let liveTimer = 0;
-        let liveFrames = 0;
-        let liveFpsTs = 0;
+        let cameraRequest = 0;
+        let preview = null;
         let facingMode = 'environment';
         let previewCanvas = null;
         let previewCtx = null;
+        let previewEncoding = false;
+        let previewSequence = 0;
+        let previewEncoderProbed = false;
+        const previewFps = 30;
+        const previewInterval = 1000 / previewFps;
+        const previewMinInterval = previewInterval * 0.82;
+        const previewKeyframeInterval = previewFps * 3;
+        const previewVideoSoftBuffer = 64 * 1024;
+        const previewSoftBuffer = 96 * 1024;
+        const previewHardBuffer = 192 * 1024;
+        const previewMagic = 0x53545031;
+        const previewCodecs = {
+          h264: { id: 1, codec: 'avc1.42001f', avc: { format: 'annexb' } },
+          vp8: { id: 2, codec: 'vp8' },
+        };
+        const unavailablePreviewCodecs = new Set();
+        // 同分辨率双码率档位优先平滑调码率，避免频繁切分辨率导致重建编码器与关键帧尖峰
+        const previewProfiles = [
+          { edge: 320, quality: 0.44, bitrate: 240000 },
+          { edge: 480, quality: 0.48, bitrate: 360000 },
+          { edge: 480, quality: 0.54, bitrate: 540000 },
+          { edge: 640, quality: 0.58, bitrate: 760000 },
+          { edge: 640, quality: 0.64, bitrate: 1000000 },
+        ];
         const history = [];
 
         const deviceLabel = (() => {
@@ -583,7 +618,7 @@
         const renderRoom = () => {
           $('room-display').textContent = formatRoom(room);
           $('room-input').value = room;
-          if (!room) {
+          if (!room && !pairingAuth) {
             $('room-form').hidden = false;
             setPill('warn', '请输入房间码');
           }
@@ -592,7 +627,7 @@
         const wsUrl = () => {
           const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
           const p = new URLSearchParams({ room, role: 'phone', device: deviceLabel });
-          if (token) p.set('token', token);
+          if (!pairingAuth && token) p.set('token', token);
           return `${proto}//${location.host}/ws?${p.toString()}`;
         };
 
@@ -608,14 +643,17 @@
             try { ws.close(); } catch {}
             ws = null;
           }
-          if (!room) return;
+          if (!room || (pairingAuth && !phoneSession)) return;
           setPill('warn', '正在连接服务器…');
-          const sock = new WebSocket(wsUrl());
+          const sock = pairingAuth
+            ? new WebSocket(wsUrl(), [sessionProtocol, `session.${phoneSession}`])
+            : new WebSocket(wsUrl());
           ws = sock;
           sock.onopen = () => {
+            reconnectFailures = 0;
             retryMs = 1000;
             setPill('warn', '已连服务器 · 等电脑');
-            sendJson({ type: 'stream_state', live: liveSending, mode });
+            sendJson({ type: 'stream_state', live: liveSending, mode, width: preview?.width, height: preview?.height });
             pingTimer = setInterval(() => sendJson({ type: 'ping', ts: Date.now() }), 20000);
           };
           sock.onmessage = (ev) => {
@@ -623,9 +661,36 @@
             let msg;
             try { msg = JSON.parse(ev.data); } catch { return; }
             if (msg.type === 'room_state') {
+              const prevActive = pcActiveReceivers;
               pcCount = Number(msg.pcCount) || 0;
+              pcActiveReceivers = typeof msg.activeReceivers === 'number' ? msg.activeReceivers : pcCount;
+              pcPreviewCodecs = Array.isArray(msg.previewCodecs) ? msg.previewCodecs : [];
+              if (pcActiveReceivers === 0) {
+                remoteCongested = false;
+                remoteSevere = false;
+                remoteInFlight = 0;
+              } else if (prevActive === 0 && preview?.encoder) {
+                preview.encoder.forceKeyframe = true;
+                preview.encoder.stalledSince = 0;
+              }
               if (pcCount > 0) setPill('ok', `已连接电脑 (${pcCount})`);
               else setPill('warn', '等待电脑端上线');
+            } else if (msg.type === 'preview_feedback') {
+              remoteCongested = Boolean(msg.congested);
+              remoteSevere = Boolean(msg.severe);
+              remoteInFlight = Math.max(0, Number(msg.inFlight) || 0);
+              remoteFeedbackAt = performance.now();
+              if (typeof msg.activeReceivers === 'number') {
+                const prevActive = pcActiveReceivers;
+                pcActiveReceivers = msg.activeReceivers;
+                if (prevActive === 0 && pcActiveReceivers > 0 && preview?.encoder) {
+                  preview.encoder.forceKeyframe = true;
+                  preview.encoder.stalledSince = 0;
+                }
+              }
+              if (remoteSevere && preview) adjustPreviewQuality(preview, remoteFeedbackAt, true, true);
+            } else if (msg.type === 'preview_keyframe') {
+              if (preview?.encoder) preview.encoder.forceKeyframe = true;
             } else if (msg.type === 'pc_status') {
               $('status-card').hidden = false;
               setEcho(`电脑端：${msg.text || ''}`, msg.level || '');
@@ -638,9 +703,25 @@
               }
             }
           };
-          sock.onclose = () => {
+          sock.onclose = (event) => {
             clearInterval(pingTimer);
             if (ws !== sock) return;
+            ws = null;
+            pcCount = 0;
+            pcActiveReceivers = 0;
+            pcPreviewCodecs = [];
+            remoteCongested = false;
+            remoteSevere = false;
+            remoteInFlight = 0;
+            if (pairingAuth && (event.code === 4001 || ++reconnectFailures >= 3)) {
+              if (event.code === 4001) {
+                phoneSession = '';
+                try { sessionStorage.removeItem(sessionKey); } catch {}
+              }
+              stopLive();
+              setPill('err', '连接已结束，请重新扫码');
+              return;
+            }
             setPill('err', '连接断开，重连中…');
             wsTimer = setTimeout(connectWs, retryMs);
             retryMs = Math.min(8000, Math.round(retryMs * 1.6));
@@ -648,6 +729,47 @@
           sock.onerror = () => {
             try { sock.close(); } catch {}
           };
+        };
+
+        const initializePairing = async () => {
+          try {
+            const response = await fetch('/api/health', { cache: 'no-store' });
+            if (!response.ok) throw new Error('无法连接中转服务，请刷新重试');
+            const health = await response.json();
+            pairingAuth = health.authMode === 'pairing' || Boolean(invite);
+            if (!pairingAuth) {
+              try {
+                room ||= cleanRoom(localStorage.getItem('st.mobile.room') || '');
+                if (room) localStorage.setItem('st.mobile.room', room);
+              } catch {}
+              renderRoom();
+              if (room) connectWs();
+              return;
+            }
+            $('btn-change-room').hidden = true;
+            $('room-form').hidden = true;
+            renderRoom();
+            if (invite && pathMatch) {
+              const result = await fetch(`/api/rooms/${encodeURIComponent(room)}/pair`, {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${invite}` },
+                cache: 'no-store',
+              });
+              if (!result.ok) throw new Error('二维码已使用或过期，请让电脑重新配对');
+              ({ phoneSession } = await result.json());
+              try { sessionStorage.setItem(sessionKey, JSON.stringify({ room, phoneSession })); } catch {}
+              window.history.replaceState(null, '', location.pathname);
+            } else {
+              try {
+                const saved = JSON.parse(sessionStorage.getItem(sessionKey) || 'null');
+                if (saved?.room === room) phoneSession = saved.phoneSession;
+              } catch {}
+            }
+            if (!phoneSession) throw new Error('请用手机扫描电脑端二维码');
+            connectWs();
+          } catch (error) {
+            setPill('err', error.message || '连接失败，请刷新重试');
+          }
         };
 
         const validateMagic = async (blob) => {
@@ -685,6 +807,10 @@
         };
 
         const uploadPhoto = async (file, captureMode = 'upload', skipHistory = false) => {
+          if (pairingAuth && !phoneSession) {
+            showToast('请先扫描电脑端配对二维码');
+            return;
+          }
           if (!room) {
             showToast('请先输入 6 位房间码');
             return;
@@ -713,7 +839,8 @@
               xhr.setRequestHeader('Content-Type', mime);
               xhr.setRequestHeader('X-File-Name', encodeURIComponent(file.name || `photo_${Date.now()}.jpg`));
               xhr.setRequestHeader('X-Capture-Mode', captureMode);
-              if (token) xhr.setRequestHeader('X-Relay-Token', token);
+              if (pairingAuth) xhr.setRequestHeader('Authorization', `Bearer ${phoneSession}`);
+              else if (token) xhr.setRequestHeader('X-Relay-Token', token);
               xhr.upload.onprogress = (ev) => {
                 if (ev.lengthComputable) {
                   const pct = Math.min(99, Math.max(5, Math.round((ev.loaded / ev.total) * 100)));
@@ -767,9 +894,47 @@
         });
 
         /* ---------------- 实时取景串流模式（HTTPS / localhost） ---------------- */
-        const stopLive = () => {
-          clearTimeout(liveTimer);
+        const probePreviewEncoders = async () => {
+          if (previewEncoderProbed || typeof VideoEncoder !== 'function' || typeof VideoEncoder.isConfigSupported !== 'function') {
+            previewEncoderProbed = true;
+            return;
+          }
+          previewEncoderProbed = true;
+          await Promise.all(Object.entries(previewCodecs).map(async ([name, spec]) => {
+            const { id: _id, ...config } = spec;
+            const res = await VideoEncoder.isConfigSupported({
+              ...config,
+              width: 480,
+              height: 360,
+              bitrate: 540000,
+              framerate: previewFps,
+              latencyMode: 'realtime',
+            }).catch(() => null);
+            if (!res?.supported) unavailablePreviewCodecs.add(name);
+          }));
+        };
+
+        const closePreviewEncoder = (state) => {
+          const encoder = state.encoder;
+          state.encoder = null;
+          if (encoder?.instance && encoder.instance.state !== 'closed') encoder.instance.close();
+        };
+
+        const stopPreview = () => {
           liveSending = false;
+          if (!preview) return;
+          clearTimeout(preview.handle);
+          const video = $('live-video');
+          if (preview.rvfcHandle && typeof video?.cancelVideoFrameCallback === 'function') {
+            try { video.cancelVideoFrameCallback(preview.rvfcHandle); } catch {}
+          }
+          closePreviewEncoder(preview);
+          preview = null;
+        };
+
+        const stopLive = () => {
+          cameraRequest++;
+          stopPreview();
           if (liveStream) {
             for (const t of liveStream.getTracks()) t.stop();
             liveStream = null;
@@ -780,67 +945,293 @@
           sendJson({ type: 'stream_state', live: false, mode });
         };
 
-        const scheduleLiveFrame = () => {
-          if (!liveSending || !liveStream) return;
-          liveTimer = setTimeout(sendOnePreviewFrame, 140); // ~7 fps，兼顾流畅与 4G/5G 低流量
+        const adjustPreviewQuality = (state, now, busy, severe = false) => {
+          if (busy) {
+            state.lastPressure = now;
+            state.pressure += severe ? 3 : 1;
+            const cooldown = severe ? 600 : 1200;
+            if (state.pressure >= 6 && now - state.changedAt >= cooldown && state.level > 0) {
+              state.level--;
+              state.changedAt = now;
+              state.pressure = 0;
+            }
+          } else {
+            state.pressure = Math.max(0, state.pressure - 1);
+            if (now - Math.max(state.lastPressure, state.changedAt) >= 15000 && state.level < previewProfiles.length - 1) {
+              state.level++;
+              state.changedAt = now;
+            }
+          }
         };
 
-        const sendOnePreviewFrame = () => {
-          if (!liveSending || !liveStream) return;
-          const video = $('live-video');
-          if (!video.videoWidth || !video.videoHeight || !ws || ws.readyState !== 1 || ws.bufferedAmount > 120000) {
-            return scheduleLiveFrame();
+        const scheduleLiveFrame = (state, video) => {
+          if (typeof video.requestVideoFrameCallback === 'function') {
+            const onVideoFrame = (now, metadata) => {
+              if (preview !== state) return;
+              state.rvfcHandle = video.requestVideoFrameCallback(onVideoFrame);
+              const presented = metadata?.presentedFrames;
+              if (presented !== undefined && presented === state.lastPresented) return;
+              if (now - state.lastCaptureAt < previewMinInterval) return;
+              state.lastPresented = presented;
+              state.lastCaptureAt = now;
+              sendOnePreviewFrame(state, video, now);
+            };
+            state.rvfcHandle = video.requestVideoFrameCallback(onVideoFrame);
+            return;
           }
-          const targetW = Math.min(640, video.videoWidth);
-          const targetH = Math.round((video.videoHeight / video.videoWidth) * targetW);
+          const tick = () => {
+            if (preview !== state) return;
+            const now = performance.now();
+            const intervals = 1 + Math.max(0, Math.floor((now - state.nextFrameAt) / previewInterval));
+            state.nextFrameAt += intervals * previewInterval;
+            state.handle = setTimeout(tick, Math.max(0, state.nextFrameAt - performance.now()));
+            sendOnePreviewFrame(state, video, now);
+          };
+          state.handle = setTimeout(tick, Math.max(0, state.nextFrameAt - performance.now()));
+        };
+
+        const recordPreviewSent = (state, width, height, now) => {
+          if (width !== state.width || height !== state.height) {
+            state.width = width;
+            state.height = height;
+            sendJson({ type: 'stream_state', live: true, mode: 'live', width, height });
+          }
+          state.frames++;
+          if (now - state.fpsSince >= 1000) {
+            const fps = Math.round(state.frames * 1000 / (now - state.fpsSince));
+            $('live-badge').textContent = `LIVE · ${width}×${height} · ${fps} fps`;
+            state.frames = 0;
+            state.fpsSince = now;
+          }
+        };
+
+        const ensurePreviewEncoder = (state, socket, codec, width, height, bitrate) => {
+          const { id, ...config } = previewCodecs[codec];
+          const existing = state.encoder;
+          if (existing && existing.socket === socket && existing.codec === codec && existing.width === width && existing.height === height) {
+            if (existing.bitrate !== bitrate) {
+              try {
+                existing.instance.configure({ ...config, width, height, bitrate, framerate: previewFps, latencyMode: 'realtime' });
+                existing.bitrate = bitrate;
+                return existing;
+              } catch {
+                // 部分浏览器不允许在途重配码率时，平滑重建编码器
+              }
+            } else {
+              return existing;
+            }
+          }
+          closePreviewEncoder(state);
+          const encoder = {
+            codec,
+            width,
+            height,
+            bitrate,
+            socket,
+            stalledSince: 0,
+            framesSinceKeyframe: previewKeyframeInterval,
+            forceKeyframe: true,
+            dropUntilKeyframe: true,
+          };
+          const fail = () => {
+            if (preview !== state || state.encoder !== encoder) return;
+            unavailablePreviewCodecs.add(codec);
+            closePreviewEncoder(state);
+          };
+          encoder.fail = fail;
+          state.encoder = encoder;
+          try {
+            encoder.instance = new VideoEncoder({
+              output: (chunk) => {
+                if (preview !== state || state.encoder !== encoder || ws !== socket || socket.readyState !== 1 || !pcCount || !pcActiveReceivers) return;
+                const emittedAt = performance.now();
+                encoder.stalledSince = 0;
+                const isKey = chunk.type === 'key';
+                if (socket.bufferedAmount >= previewHardBuffer) {
+                  encoder.dropUntilKeyframe = true;
+                  encoder.forceKeyframe = true;
+                  return;
+                }
+                if (encoder.dropUntilKeyframe) {
+                  if (!isKey) return;
+                  encoder.dropUntilKeyframe = false;
+                }
+                // 仅在真正发出数据包时分配递增序号，避免编码器内部码控跳帧误触发电脑端重建解码器
+                const sequence = ++previewSequence;
+                const packet = new Uint8Array(10 + chunk.byteLength);
+                const header = new DataView(packet.buffer);
+                header.setUint32(0, previewMagic);
+                header.setUint32(4, sequence);
+                header.setUint8(8, id);
+                header.setUint8(9, isKey ? 1 : 0);
+                chunk.copyTo(packet.subarray(10));
+                socket.send(packet);
+                recordPreviewSent(state, width, height, emittedAt);
+              },
+              error: fail,
+            });
+            encoder.instance.configure({ ...config, width, height, bitrate, framerate: previewFps, latencyMode: 'realtime' });
+            return encoder;
+          } catch {
+            fail();
+            return null;
+          }
+        };
+
+        const drawToPreviewCanvas = (video, targetW, targetH) => {
           if (!previewCanvas) {
             previewCanvas = document.createElement('canvas');
-            previewCtx = previewCanvas.getContext('2d');
+            previewCtx = previewCanvas.getContext('2d', { alpha: false });
           }
           if (previewCanvas.width !== targetW || previewCanvas.height !== targetH) {
             previewCanvas.width = targetW;
             previewCanvas.height = targetH;
           }
           previewCtx.drawImage(video, 0, 0, targetW, targetH);
+        };
+
+        const sendOnePreviewFrame = (state, video, now) => {
+          const socket = ws;
+          if (video.readyState < 2 || !video.videoWidth || !video.videoHeight || socket?.readyState !== 1 || !pcCount) return;
+          if (!pcActiveReceivers) {
+            if (state.badgeState !== 'idle') {
+              state.badgeState = 'idle';
+              $('live-badge').textContent = 'LIVE · 电脑已收起预览（快门可用）';
+            }
+            return;
+          }
+          state.badgeState = 'active';
+          const feedbackFresh = now - remoteFeedbackAt <= 1500;
+          const netCongested = feedbackFresh && remoteCongested;
+          const netSevere = feedbackFresh && remoteSevere;
+          if (previewEncoding || socket.bufferedAmount >= previewHardBuffer) {
+            adjustPreviewQuality(state, now, true, socket.bufferedAmount >= previewHardBuffer);
+            return;
+          }
+          const codec = typeof VideoEncoder === 'function' && typeof VideoFrame === 'function'
+            ? pcPreviewCodecs.find((name) => Object.hasOwn(previewCodecs, name) && !unavailablePreviewCodecs.has(name))
+            : '';
+          if (!codec && state.encoder) closePreviewEncoder(state);
+          const { edge, quality, bitrate } = previewProfiles[state.level];
+          const scale = Math.min(1, edge / Math.max(video.videoWidth, video.videoHeight));
+          const targetW = Math.max(2, Math.round(video.videoWidth * scale / 2) * 2);
+          const targetH = Math.max(2, Math.round(video.videoHeight * scale / 2) * 2);
+
+          if (codec) {
+            const encoder = ensurePreviewEncoder(state, socket, codec, targetW, targetH, bitrate);
+            if (!encoder) return;
+            if (encoder.stalledSince && now - encoder.stalledSince > 1800) {
+              encoder.fail();
+              return;
+            }
+            const backedUp = encoder.instance.encodeQueueSize > 2;
+            const localCongested = backedUp || socket.bufferedAmount >= previewVideoSoftBuffer;
+            adjustPreviewQuality(state, now, localCongested || netCongested, netSevere);
+            if (backedUp) return;
+            drawToPreviewCanvas(video, targetW, targetH);
+            const keyFrame = encoder.forceKeyframe || encoder.framesSinceKeyframe >= previewKeyframeInterval;
+            let frame;
+            try {
+              frame = new VideoFrame(previewCanvas, { timestamp: Math.round(now * 1000) });
+              encoder.instance.encode(frame, { keyFrame });
+              if (!encoder.stalledSince) encoder.stalledSince = now;
+              if (keyFrame) {
+                encoder.framesSinceKeyframe = 0;
+                encoder.forceKeyframe = false;
+              } else {
+                encoder.framesSinceKeyframe++;
+              }
+            } catch {
+              encoder.fail();
+            } finally {
+              frame?.close();
+            }
+            return;
+          }
+
+          // JPEG 降级模式：结合电脑端 ACK 在途窗口，避免无意义编码被中转覆盖的旧帧
+          if (feedbackFresh && remoteInFlight >= 2) {
+            adjustPreviewQuality(state, now, true, netSevere);
+            return;
+          }
+          drawToPreviewCanvas(video, targetW, targetH);
+          const started = performance.now();
+          previewEncoding = true;
           previewCanvas.toBlob(
             (blob) => {
-              if (blob && ws && ws.readyState === 1 && ws.bufferedAmount < 180000) {
-                ws.send(blob);
-                liveFrames++;
-                const now = performance.now();
-                if (!liveFpsTs) liveFpsTs = now;
-                else if (now - liveFpsTs >= 1000) {
-                  const fps = Math.round((liveFrames * 1000) / (now - liveFpsTs));
-                  $('live-badge').textContent = `LIVE · ${video.videoWidth}×${video.videoHeight} · ${fps} fps`;
-                  liveFrames = 0;
-                  liveFpsTs = now;
-                }
-              }
-              scheduleLiveFrame();
+              previewEncoding = false;
+              if (!blob || preview !== state || ws !== socket || socket.readyState !== 1 || !pcCount || !pcActiveReceivers) return;
+              const completed = performance.now();
+              const queued = socket.bufferedAmount;
+              const jpegBusy = queued >= previewSoftBuffer || completed - started > previewInterval || (completed - remoteFeedbackAt <= 1500 && remoteCongested);
+              adjustPreviewQuality(state, completed, jpegBusy, queued >= previewHardBuffer || (completed - remoteFeedbackAt <= 1500 && remoteSevere));
+              if (queued >= previewHardBuffer) return;
+              socket.send(blob);
+              recordPreviewSent(state, targetW, targetH, completed);
             },
             'image/jpeg',
-            0.58,
+            quality,
           );
         };
 
+        const startPreview = () => {
+          stopPreview();
+          const video = $('live-video');
+          const now = performance.now();
+          const state = {
+            handle: 0,
+            rvfcHandle: 0,
+            lastPresented: undefined,
+            lastCaptureAt: 0,
+            nextFrameAt: now,
+            level: 2,
+            pressure: 0,
+            lastPressure: now,
+            changedAt: now,
+            frames: 0,
+            fpsSince: now,
+            badgeState: '',
+          };
+          preview = state;
+          liveSending = true;
+          $('btn-live-toggle').textContent = '暂停串流';
+          $('live-badge').textContent = 'LIVE · 等待电脑接收…';
+          sendJson({ type: 'stream_state', live: true, mode: 'live' });
+          scheduleLiveFrame(state, video);
+        };
+
         const startLive = async () => {
+          if (pairingAuth && !phoneSession) {
+            showToast('请先扫描电脑端配对二维码');
+            return;
+          }
           const canLive = window.isSecureContext && !!navigator.mediaDevices?.getUserMedia;
           $('live-insecure').hidden = canLive;
           $('live-area').hidden = !canLive;
           if (!canLive) return;
 
           stopLive();
+          const request = cameraRequest;
           $('live-badge').textContent = '正在启动相机…';
           try {
-            liveStream = await navigator.mediaDevices.getUserMedia({
-              audio: false,
-              video: {
-                facingMode: { ideal: facingMode },
-                width: { ideal: 1920 },
-                height: { ideal: 1440 },
-                aspectRatio: { ideal: 4 / 3 },
-              },
-            });
+            const [, stream] = await Promise.all([
+              probePreviewEncoders(),
+              navigator.mediaDevices.getUserMedia({
+                audio: false,
+                video: {
+                  facingMode: { ideal: facingMode },
+                  width: { ideal: 1920 },
+                  height: { ideal: 1440 },
+                  aspectRatio: { ideal: 4 / 3 },
+                  frameRate: { ideal: previewFps },
+                },
+              }),
+            ]);
+            if (request !== cameraRequest) {
+              for (const track of stream.getTracks()) track.stop();
+              return;
+            }
+            liveStream = stream;
             const video = $('live-video');
             video.srcObject = liveStream;
             await video.play();
@@ -851,14 +1242,10 @@
                 setTimeout(done, 800);
               });
             }
-            liveSending = true;
-            liveFrames = 0;
-            liveFpsTs = 0;
-            $('btn-live-toggle').textContent = '暂停串流';
-            $('live-badge').textContent = `LIVE · ${video.videoWidth}×${video.videoHeight}`;
-            sendJson({ type: 'stream_state', live: true, mode: 'live', width: video.videoWidth, height: video.videoHeight });
-            scheduleLiveFrame();
+            if (request === cameraRequest) startPreview();
           } catch (err) {
+            if (request !== cameraRequest) return;
+            stopLive();
             $('live-badge').textContent = '相机打开失败';
             showToast('无法访问相机：' + (err.message || err.name));
           }
@@ -916,11 +1303,11 @@
         $('btn-live-snap').addEventListener('click', () => snapFromLive(false));
         $('btn-live-toggle').addEventListener('click', () => {
           if (!liveStream) return startLive();
-          liveSending = !liveSending;
-          $('btn-live-toggle').textContent = liveSending ? '暂停串流' : '继续串流';
-          $('live-badge').textContent = liveSending ? 'LIVE · 恢复中' : '已暂停';
-          sendJson({ type: 'stream_state', live: liveSending, mode: 'live' });
-          if (liveSending) scheduleLiveFrame();
+          if (!liveSending) return startPreview();
+          stopPreview();
+          $('btn-live-toggle').textContent = '继续串流';
+          $('live-badge').textContent = '已暂停';
+          sendJson({ type: 'stream_state', live: false, mode: 'live' });
         });
         $('btn-live-flip').addEventListener('click', () => {
           facingMode = facingMode === 'environment' ? 'user' : 'environment';
@@ -934,6 +1321,7 @@
         });
         $('room-form').addEventListener('submit', (e) => {
           e.preventDefault();
+          if (pairingAuth) return;
           const next = cleanRoom($('room-input').value);
           if (next.length < 4) {
             showToast('请输入有效的房间配对码');
@@ -948,11 +1336,7 @@
 
         window.addEventListener('pagehide', stopLive);
 
-        if (room) {
-          try { localStorage.setItem('st.mobile.room', room); } catch {}
-        }
-        renderRoom();
-        if (room) connectWs();
+        initializePairing();
       })();
     </script>
   </body>

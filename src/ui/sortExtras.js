@@ -30,6 +30,9 @@ export function createHero(root, { onDemo, onStream }) {
   root.appendChild(el);
   const field = createCodeField(el);
   let leaveTimer = 0;
+  let visible = true;
+  let paused = false;
+  const syncField = () => field.setActive(visible && !paused);
   const btn = el.querySelector('[data-hero="demo"]');
   btn.addEventListener('click', onDemo);
   const streamBtn = el.querySelector('[data-hero="stream"]');
@@ -38,11 +41,12 @@ export function createHero(root, { onDemo, onStream }) {
     setVisible(on) {
       const showing = !el.hidden && !el.classList.contains('leaving');
       if (showing === on) return;
+      visible = on;
       clearTimeout(leaveTimer);
       if (on) {
         el.classList.remove('leaving');
         el.hidden = false;
-        field.setActive(true);
+        syncField();
         return;
       }
       // 离开首页：淡出、内容轻轻上浮后再藏起来（下面的加载遮罩同时淡入，两者交叉过渡）
@@ -50,8 +54,15 @@ export function createHero(root, { onDemo, onStream }) {
       leaveTimer = setTimeout(() => {
         el.hidden = true;
         el.classList.remove('leaving');
-        field.setActive(false);
+        syncField();
       }, 520);
+    },
+    /** 实时预览等高频画布在前方显示时，暂停首页背景代码流动画 */
+    setPaused(on) {
+      const next = Boolean(on);
+      if (paused === next) return;
+      paused = next;
+      syncField();
     },
     /** 示例列表还没读到时先禁用，按钮上转圈 */
     setReady(on) {

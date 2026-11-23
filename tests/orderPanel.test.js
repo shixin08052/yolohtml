@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createInfoPanel } from '../src/ui/infoPanel.js';
-import { createOrderPanel } from '../src/ui/orderPanel.js';
+import { createOrderPanel, resolveDefaultDeepSeekKey } from '../src/ui/orderPanel.js';
 import { askOrder } from '../src/llm/orderAssist.js';
 import { clearOrderCache } from '../src/llm/orderCache.js';
 
@@ -282,5 +282,15 @@ describe('AI 清单回填和缓存控件', () => {
     expect(control.selection().custom).toBe(false);
     expect([...control.selection().ids]).toEqual([0, 1, 2]);
     expect(onChange).toHaveBeenCalled();
+  });
+
+  it('仅在默认或官方 DeepSeek HTTPS 接口地址下返回构建期注入的演示 API Key', () => {
+    expect(resolveDefaultDeepSeekKey('', 'sk-demo')).toBe('sk-demo');
+    expect(resolveDefaultDeepSeekKey('https://api.deepseek.com', 'sk-demo')).toBe('sk-demo');
+    expect(resolveDefaultDeepSeekKey('https://api.deepseek.com/v1', ' sk-demo ')).toBe('sk-demo');
+    expect(resolveDefaultDeepSeekKey('http://api.deepseek.com', 'sk-demo')).toBe('');
+    expect(resolveDefaultDeepSeekKey('https://other.example.com/v1', 'sk-demo')).toBe('');
+    expect(resolveDefaultDeepSeekKey('', '')).toBe('');
+    expect(resolveDefaultDeepSeekKey('')).toBe('');
   });
 });

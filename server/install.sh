@@ -274,13 +274,18 @@ if [[ -n "$HTTPS_DOMAIN" ]]; then
   LISTEN_HOST="127.0.0.1"
 fi
 
-cat > "${ENV_FILE}" <<EOF
+ENV_TMP="$(mktemp "${ENV_FILE}.XXXXXXXX")"
+cat > "${ENV_TMP}" <<EOF
 PORT=${PORT}
 HOST=${LISTEN_HOST}
 RELAY_TOKEN=${TOKEN}
 WEB_DIR=${WEB_DIR}
 EOF
-chmod 600 "${ENV_FILE}"
+if [[ -f "${ENV_FILE}" ]]; then
+  awk '/^RELAY_ACCESS_KEY=/ { key=$0 } END { if (key) print key }' "${ENV_FILE}" >> "${ENV_TMP}"
+fi
+chmod 600 "${ENV_TMP}"
+mv -f "${ENV_TMP}" "${ENV_FILE}"
 
 NODE_BIN="$(command -v node)"
 cat > "${SERVICE_FILE}" <<EOF
