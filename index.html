@@ -111,13 +111,13 @@
             </div>
             <div class="view-tools">
               <label class="check"><input id="show-axes" type="checkbox" /> 坐标轴</label>
-              <label class="check"><input id="show-part-labels" type="checkbox" checked /> 零件标签</label>
+              <label class="check"><input id="show-part-labels" type="checkbox" /> 零件标签</label>
               <label class="check" title="纯色：干净的打印版面（没有照片里的阴影）；照片：照片的正射图，擦掉了零件；照片原图：不擦零件，能看到视差造成的重影">板面 <select class="select select-small" id="board-skin"><option value="plain" selected>纯色</option><option value="photo">照片</option><option value="raw">照片原图</option></select></label>
               <button type="button" class="icon-btn text" id="three-reset">默认视角</button>
               <button type="button" class="icon-btn text" id="btn-arm-debug" aria-pressed="false" title="点击底板或桌面，机械臂移动到该点正上方">机械臂调试</button>
               <button type="button" class="icon-btn text" id="btn-transition" disabled>转场</button>
               <button type="button" class="icon-btn text" id="btn-compare" aria-pressed="false" disabled>对比</button>
-              <span class="tip" tabindex="0" role="note" aria-label="操作提示：点击元件勾选分拣 · 左键旋转 · 右键平移 · 滚轮缩放"><span class="tip-icon" aria-hidden="true">?</span><span class="tip-body" aria-hidden="true"><span class="hint-mouse">点击元件勾选分拣 · 左键旋转 · 右键平移 · 滚轮缩放</span><span class="hint-touch">点按元件勾选分拣 · 单指旋转 · 双指缩放 / 平移</span></span></span>
+              <span class="tip" tabindex="0" role="note" aria-label="操作提示：点击元件切换选中（亮色为选中） · 左键旋转 · 右键平移 · 滚轮缩放"><span class="tip-icon" aria-hidden="true">?</span><span class="tip-body" aria-hidden="true"><span class="hint-mouse">点击元件切换选中（亮色为选中） · 左键旋转 · 右键平移 · 滚轮缩放</span><span class="hint-touch">点按元件切换选中（亮色为选中） · 单指旋转 · 双指缩放 / 平移</span></span></span>
             </div>
             <!-- 3D 视图直接点选分拣条 -->
             <div id="pick-bar" class="pick-bar" role="region" aria-label="3D 元件点选分拣" hidden>

@@ -18,13 +18,15 @@ const TOAST_MS = { ok: 2600, warn: 4500, error: 6500 };
 
 /**
  * @param {HTMLElement} el
+ * @param {{ hiddenTabs?: string[], onTabSelect?: (id: string, meta: { prev: string, changed: boolean }) => void }} [opts]
  */
-export function createInfoPanel(el) {
+export function createInfoPanel(el, { hiddenTabs = [], onTabSelect } = {}) {
   el.innerHTML = '';
   /** @type {Map<string, HTMLElement>} */
   const sections = new Map();
   const collapsed = new Map();
   const advanced = new Set(['timing', 'intrinsics', 'markers', 'detect', 'pose', 'experiment', 'truth', 'arm']);
+  const initiallyHidden = new Set(hiddenTabs);
 
   // ---------- 标签页 ----------
   const tabbar = document.createElement('div');
@@ -46,6 +48,12 @@ export function createInfoPanel(el) {
     tab.setAttribute('role', 'tab');
     tab.setAttribute('aria-controls', `panel-pane-${p.id}`);
     tab.textContent = p.label;
+    if (initiallyHidden.has(p.id)) {
+      tab.classList.add('is-hidden');
+      tab.disabled = true;
+      tab.tabIndex = -1;
+      tab.setAttribute('aria-hidden', 'true');
+    }
     tab.addEventListener('click', () => select(p.id));
     tabbar.appendChild(tab);
     tabs[p.id] = tab;
@@ -61,26 +69,54 @@ export function createInfoPanel(el) {
   }
   tabbar.addEventListener('keydown', (e) => {
     if (!['ArrowLeft', 'ArrowRight'].includes(e.key)) return;
-    const visible = PANES.filter((p) => getComputedStyle(tabs[p.id]).display !== 'none');
+    const visible = PANES.filter(
+      (p) => !tabs[p.id].classList.contains('is-hidden') && !tabs[p.id].disabled && getComputedStyle(tabs[p.id]).display !== 'none',
+    );
+    if (visible.length < 2) return;
     const i = visible.findIndex((p) => p.id === current);
     const next = visible[(i + (e.key === 'ArrowRight' ? 1 : visible.length - 1)) % visible.length];
     select(next.id);
     tabs[next.id].focus();
   });
 
-  function select(id) {
-    if (!panes[id]) return;
+  function select(id, { silent = false } = {}) {
+    if (!panes[id] || tabs[id].classList.contains('is-hidden')) return;
+    const prev = current;
     current = id;
     for (const p of PANES) {
+      const hidden = tabs[p.id].classList.contains('is-hidden');
       const on = p.id === id;
       tabs[p.id].classList.toggle('active', on);
       tabs[p.id].setAttribute('aria-selected', String(on));
-      tabs[p.id].tabIndex = on ? 0 : -1;
+      tabs[p.id].tabIndex = on && !hidden ? 0 : -1;
       panes[p.id].hidden = !on;
-      if (on) tabs[p.id].classList.remove('has-new');
+      if (on) tabs[p.id].classList.remove('has-new', 'is-revealing');
+    }
+    if (!silent) onTabSelect?.(id, { prev, changed: prev !== id });
+  }
+
+  function setTabVisible(id, visible) {
+    const tab = tabs[id];
+    if (!tab) return;
+    const on = Boolean(visible);
+    const wasHidden = tab.classList.contains('is-hidden');
+    tab.classList.toggle('is-hidden', !on);
+    tab.disabled = !on;
+    tab.setAttribute('aria-hidden', String(!on));
+    if (!on) {
+      tab.tabIndex = -1;
+      tab.classList.remove('has-new', 'is-revealing');
+      if (current === id) select('progress', { silent: true });
+    } else if (wasHidden) {
+      if (id !== current && sections.has(id)) tab.classList.add('has-new');
+      tab.classList.remove('is-revealing');
+      void tab.offsetWidth;
+      tab.classList.add('is-revealing');
+      tab.addEventListener('animationend', () => tab.classList.remove('is-revealing'), { once: true });
     }
   }
-  select('progress');
+
+  select('progress', { silent: true });
 
   // ---------- 消息记录（调试页最后） ----------
   const debugTools = document.createElement('div');
@@ -147,7 +183,9 @@ export function createInfoPanel(el) {
       sec.dataset.rank = String(rankOf(key, last));
       sections.set(key, sec);
       place(pane, sec);
-      if (paneId !== current && paneId === 'order') tabs[paneId].classList.add('has-new');
+      if (paneId !== current && paneId === 'order' && !tabs[paneId].classList.contains('is-hidden')) {
+        tabs[paneId].classList.add('has-new');
+      }
     } else if (last && sec.dataset.rank !== '1000') {
       sec.dataset.rank = '1000';
       place(pane, sec);
@@ -196,9 +234,11 @@ export function createInfoPanel(el) {
     },
 
     /** 切换标签页：'progress' | 'order' | 'debug' */
-    selectTab(id) {
-      select(id);
+    selectTab(id, opts) {
+      select(id, opts);
     },
+    /** 显示 / 隐藏指定标签页（带平滑过渡；隐藏当前激活页时自动回退到"进度"） */
+    setTabVisible,
     get tab() {
       return current;
     },
@@ -206,6 +246,7 @@ export function createInfoPanel(el) {
     /** 跳转到指定分区并展开闪烁提示 */
     focusSection(key) {
       const paneId = PANE_OF[key] ?? 'debug';
+      if (tabs[paneId]?.classList.contains('is-hidden')) return;
       select(paneId);
       const sec = sections.get(key) ?? (key === 'messages' ? msgSection : null);
       if (!sec) return;

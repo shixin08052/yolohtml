@@ -235,8 +235,9 @@ export function createWorld(container) {
    * @param {number} azimuthDeg 0 = 从操作者一侧看，正值往 +X 一侧转
    * @param {number} elevationDeg
    * @param {number} [aspect]
+   * @param {number} [padding=1.22] 画面留白系数（越大留白越多）
    */
-  function viewFor(pts, azimuthDeg, elevationDeg, aspect = camera.aspect) {
+  function viewFor(pts, azimuthDeg, elevationDeg, aspect = camera.aspect, padding = 1.22) {
     const az = (azimuthDeg * Math.PI) / 180;
     const el = (elevationDeg * Math.PI) / 180;
     // 目标点：所有点包围盒的中心
@@ -250,7 +251,7 @@ export function createWorld(container) {
     const rn = Math.hypot(...right);
     const r = right.map((x) => x / rn);
     const up = [r[1] * f[2] - r[2] * f[1], r[2] * f[0] - r[0] * f[2], r[0] * f[1] - r[1] * f[0]];
-    const tanV = Math.tan((DEFAULT_FOV * Math.PI) / 360) / 1.22; // 留出适度边距，兼顾底板零件细节与工作台周边设备
+    const tanV = Math.tan((DEFAULT_FOV * Math.PI) / 360) / padding; // 留出适度边距，兼顾底板零件细节与工作台周边设备
     const tanH = tanV * aspect;
     let dist = 100;
     for (const p of pts) {
@@ -339,12 +340,12 @@ export function createWorld(container) {
   /**
    * 平滑移到"把这些点装进画面"的视角（分拣时拉近到底板和料盒；之后仍可自由旋转，"默认视角"回到全景）
    * @param {number[][]} points 底板坐标
-   * @param {{ azimuthDeg?: number, elevationDeg?: number, ms?: number }} [opts]
+   * @param {{ azimuthDeg?: number, elevationDeg?: number, ms?: number, padding?: number }} [opts]
    */
-  function flyToPoints(points, { azimuthDeg = 0, elevationDeg = 50, ms = 700 } = {}) {
+  function flyToPoints(points, { azimuthDeg = 0, elevationDeg = 50, ms = 700, padding = 1.22 } = {}) {
     cancelFly();
     if (!controlsActive || frame || !points?.length) return;
-    const to = viewFor(points, azimuthDeg, elevationDeg, camera.aspect);
+    const to = viewFor(points, azimuthDeg, elevationDeg, camera.aspect, padding);
     const p0 = camera.position.clone();
     const t0 = controls.target.clone();
     const start = performance.now();

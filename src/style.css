@@ -671,6 +671,7 @@ body.demo .demo-chip { display: inline-flex; }
   font-weight: 600;
 }
 .part-tag.tag-hidden { visibility: hidden; }
+.part-tag[hidden] { display: none !important; }
 .part-tag.bad {
   color: var(--err);
 }
@@ -782,10 +783,8 @@ body.demo .demo-chip { display: inline-flex; }
   position: sticky;
   top: 0;
   z-index: 3;
-  display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: 1fr;
-  gap: 3px;
+  display: flex;
+  align-items: stretch;
   margin-bottom: 12px;
   padding: 3px;
   border-radius: calc(var(--radius-ctl) + 3px);
@@ -799,7 +798,10 @@ body.demo .demo-chip { display: inline-flex; }
 }
 .panel-tab {
   position: relative;
+  flex: 1 1 0;
+  min-width: 0;
   height: calc(var(--ctl-h) - 4px);
+  padding: 0 8px;
   border: 1px solid transparent;
   border-radius: var(--radius-ctl);
   background: transparent;
@@ -807,8 +809,50 @@ body.demo .demo-chip { display: inline-flex; }
   font: inherit;
   font-size: 13px;
   font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
   cursor: pointer;
-  transition: background-color 0.16s ease, color 0.16s ease, box-shadow 0.16s ease;
+  transition:
+    flex-grow 0.38s cubic-bezier(0.22, 1, 0.36, 1),
+    max-width 0.38s cubic-bezier(0.22, 1, 0.36, 1),
+    margin-left 0.38s cubic-bezier(0.22, 1, 0.36, 1),
+    padding 0.38s cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 0.28s ease,
+    transform 0.38s cubic-bezier(0.22, 1, 0.36, 1),
+    visibility 0s linear 0s,
+    background-color 0.16s ease,
+    color 0.16s ease,
+    box-shadow 0.16s ease;
+}
+.panel-tab + .panel-tab {
+  margin-left: 3px;
+}
+.panel-tab[data-pane="order"] {
+  max-width: 320px;
+}
+.panel-tab.is-hidden {
+  flex: 0 0 0;
+  max-width: 0;
+  margin-left: 0;
+  padding-left: 0;
+  padding-right: 0;
+  border-left-width: 0;
+  border-right-width: 0;
+  opacity: 0;
+  transform: translateX(8px) scale(0.92);
+  pointer-events: none;
+  visibility: hidden;
+  transition:
+    flex-grow 0.24s cubic-bezier(0.4, 0, 0.2, 1),
+    max-width 0.24s cubic-bezier(0.4, 0, 0.2, 1),
+    margin-left 0.24s cubic-bezier(0.4, 0, 0.2, 1),
+    padding 0.24s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.16s ease,
+    transform 0.22s ease,
+    visibility 0s linear 0.24s,
+    background-color 0.16s ease,
+    color 0.16s ease,
+    box-shadow 0.16s ease;
 }
 .panel-tab:hover { color: var(--text); }
 .panel-tab.active {

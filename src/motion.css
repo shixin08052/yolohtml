@@ -291,16 +291,31 @@
   animation: rise-in 0.3s ease-out backwards;
 }
 
+@keyframes panel-tab-reveal {
+  0% {
+    background-color: color-mix(in srgb, var(--accent) 22%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
+    color: var(--text);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: inset 0 0 0 1px transparent;
+  }
+}
+.panel-tab.is-revealing {
+  animation: panel-tab-reveal 0.8s var(--ease-out) 0.14s both;
+}
+
 /* ---------- 减少动态效果 ---------- */
 @media (prefers-reduced-motion: reduce) {
   :root[data-motion='system'] :is(.panel-pane > .panel-section, .toast, .msg, .view.active, .sort-dock:not([hidden]), .ins-dialog[open],
     .hero-card > *, .view-loader-title.swap, .view.leaving, .panel-pane:not([hidden]), .capture-notices:not([hidden]), .ai-note:not([hidden]), .ai-why:not([hidden]), .ai-usage:not([hidden]),
-    .step.active .dot, .wait-dots i, .qty input.qty-flash, .ai-box.is-busy .ai-emblem, .view-loader),
+    .step.active .dot, .wait-dots i, .qty input.qty-flash, .ai-box.is-busy .ai-emblem, .view-loader, .panel-tab.is-revealing),
   :root[data-motion='system'] .ins-dialog::backdrop,
   :root[data-motion='system'] .step.done .dot::after {
     animation: none;
   }
   :root[data-motion='system'] .progress.indeterminate > i { animation: none; width: 100%; opacity: 0.5; }
   :root[data-motion='system'] .order-table[aria-busy='true'] .qty input { animation: none; }
-  :root[data-motion='system'] .progress > i, :root[data-motion='system'] .sort-dock::after { transition: none; }
+  :root[data-motion='system'] .progress > i, :root[data-motion='system'] .sort-dock::after, :root[data-motion='system'] .panel-tab { transition: none; }
 }

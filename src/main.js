@@ -89,7 +89,12 @@ const fmt = (x, d = 1) => (x == null || Number.isNaN(x) ? '—' : Number(x).toFi
   });
 }
 
-const panel = createInfoPanel($('#info-panel'));
+const panel = createInfoPanel($('#info-panel'), {
+  hiddenTabs: ['order'],
+  onTabSelect: (id) => {
+    if (id === 'order') focusOrderTopView();
+  },
+});
 createStepper($('#stepper'), store, (stepKey) => {
   if (!store.state.image) return;
   if (stepKey === 'scene' || stepKey === 'sort') {
@@ -137,7 +142,11 @@ designRaster
   })
   .catch((err) => console.error(err));
 $('#show-axes').addEventListener('change', (e) => world.setAxesVisible(e.target.checked));
-$('#three-reset').addEventListener('click', () => world.setDefaultView());
+$('#three-reset').addEventListener('click', () => {
+  phoneHiddenForOrderView = false;
+  if (!phoneDismissed && store.state.pose && transition.mode === 'idle') phone.setOpacity(1);
+  world.setDefaultView();
+});
 
 /* ------------------------------------------------------------------ */
 /* 3D 场景：虚拟手机与"照片 → 3D"转场                                     */
@@ -164,7 +173,7 @@ const canPickIn3D = () =>
 function pickPartAtClient(clientX, clientY) {
   const host = $('#three-container');
   for (const tag of host.querySelectorAll('.part-tag')) {
-    if (tag.style.display === 'none' || tag.classList.contains('tag-hidden')) continue;
+    if (tag.hidden || tag.style.display === 'none' || tag.classList.contains('tag-hidden')) continue;
     const r = tag.getBoundingClientRect();
     if (r.width && clientX >= r.left - 3 && clientX <= r.right + 3 && clientY >= r.top - 3 && clientY <= r.bottom + 3) {
       const id = Number(tag.dataset.partId);
@@ -174,7 +183,7 @@ function pickPartAtClient(clientX, clientY) {
   return partsLayer.hitTest(world.raycasterFromClient(clientX, clientY), world.pickPlane(clientX, clientY, 0));
 }
 
-/* 3D 零件悬停联动：靠近或指向零件 / 标签时展开坐标置信度、高亮底座光环并切为手型光标 */
+/* 3D 零件悬停联动：靠近或指向零件 / 标签时高亮元件并切为手型光标 */
 {
   const host = $('#three-container');
   let pending = null;
@@ -198,7 +207,7 @@ function pickPartAtClient(clientX, clientY) {
       let bestId = null;
       let bestD = 48;
       for (const tag of host.querySelectorAll('.part-tag')) {
-        if (tag.style.display === 'none') continue;
+        if (tag.hidden || tag.style.display === 'none') continue;
         const r = tag.getBoundingClientRect();
         if (!r.width) continue;
         const d = Math.hypot(e.clientX - (r.left + r.width / 2), Math.max(0, e.clientY - r.bottom - 24, r.top - e.clientY));
@@ -215,6 +224,10 @@ function pickPartAtClient(clientX, clientY) {
 let transitionPending = false; // 有新位姿、还没在 3D 视图里播过转场
 /** 虚拟手机是否已在开始分拣后永久收起（同一张照片只在首次识别完、未开始分拣前显示手机） */
 let phoneDismissed = false;
+/** 已完成 3D 建模（含转场结束）的照片（bitmap）：建模完成后才过渡显示右侧"清单"选项 */
+let modeledFor = null;
+/** 切到"清单"3D 正视图时暂时隐藏虚拟手机与视锥，避免挡住底板视野 */
+let phoneHiddenForOrderView = false;
 
 /** 演示模式：只显示流程图；识别后先给出正视图请用户确认，确认后才转场建模（地址带 ?demo 或点顶栏按钮打开） */
 let demoMode = false;
@@ -230,6 +243,49 @@ const needConfirm = () => {
   return !!bitmap && confirmedFor !== bitmap && (demoMode || reviewFor === bitmap);
 };
 
+/** 3D 建模是否已经完成（完成后才在右侧标签栏过渡显示"清单"选项） */
+const isOrderTabReady = () => {
+  const bitmap = store.state.image?.bitmap;
+  return (
+    !!bitmap &&
+    !loadingPhoto &&
+    !detResult?.pending &&
+    stageIndex(store.state.stage) >= stageIndex('sceneBuilt') &&
+    !needConfirm() &&
+    (!world.available || modeledFor === bitmap)
+  );
+};
+
+function syncOrderTabVisibility() {
+  panel.setTabVisible('order', isOrderTabReady());
+}
+
+/** 建模完成后俯视底板正视图要装进画面的四角（底板坐标） */
+function boardTopViewPoints() {
+  return [
+    [0, 0, 0],
+    [BOARD.width, 0, 0],
+    [BOARD.width, BOARD.height, 0],
+    [0, BOARD.height, 0],
+  ];
+}
+
+/** 切换到建模好的 3D 正视图（俯视底板，隐藏虚拟手机避免挡住视野） */
+function focusOrderTopView() {
+  if (!world.available || !isOrderTabReady()) return;
+  if (transition.mode !== 'idle') transition.cancel();
+  phoneHiddenForOrderView = true;
+  phone.setOpacity(0);
+  const wasThree = $('#view-three').classList.contains('active');
+  if (!wasThree) tabs.select('three');
+  world.flyToPoints(boardTopViewPoints(), {
+    azimuthDeg: 0,
+    elevationDeg: 88,
+    padding: 1.16,
+    ms: wasThree ? 620 : 520,
+  });
+}
+
 const transition = createTransition({
   world,
   container: $('#three-container'),
@@ -237,11 +293,21 @@ const transition = createTransition({
   phone,
   onGrow: (t) => partsLayer.setGrow(t),
   onModeChange: (mode) => {
-    if (phoneDismissed) phone.setOpacity(0);
+    if (phoneDismissed || phoneHiddenForOrderView) phone.setOpacity(0);
+    if (
+      mode === 'idle' &&
+      transitionShown &&
+      stageIndex(store.state.stage) >= stageIndex('sceneBuilt') &&
+      !needConfirm() &&
+      store.state.image?.bitmap
+    ) {
+      modeledFor = store.state.image.bitmap;
+    }
     $('#btn-compare').setAttribute('aria-pressed', String(mode === 'compare'));
     $('#btn-compare').disabled = phoneDismissed || !store.state.pose;
     $('#btn-transition').disabled = phoneDismissed || mode === 'playing' || !store.state.pose;
     $('#three-reset').disabled = mode !== 'idle';
+    syncOrderTabVisibility();
     renderStatus();
   },
 });
@@ -253,6 +319,7 @@ const poseInputs = () => {
 
 function playTransition() {
   if (!world.available || !store.state.pose || phoneDismissed) return;
+  phoneHiddenForOrderView = false;
   // 一键流程到转场开始为止（场景还没建好时不算）
   if (run?.until === 'transition' && store.state.stage === 'sceneBuilt') endRun();
   // 场景还没建好（检测还在跑）时先播一遍，建好后切到 3D 视图时再播一次（那次才结束一键流程的计时）
@@ -265,11 +332,14 @@ function playTransition() {
 $('#btn-transition').addEventListener('click', playTransition);
 $('#btn-compare').addEventListener('click', () => {
   if (!store.state.pose || phoneDismissed) return;
+  phoneHiddenForOrderView = false;
   transition.compare(transition.mode !== 'compare', poseInputs());
 });
 
 store.on('stage:posed', (st) => {
   phoneDismissed = false;
+  phoneHiddenForOrderView = false;
+  modeledFor = null;
   phone.setPose({ pose: st.pose, intrinsics: st.intrinsics, orientation: st.image.exif.orientation });
   stopSorting();
   clearIncrementalSortState();
@@ -285,6 +355,7 @@ store.on('stage:posed', (st) => {
   transitionShown = false;
   // 演示模式：确认识别结果之后才转场
   transitionPending = world.available && !needConfirm();
+  syncOrderTabVisibility();
   // 正在看 3D 视图时直接播放；否则等切换到 3D 视图时播放
   if (transitionPending && $('#view-three').classList.contains('active')) playTransition();
 });
@@ -637,6 +708,7 @@ function renderStatus() {
     }
   });
   renderCaptureNotices();
+  syncOrderTabVisibility();
   syncSortControls();
   hero.setVisible(!store.state.image && !loadingPhoto);
   if (loadingPhoto) viewLoader.set('photo', { title: '正在读取照片', sub: loadingName, mode: 'cover' });
@@ -779,12 +851,16 @@ store.on('stage:imageLoaded', (st) => {
   $('#pose-toggle').hidden = true;
   transition.cancel();
   phoneDismissed = false;
+  phoneHiddenForOrderView = false;
+  modeledFor = null;
+  transitionShown = false;
   phone.clear();
   world.setFocusPoints(null);
   transitionPending = false;
   confirmedFor = null;
   confirmView.clear();
   updateDemoTabs();
+  syncOrderTabVisibility();
   $('#btn-transition').disabled = true;
   $('#btn-compare').disabled = true;
   panel.remove('pose');
@@ -1666,7 +1742,11 @@ function afterScene() {
   if (!world.available) {
     endRun();
     if (needConfirm()) showConfirm();
-    else tabs.select('debug');
+    else {
+      modeledFor = store.state.image?.bitmap ?? null;
+      syncOrderTabVisibility();
+      tabs.select('debug');
+    }
     return;
   }
   // 演示模式：先给出正视图请用户确认（一键流程计时到这里结束，不算用户确认的时间）；正在手动框选时等框完再给
@@ -1679,6 +1759,11 @@ function afterScene() {
   if (run && run.end == null) {
     if (run.until === 'scene') endRun();
     else tabs.select('three');
+  } else if (transitionPending && $('#view-three').classList.contains('active')) {
+    playTransition();
+  } else if (transitionShown && !transitionPending && transition.mode === 'idle') {
+    modeledFor = store.state.image?.bitmap ?? null;
+    syncOrderTabVisibility();
   }
 }
 
@@ -2473,8 +2558,8 @@ function onSortState(state) {
       sortElapsed = 0;
       $('#dock-joints').hidden = true;
       resultCard.hide();
-      // 手机只能在第一次识别完、未开始分拣前出现；开始分拣后永久隐藏
-      if (!phoneDismissed && store.state.pose && transition.mode === 'idle') phone.setOpacity(1);
+      // 手机只能在第一次识别完、未开始分拣且未切入"清单"正视图时出现；开始分拣后永久隐藏
+      if (!phoneDismissed && !phoneHiddenForOrderView && store.state.pose && transition.mode === 'idle') phone.setOpacity(1);
       else phone.setOpacity(0);
     }
   }
@@ -2499,22 +2584,32 @@ function onSortState(state) {
     if (remainingCount > 0) {
       orderPanel.clearForNextRound();
       partsLayer.setSelectedIds(new Set(), { custom: true });
+    } else {
+      orderPanel.sync();
     }
     renderStatus();
+    if (isOrderTabReady()) {
+      panel.selectTab('order');
+    }
     panel.message(`分拣完成：本次入盒 ${nPick} 个零件${sortedPartIds.size > nPick ? `（累计入盒 ${sortedPartIds.size} 个）` : ''}${remainingCount ? `，板上还剩 ${remainingCount} 个可继续点选分拣` : ''}${nPush ? `，拨开 ${nPush} 次` : ''}${nRelocate ? `，挪位 ${nRelocate} 次` : ''}${roundSkipped.length ? `，跳过 ${roundSkipped.length} 个` : ''}`, 'ok');
     showJoints();
-    resultCard.show({
-      bins: roundBins,
-      picked: nPick,
-      pushes: nPush,
-      relocations: nRelocate,
-      moved: roundMoved,
-      skipped: roundSkipped,
-      seconds: sortElapsed / 1000,
-      speed: sortPlayer.speed,
-      short: roundShort,
-      left: remainingCount,
-    });
+    // 板上还有剩余元件可继续分拣时，不弹出遮挡正视图与底部点选条的结果卡（已有右下角提示）；全部入盒后再展示完整汇总卡
+    if (remainingCount === 0) {
+      resultCard.show({
+        bins: roundBins,
+        picked: nPick,
+        pushes: nPush,
+        relocations: nRelocate,
+        moved: roundMoved,
+        skipped: roundSkipped,
+        seconds: sortElapsed / 1000,
+        speed: sortPlayer.speed,
+        short: roundShort,
+        left: remainingCount,
+      });
+    } else {
+      resultCard.hide();
+    }
     return;
   }
   renderStatus();
@@ -2825,10 +2920,11 @@ const confirmView = createConfirmView({
   onConfirm: () => {
     if (!store.state.image || stageIndex(store.state.stage) < stageIndex('sceneBuilt')) return;
     confirmedFor = store.state.image.bitmap;
+    transitionPending = world.available;
+    if (!world.available) modeledFor = store.state.image.bitmap;
     updateDemoTabs();
     renderStatus();
     $('#sort-dock').hidden = !world.available || !sortPlan;
-    transitionPending = world.available;
     tabs.select(world.available ? 'three' : 'debug'); // 无 WebGL 时保留照片及正视图。
   },
   onEdit: (detIndex = -1) => {
@@ -2862,6 +2958,7 @@ function updateDemoTabs() {
     $('#tab-three').disabled = false;
     for (const id of ['btn-transition', 'btn-compare', 'three-reset', 'btn-arm-debug']) $(`#${id}`).disabled = true;
   }
+  syncOrderTabVisibility();
 }
 store.on('change', updateDemoTabs);
 
@@ -2899,14 +2996,16 @@ function setDemoMode(on) {
   }
   updatePoseOverlay();
   updateTruthOverlay();
-  // 3D 零件标签在普通模式与演示模式下均显示勾选框与元件名（坐标与置信度仅在悬停时展开）
+  // 默认不显示遮挡视野的 3D 悬浮标签，通过 3D 元件自身亮暗区分是否选中（普通模式仍可手动勾选"零件标签"）
   partsLayer.setLabelsVisible($('#show-part-labels').checked);
   const built = stageIndex(store.state.stage) >= stageIndex('sceneBuilt');
   if (on) {
     setArmDebug(false);
     // 已经转场过的照片算已确认；场景建好还没转场的，给出正视图
-    if (transitionShown) confirmedFor = store.state.image?.bitmap ?? null;
-    else if (built) {
+    if (transitionShown) {
+      confirmedFor = store.state.image?.bitmap ?? null;
+      if (built && transition.mode === 'idle') modeledFor = store.state.image?.bitmap ?? null;
+    } else if (built) {
       transitionPending = false;
       showConfirm();
     }

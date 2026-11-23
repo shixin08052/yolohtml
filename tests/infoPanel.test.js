@@ -70,4 +70,48 @@ describe('信息面板标签页和提示', () => {
     expect(document.querySelector('[data-key="pose"]').open).toBe(true);
     expect(document.querySelector('[data-key="pose"]').classList.contains('section-flash')).toBe(true);
   });
+
+  it('支持隐藏/过渡显示指定标签页，隐藏激活页时回退到进度页并触发切换回调', () => {
+    const onTabSelect = vi.fn();
+    const panel = createInfoPanel(document.querySelector('#panel'), {
+      hiddenTabs: ['order'],
+      onTabSelect,
+    });
+    const orderTab = document.querySelector('.panel-tab[data-pane="order"]');
+    expect(orderTab.classList.contains('is-hidden')).toBe(true);
+    expect(orderTab.disabled).toBe(true);
+    expect(orderTab.getAttribute('aria-hidden')).toBe('true');
+
+    // 隐藏期间写入清单分区不会提前标红点，且无法切到隐藏标签
+    panel.setCustom('order', '元件清单');
+    expect(orderTab.classList.contains('has-new')).toBe(false);
+    panel.selectTab('order');
+    expect(panel.tab).toBe('progress');
+    expect(onTabSelect).not.toHaveBeenCalled();
+
+    // 键盘切换跳过隐藏的清单页
+    document.querySelector('.panel-tabs').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    expect(panel.tab).toBe('debug');
+    expect(onTabSelect).toHaveBeenLastCalledWith('debug', { prev: 'progress', changed: true });
+
+    // 建模完成后显示清单页：标出新内容提示并可点击切入
+    panel.setTabVisible('order', true);
+    expect(orderTab.classList.contains('is-hidden')).toBe(false);
+    expect(orderTab.disabled).toBe(false);
+    expect(orderTab.classList.contains('has-new')).toBe(true);
+    expect(orderTab.classList.contains('is-revealing')).toBe(true);
+
+    orderTab.click();
+    expect(panel.tab).toBe('order');
+    expect(onTabSelect).toHaveBeenLastCalledWith('order', { prev: 'debug', changed: true });
+
+    // 再次点击当前清单页也会回调（用于回到建模正视图）
+    orderTab.click();
+    expect(onTabSelect).toHaveBeenLastCalledWith('order', { prev: 'order', changed: false });
+
+    // 重新载入照片时隐藏清单页，自动回退到进度页
+    panel.setTabVisible('order', false);
+    expect(panel.tab).toBe('progress');
+    expect(orderTab.classList.contains('is-hidden')).toBe(true);
+  });
 });

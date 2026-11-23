@@ -214,21 +214,29 @@ function rod(p0, p1, r, mat) {
  */
 function ledMaterial(color) {
   if (color === 'clear') {
-    return new THREE.MeshPhysicalMaterial({
+    const mat = new THREE.MeshPhysicalMaterial({
       color: '#f2f7fa', roughness: 0.04, metalness: 0, transparent: true, opacity: 0.34,
       clearcoat: 1, clearcoatRoughness: 0.03, ior: 1.52, envMapIntensity: 3, depthWrite: false,
     });
+    mat.userData.role = 'clearBody';
+    return mat;
   }
   const hex = LED_COLORS[color]?.hex ?? CLASSES[1].color;
-  return new THREE.MeshPhysicalMaterial({
+  const mat = new THREE.MeshPhysicalMaterial({
     color: hex, roughness: 0.16, metalness: 0, transparent: true, opacity: 0.9,
     clearcoat: 1, clearcoatRoughness: 0.06, ior: 1.52, envMapIntensity: 2.4,
     emissive: hex, emissiveIntensity: 0.12,
   });
+  mat.userData.role = 'ledBody';
+  return mat;
 }
 
 /** 镀锡的引脚、支架：亮的金属，靠环境反射出高光 */
-const leadMaterial = () => new THREE.MeshStandardMaterial({ color: '#d5d8db', metalness: 0.92, roughness: 0.24, envMapIntensity: 3 });
+const leadMaterial = () => {
+  const mat = new THREE.MeshStandardMaterial({ color: '#d5d8db', metalness: 0.92, roughness: 0.24, envMapIntensity: 3 });
+  mat.userData.role = 'lead';
+  return mat;
+};
 
 /** 只为好看的细节网格（不参与包围盒、占地） */
 const deco = (m) => Object.assign(m, { userData: { deco: true } });
@@ -248,12 +256,16 @@ export function createPartMesh(cls, { color } = {}) {
       const R = RESISTOR;
       const axisY = R.capR + R.bandLift; // 横躺在板面上：色环最低点贴着板面
       // 漆面：底色 + 一层清漆，高光更集中
-      const body = lathe(resistorRadius, -R.len / 2, R.len / 2, 48, 0, new THREE.MeshPhysicalMaterial({ color: R.color, roughness: 0.38, metalness: 0, clearcoat: 0.7, clearcoatRoughness: 0.18 }));
+      const bodyMat = new THREE.MeshPhysicalMaterial({ color: R.color, roughness: 0.38, metalness: 0, clearcoat: 0.7, clearcoatRoughness: 0.18 });
+      bodyMat.userData.role = 'body';
+      const body = lathe(resistorRadius, -R.len / 2, R.len / 2, 48, 0, bodyMat);
       body.position.y = axisY;
       g.add(body);
       for (const [x, c] of R.bands) {
         // 色环只比本体高 0.012 mm：远看时深度精度不够会闪，用多边形偏移让色环总画在本体前面
-        const ring = lathe(resistorRadius, x - R.bandW / 2, x + R.bandW / 2, 6, R.bandLift, new THREE.MeshPhysicalMaterial({ color: c, roughness: 0.4, clearcoat: 0.6, clearcoatRoughness: 0.2, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }));
+        const bandMat = new THREE.MeshPhysicalMaterial({ color: c, roughness: 0.4, clearcoat: 0.6, clearcoatRoughness: 0.2, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
+        bandMat.userData.role = 'band';
+        const ring = lathe(resistorRadius, x - R.bandW / 2, x + R.bandW / 2, 6, R.bandLift, bandMat);
         ring.position.y = axisY;
         g.add(ring);
       }
@@ -305,7 +317,9 @@ export function createPartMesh(cls, { color } = {}) {
       g.add(plate(0.7, 1.5, 0.9, 0.5, axisY, -1.05)); // 阳极顶上的小台
       // 芯片：反光杯里一小粒，按灯的颜色微微发光
       const dieColor = color === 'clear' ? '#fff4d6' : LED_COLORS[color]?.hex ?? CLASSES[1].color;
-      const die = deco(new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.5, 0.5), new THREE.MeshStandardMaterial({ color: dieColor, emissive: dieColor, emissiveIntensity: 0.9, roughness: 0.3 })));
+      const dieMat = new THREE.MeshStandardMaterial({ color: dieColor, emissive: dieColor, emissiveIntensity: 0.9, roughness: 0.3 });
+      dieMat.userData.role = 'die';
+      const die = deco(new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.5, 0.5), dieMat));
       die.position.set(2.25 + S, axisY, 0.75);
       g.add(die);
       break;
@@ -344,15 +358,16 @@ export const METHOD_MOVE_MS = 500;
 export function createPartsLayer({ requestRender, onFrame = () => {} }) {
   const group = new THREE.Group();
   group.name = 'parts';
-  /** @type {{ part: import('../state.js').Part, node: THREE.Group, model: THREE.Group, ring: THREE.Mesh, ringMat: THREE.MeshBasicMaterial, label: CSS2DObject, text: HTMLElement, selected: boolean, moved?: boolean, labelHidden?: boolean }[]} */
+  /** @type {{ part: import('../state.js').Part, node: THREE.Group, model: THREE.Group, mats: { mat: THREE.Material, role: string, color: THREE.Color|null, emissive: THREE.Color|null, emissiveIntensity: number, roughness: number, metalness: number, opacity: number, clearcoat: number, envMapIntensity: number }[], ring: THREE.Mesh, ringMat: THREE.MeshBasicMaterial, label: CSS2DObject, text: HTMLElement, selected: boolean, moved?: boolean, sorted?: boolean, labelHidden?: boolean }[]} */
   let items = [];
   let blend = 1; // 1 = 视差修正
   let blendTarget = 1; // 方法切换动画的终点
   let grow = 1;
-  let labelsOn = true;
+  let labelsOn = false;
   let anim = 0;
   let hoveredId = null;
   let customSelected = false;
+  const hslTmp = { h: 0, s: 0, l: 0 };
 
   const posAt = (p, m) => [p.xPlane + (p.xParallax - p.xPlane) * m, p.yPlane + (p.yParallax - p.yPlane) * m];
   const fmt = (x) => x.toFixed(1);
@@ -363,6 +378,168 @@ export function createPartsLayer({ requestRender, onFrame = () => {} }) {
     return `<i class="pick-dot" aria-hidden="true"></i><b>${partName(p)}</b><span>(${fmt(x)}, ${fmt(y)})${p.score < 1 ? ` · ${p.score.toFixed(2)}` : ''}</span>`;
   }
 
+  /** 按选中/未选中/悬停/已入盒状态，通过 3D 元件自身材质亮暗区分是否选中 */
+  function applyMaterialState(it, { hovered }) {
+    const natural = Boolean(it.sorted);
+    const active = it.selected;
+    for (const s of it.mats) {
+      const m = s.mat;
+      if (natural) {
+        if (m.color && s.color) m.color.copy(s.color);
+        if (m.emissive && s.emissive) m.emissive.copy(s.emissive);
+        if ('emissiveIntensity' in m) m.emissiveIntensity = s.emissiveIntensity;
+        if ('roughness' in m) m.roughness = s.roughness;
+        if ('metalness' in m) m.metalness = s.metalness;
+        if ('opacity' in m) m.opacity = s.opacity;
+        if ('clearcoat' in m) m.clearcoat = s.clearcoat;
+        if ('envMapIntensity' in m) m.envMapIntensity = s.envMapIntensity;
+        continue;
+      }
+      if (active) {
+        switch (s.role) {
+          case 'ledBody': {
+            if (m.color && s.color) {
+              if (hovered || customSelected) {
+                s.color.getHSL(hslTmp);
+                m.color.setHSL(
+                  hslTmp.h,
+                  Math.min(1, hslTmp.s * (hovered ? 1.1 : 1.05)),
+                  Math.min(0.8, hslTmp.l * (hovered ? 1.25 : 1.12)),
+                );
+              } else {
+                m.color.copy(s.color);
+              }
+            }
+            if (m.emissive && s.color) m.emissive.copy(s.color);
+            if ('emissiveIntensity' in m) m.emissiveIntensity = hovered ? 0.65 : customSelected ? 0.38 : 0.2;
+            if ('roughness' in m) m.roughness = s.roughness;
+            if ('opacity' in m) m.opacity = Math.min(0.96, s.opacity + (customSelected || hovered ? 0.04 : 0));
+            if ('clearcoat' in m) m.clearcoat = s.clearcoat;
+            if ('envMapIntensity' in m) m.envMapIntensity = s.envMapIntensity * (hovered ? 1.25 : 1.1);
+            break;
+          }
+          case 'clearBody': {
+            if (m.color) m.color.set('#f0f8ff');
+            if (m.emissive) m.emissive.set('#8ad8ff');
+            if ('emissiveIntensity' in m) m.emissiveIntensity = hovered ? 0.78 : customSelected ? 0.48 : 0.26;
+            if ('roughness' in m) m.roughness = s.roughness;
+            if ('opacity' in m) m.opacity = hovered ? 0.68 : customSelected ? 0.56 : 0.42;
+            if ('clearcoat' in m) m.clearcoat = s.clearcoat;
+            if ('envMapIntensity' in m) m.envMapIntensity = hovered ? 3.8 : 3.5;
+            break;
+          }
+          case 'body': {
+            if (m.color && s.color) {
+              s.color.getHSL(hslTmp);
+              m.color.setHSL(
+                hslTmp.h,
+                Math.min(1, hslTmp.s * 1.15),
+                Math.min(0.65, hslTmp.l * (hovered ? 1.65 : customSelected ? 1.45 : 1.2)),
+              );
+            }
+            if (m.emissive && s.color) m.emissive.copy(s.color);
+            if ('emissiveIntensity' in m) m.emissiveIntensity = hovered ? 0.58 : customSelected ? 0.34 : 0.16;
+            if ('roughness' in m) m.roughness = Math.max(0.24, s.roughness - 0.06);
+            if ('clearcoat' in m) m.clearcoat = s.clearcoat;
+            if ('envMapIntensity' in m) m.envMapIntensity = hovered ? 1.7 : 1.4;
+            break;
+          }
+          case 'band': {
+            if (m.color && s.color) m.color.copy(s.color);
+            if (m.emissive && s.color) m.emissive.copy(s.color);
+            if ('emissiveIntensity' in m) m.emissiveIntensity = hovered ? 0.34 : customSelected ? 0.14 : 0.05;
+            if ('roughness' in m) m.roughness = s.roughness;
+            if ('clearcoat' in m) m.clearcoat = s.clearcoat;
+            if ('envMapIntensity' in m) m.envMapIntensity = s.envMapIntensity;
+            break;
+          }
+          case 'lead': {
+            if (m.color && s.color) m.color.copy(s.color);
+            if (m.emissive) m.emissive.set('#ffffff');
+            if ('emissiveIntensity' in m) m.emissiveIntensity = hovered ? 0.24 : customSelected ? 0.08 : 0;
+            if ('roughness' in m) m.roughness = s.roughness;
+            if ('metalness' in m) m.metalness = s.metalness;
+            if ('envMapIntensity' in m) m.envMapIntensity = hovered ? 3.8 : s.envMapIntensity;
+            break;
+          }
+          case 'die': {
+            if (m.color && s.color) m.color.copy(s.color);
+            if (m.emissive && s.emissive) m.emissive.copy(s.emissive);
+            if ('emissiveIntensity' in m) m.emissiveIntensity = hovered ? 2.4 : customSelected ? 2.0 : 1.1;
+            break;
+          }
+          default:
+            break;
+        }
+      } else {
+        switch (s.role) {
+          case 'ledBody': {
+            if (m.color && s.color) {
+              s.color.getHSL(hslTmp);
+              m.color.setHSL(hslTmp.h, hslTmp.s * 0.28, hslTmp.l * (hovered ? 0.26 : 0.16));
+            }
+            if (m.emissive && s.color) m.emissive.copy(s.color);
+            if ('emissiveIntensity' in m) m.emissiveIntensity = hovered ? 0.16 : 0;
+            if ('roughness' in m) m.roughness = 0.78;
+            if ('opacity' in m) m.opacity = 0.78;
+            if ('clearcoat' in m) m.clearcoat = 0.05;
+            if ('envMapIntensity' in m) m.envMapIntensity = 0.18;
+            break;
+          }
+          case 'clearBody': {
+            if (m.color) m.color.set(hovered ? '#474e58' : '#282c32');
+            if (m.emissive) m.emissive.set('#7aa6c4');
+            if ('emissiveIntensity' in m) m.emissiveIntensity = hovered ? 0.14 : 0;
+            if ('roughness' in m) m.roughness = 0.74;
+            if ('opacity' in m) m.opacity = 0.68;
+            if ('clearcoat' in m) m.clearcoat = 0.06;
+            if ('envMapIntensity' in m) m.envMapIntensity = 0.18;
+            break;
+          }
+          case 'body': {
+            if (m.color && s.color) {
+              s.color.getHSL(hslTmp);
+              m.color.setHSL(hslTmp.h, hslTmp.s * 0.2, hslTmp.l * (hovered ? 0.26 : 0.16));
+            }
+            if (m.emissive && s.color) m.emissive.copy(s.color);
+            if ('emissiveIntensity' in m) m.emissiveIntensity = hovered ? 0.15 : 0;
+            if ('roughness' in m) m.roughness = 0.86;
+            if ('clearcoat' in m) m.clearcoat = 0.04;
+            if ('envMapIntensity' in m) m.envMapIntensity = 0.18;
+            break;
+          }
+          case 'band': {
+            if (m.color && s.color) {
+              s.color.getHSL(hslTmp);
+              m.color.setHSL(hslTmp.h, hslTmp.s * 0.22, hslTmp.l * 0.18);
+            }
+            if ('emissiveIntensity' in m) m.emissiveIntensity = 0;
+            if ('roughness' in m) m.roughness = 0.88;
+            if ('clearcoat' in m) m.clearcoat = 0.03;
+            if ('envMapIntensity' in m) m.envMapIntensity = 0.15;
+            break;
+          }
+          case 'lead': {
+            if (m.color) m.color.set(hovered ? '#5a6068' : '#35393f');
+            if (m.emissive) m.emissive.set('#808690');
+            if ('emissiveIntensity' in m) m.emissiveIntensity = hovered ? 0.14 : 0;
+            if ('roughness' in m) m.roughness = 0.76;
+            if ('metalness' in m) m.metalness = 0.25;
+            if ('envMapIntensity' in m) m.envMapIntensity = 0.18;
+            break;
+          }
+          case 'die': {
+            if (m.color) m.color.set('#1d1f23');
+            if ('emissiveIntensity' in m) m.emissiveIntensity = 0;
+            break;
+          }
+          default:
+            break;
+        }
+      }
+    }
+  }
+
   function updateVisuals() {
     for (const it of items) {
       const hovered = hoveredId != null && it.part.id === hoveredId;
@@ -370,12 +547,13 @@ export function createPartsLayer({ requestRender, onFrame = () => {} }) {
       it.text.classList.toggle('is-hover', hovered);
       it.text.classList.toggle('is-selected', it.selected);
       it.text.classList.toggle('is-unselected', !it.selected);
-      // 地面选中光环：已移走或已入盒的零件不显示；悬停时高亮放大；自定义筛选时选中件明显高亮，全选时显示柔和微环提示可点选
-      const showRing = grown && !it.moved && !it.sorted && (hovered || it.selected);
+      applyMaterialState(it, { hovered });
+      // 不在静止状态下画常驻圆环，仅在鼠标悬停时显示轻柔瞄准环；是否选中直接由元件自身颜色亮暗区分
+      const showRing = grown && !it.moved && !it.sorted && hovered;
       it.ring.visible = showRing;
       if (showRing) {
-        it.ringMat.opacity = hovered ? 0.95 : customSelected ? 0.85 : 0.36;
-        it.ring.scale.setScalar(hovered ? 1.14 : 1);
+        it.ringMat.opacity = 0.78;
+        it.ring.scale.setScalar(1.06);
       }
     }
   }
@@ -397,7 +575,9 @@ export function createPartsLayer({ requestRender, onFrame = () => {} }) {
       const sc = k <= 0 ? 0.0001 : easeOutBack(k);
       it.model.scale.setScalar(sc);
       it.model.visible = k > 0;
-      it.label.visible = labelsOn && k >= 1 && !it.labelHidden && !it.sorted;
+      const showLabel = labelsOn && k >= 1 && !it.labelHidden && !it.sorted;
+      it.label.visible = showLabel;
+      it.text.hidden = !showLabel;
     });
     updateVisuals();
   }
@@ -437,14 +617,33 @@ export function createPartsLayer({ requestRender, onFrame = () => {} }) {
         node.name = `part-${part.id}`;
         const model = createPartMesh(part.cls, { color: part.color });
         model.rotation.y = (part.rotDeg * Math.PI) / 180;
-        model.traverse((o) => { if (o.isMesh) o.userData.partId = part.id; });
+        const matSet = new Set();
+        model.traverse((o) => {
+          if (!o.isMesh) return;
+          o.userData.partId = part.id;
+          for (const m of [o.material].flat()) {
+            if (m && !matSet.has(m)) matSet.add(m);
+          }
+        });
+        const mats = [...matSet].map((mat) => ({
+          mat,
+          role: mat.userData?.role ?? 'body',
+          color: mat.color ? mat.color.clone() : null,
+          emissive: mat.emissive ? mat.emissive.clone() : null,
+          emissiveIntensity: mat.emissiveIntensity ?? 0,
+          roughness: mat.roughness ?? 0.5,
+          metalness: mat.metalness ?? 0,
+          opacity: mat.opacity ?? 1,
+          clearcoat: mat.clearcoat ?? 0,
+          envMapIntensity: mat.envMapIntensity ?? 1,
+        }));
         node.add(model);
-        // 3D 点选底座指示环（贴在板面 Z = 0.32 mm 处，带 userData.deco 不影响包围盒和规划）
-        const [rIn, rOut] = part.cls === 0 ? [4.6, 5.9] : [5.8, 7.3];
+        // 悬停轻柔指示环（贴在板面 Z = 0.32 mm 处，带 userData.deco 不影响包围盒和规划）
+        const [rIn, rOut] = part.cls === 0 ? [5.0, 5.8] : [6.2, 7.1];
         const ringMat = new THREE.MeshBasicMaterial({
           color: partColor(part),
           transparent: true,
-          opacity: 0.36,
+          opacity: 0.78,
           depthWrite: false,
           side: THREE.DoubleSide,
         });
@@ -453,6 +652,7 @@ export function createPartsLayer({ requestRender, onFrame = () => {} }) {
         ring.position.y = 0.32;
         ring.renderOrder = 4;
         ring.userData.deco = true;
+        ring.visible = false;
         node.add(ring);
 
         const text = document.createElement('div');
@@ -460,12 +660,13 @@ export function createPartsLayer({ requestRender, onFrame = () => {} }) {
         text.dataset.partId = String(part.id);
         text.style.setProperty('--c', partColor(part));
         text.innerHTML = labelText(part, parallax);
+        text.hidden = !labelsOn;
         const label = new CSS2DObject(text);
         label.position.set(0, part.heightMm + 4, 0);
         label.center.set(0.5, 1); // 标签底边对准零件上方
         node.add(label);
         group.add(node);
-        items.push({ part, node, model, ring, ringMat, label, text, selected: true });
+        items.push({ part, node, model, mats, ring, ringMat, label, text, selected: true });
       }
       place();
       applyGrow();
