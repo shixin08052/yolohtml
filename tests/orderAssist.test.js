@@ -25,7 +25,7 @@ describe('DeepSeek 清单接口', () => {
     expect(buildRequest({ model: ' ', text: 'x' }).model).toBe(DEFAULT_MODEL);
     expect(userMessage('电'.repeat(MAX_REQUEST_CHARS + 50))).toHaveLength(MAX_REQUEST_CHARS);
     expect(systemPrompt()).toContain('优先利用板上现有元件完成任务');
-    expect(systemPrompt()).toContain('多颗LED可共用现有电阻');
+    expect(systemPrompt()).toContain('只需1个限流电阻(r:1)');
   });
 
   it.each([['none', 'disabled', 256], ['low', 'enabled', 2048], ['high', 'enabled', 4096], ['max', 'enabled', 8192]])('思考强度 %s 正确传入且分配推理预算', (effort, type, budget) => {
