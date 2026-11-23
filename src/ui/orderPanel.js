@@ -456,10 +456,12 @@ export function createOrderPanel({ panel, getParts, getPlanningOptions = () => (
     };
     showWait();
     const ticker = setInterval(showWait, 1000);
-    const before = Object.fromEntries(selection().lines.map((l) => [l.key, l.want]));
+    const sel = selection();
+    const before = Object.fromEntries(sel.lines.map((l) => [l.key, l.want]));
+    const have = Object.fromEntries(sel.lines.map((l) => [l.key, l.have]));
     try {
       const res = await askOrder({
-        ...llm, text: draft, refresh, signal: controller.signal,
+        ...llm, text: draft, have, refresh, signal: controller.signal,
         onRetry: () => { phase = '回复格式不对，正在自动重试'; showWait(); },
       });
       if (controller.signal.aborted) {

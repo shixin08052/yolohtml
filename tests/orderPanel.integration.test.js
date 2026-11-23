@@ -33,7 +33,9 @@ it('真实 UI → 请求 → 短键解析 → 清零回填 → 本地缓存 → 
   onChange.mockClear();
   click('ai'); await idle();
   expect(fetch).toHaveBeenCalledTimes(1);
-  expect(JSON.parse(fetch.mock.calls[0][1].body)).toMatchObject({ thinking: { type: 'enabled' }, reasoning_effort: 'high', max_tokens: 4096 });
+  const sentBody = JSON.parse(fetch.mock.calls[0][1].body);
+  expect(sentBody).toMatchObject({ thinking: { type: 'enabled' }, reasoning_effort: 'high', max_tokens: 4096 });
+  expect(sentBody.messages[1].content).toContain('板上现有元件：r(电阻)=1, R(红LED)=1, G(绿LED)=0, B(蓝LED)=1, Y(黄LED)=0, C(透明LED)=0');
   expect(ui.order).toEqual({ 'led-red': 2 });
   expect(field('resistor').value).toBe('0'); expect(field('led-blue').value).toBe('0');
   expect(field('led-red').value).toBe('2'); expect(onChange).toHaveBeenCalledTimes(1);

@@ -8,10 +8,13 @@ const respond = (data, status = 200) => vi.stubGlobal('fetch', vi.fn().mockResol
 const input = { apiKey: 'sk-test', text: '做三个红灯', useCache: false };
 
 describe('DeepSeek 清单接口', () => {
-  it('Chat Completions 格式、关闭思考、短键 JSON，只发单轮需求', () => {
-    const req = buildRequest({ text: '  做三个红灯  ', have: { 'led-red': 3 } });
+  it('Chat Completions 格式、关闭思考、短键 JSON，附带板上现有元件数量', () => {
+    const req = buildRequest({ text: '  做三个红灯  ', have: { resistor: 1, 'led-red': 3 } });
     expect(req.model).toBe(DEFAULT_MODEL);
-    expect(req.messages).toEqual([{ role: 'system', content: systemPrompt() }, { role: 'user', content: '做三个红灯' }]);
+    expect(req.messages).toEqual([
+      { role: 'system', content: systemPrompt() },
+      { role: 'user', content: '需求：做三个红灯\n板上现有元件：r(电阻)=1, R(红LED)=3, G(绿LED)=0, B(蓝LED)=0, Y(黄LED)=0, C(透明LED)=0' },
+    ]);
     expect(req.thinking).toEqual({ type: 'disabled' });
     expect(req.response_format).toEqual({ type: 'json_object' });
     expect(req.max_tokens).toBe(MAX_OUTPUT_TOKENS);
@@ -21,6 +24,8 @@ describe('DeepSeek 清单接口', () => {
     expect(buildRequest({ model: 'deepseek-v4-pro', text: 'x' }).model).toBe('deepseek-v4-pro');
     expect(buildRequest({ model: ' ', text: 'x' }).model).toBe(DEFAULT_MODEL);
     expect(userMessage('电'.repeat(MAX_REQUEST_CHARS + 50))).toHaveLength(MAX_REQUEST_CHARS);
+    expect(systemPrompt()).toContain('优先利用板上现有元件完成任务');
+    expect(systemPrompt()).toContain('多颗LED可共用现有电阻');
   });
 
   it.each([['none', 'disabled', 256], ['low', 'enabled', 2048], ['high', 'enabled', 4096], ['max', 'enabled', 8192]])('思考强度 %s 正确传入且分配推理预算', (effort, type, budget) => {
@@ -43,17 +48,17 @@ describe('DeepSeek 清单接口', () => {
     expect((await askOrder({ ...input, useCache: true })).order.resistor).toBe(3);
   });
 
-  it('更改模型、思考强度、接口或账户不能误用旧缓存；重新生成与关闭缓存均调用接口', async () => {
+  it('更改模型、思考强度、板上现有元件、接口或账户不能误用旧缓存；重新生成与关闭缓存均调用接口', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(okReply()))));
-    const cached = { ...input, useCache: true };
+    const cached = { ...input, have: { resistor: 1, 'led-red': 1 }, useCache: true };
     await askOrder(cached);
     await askOrder(cached);
     expect(fetch).toHaveBeenCalledTimes(1);
-    for (const overrides of [{ model: 'deepseek-v4-pro' }, { reasoningEffort: 'high' }, { baseURL: 'https://example.test/v1' }, { apiKey: 'sk-other' }, { refresh: true }, { useCache: false }]) await askOrder({ ...cached, ...overrides });
-    expect(fetch).toHaveBeenCalledTimes(7);
+    for (const overrides of [{ model: 'deepseek-v4-pro' }, { reasoningEffort: 'high' }, { have: { resistor: 3, 'led-red': 1 } }, { baseURL: 'https://example.test/v1' }, { apiKey: 'sk-other' }, { refresh: true }, { useCache: false }]) await askOrder({ ...cached, ...overrides });
+    expect(fetch).toHaveBeenCalledTimes(8);
     clearOrderCache();
     await askOrder(cached);
-    expect(fetch).toHaveBeenCalledTimes(8);
+    expect(fetch).toHaveBeenCalledTimes(9);
   });
 
   it('强制重新生成后写回新结果，下次复用新数量', async () => {
